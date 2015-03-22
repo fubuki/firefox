@@ -1,0 +1,52 @@
+﻿<!DOCTYPE HTML>
+<html>
+<head>
+  <script type="application/javascript" src="pc.js"></script>
+</head>
+<body>
+<pre id="test">
+<script type="application/javascript;version=1.8">
+  createHTML({
+    bug: "1032839",
+    title: "Replace video track",
+    visible: true
+  });
+
+  function isSenderOfTrack(sender) {
+    return sender.track == this;
+  }
+
+  // Test basically just verifies that success callback is called at this point
+
+  var test;
+  runNetworkTest(function () {
+    test = new PeerConnectionTest();
+    test.setMediaConstraints([{video: true}], [{video: true}]);
+    test.chain.removeAfter("PC_REMOTE_CHECK_MEDIA_FLOW_PRESENT");
+    var flowtest = test.chain.remove("PC_REMOTE_CHECK_MEDIA_FLOW_PRESENT");
+    test.chain.append(flowtest);
+    test.chain.append([
+      function PC_LOCAL_REPLACE_VIDEOTRACK(test) {
+        var stream = test.pcLocal._pc.getLocalStreams()[0];
+        var track = stream.getVideoTracks()[0];
+        var sender = test.pcLocal._pc.getSenders().find(isSenderOfTrack, track);
+        ok(sender, "track has a sender");
+        var newtrack;
+        return navigator.mediaDevices.getUserMedia({video:true, fake: true})
+          .then(newStream => {
+            newtrack = newStream.getVideoTracks()[0];
+            return sender.replaceTrack(newtrack);
+          })
+          .then(() => {
+            is(sender.track, newtrack, "sender.track has been replaced");
+          });
+      }
+    ]);
+    test.chain.append(flowtest);
+
+    test.run();
+  });
+</script>
+</pre>
+</body>
+</html>
