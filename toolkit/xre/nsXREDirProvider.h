@@ -14,14 +14,14 @@
 #include "nsCOMArray.h"
 #include "mozilla/Attributes.h"
 
-class nsXREDirProvider MOZ_FINAL : public nsIDirectoryServiceProvider2,
-                                   public nsIProfileStartup
+class nsXREDirProvider final : public nsIDirectoryServiceProvider2,
+                               public nsIProfileStartup
 {
 public:
   // we use a custom isupports implementation (no refcount)
-  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) MOZ_OVERRIDE;
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) MOZ_OVERRIDE;
-  NS_IMETHOD_(MozExternalRefCountType) Release(void) MOZ_OVERRIDE;
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;
 
   NS_DECL_NSIDIRECTORYSERVICEPROVIDER
   NS_DECL_NSIDIRECTORYSERVICEPROVIDER2
@@ -53,8 +53,6 @@ public:
   nsresult SetProfile(nsIFile* aProfileDir, nsIFile* aProfileLocalDir);
 
   void DoShutdown();
-
-  nsresult GetProfileDefaultsDir(nsIFile* *aResult);
 
   static nsresult GetUserAppDataDirectory(nsIFile* *aFile) {
     return GetUserDataDirectory(aFile, false, nullptr, nullptr, nullptr);
@@ -108,7 +106,6 @@ protected:
   static nsresult GetSystemExtensionsDirectory(nsIFile** aFile);
 #endif
   static nsresult EnsureDirectoryExists(nsIFile* aDirectory);
-  void EnsureProfileFileExists(nsIFile* aFile);
 
   // Determine the profile path within the UAppData directory. This is different
   // on every major platform.
@@ -124,11 +121,18 @@ protected:
   // delimiters.
   static inline nsresult AppendProfileString(nsIFile* aFile, const char* aPath);
 
+#if (defined(XP_WIN) || defined(XP_MACOSX)) && defined(MOZ_CONTENT_SANDBOX)
+  // Load the temp directory for sandboxed content processes
+  nsresult LoadContentProcessTempDir();
+#endif
+
   // Calculate and register extension and theme bundle directories.
   void LoadExtensionBundleDirectories();
 
+#ifdef MOZ_B2G
   // Calculate and register app-bundled extension directories.
   void LoadAppBundleDirs();
+#endif
 
   void Append(nsIFile* aDirectory);
 
@@ -142,6 +146,9 @@ protected:
   nsCOMPtr<nsIFile>      mProfileDir;
   nsCOMPtr<nsIFile>      mProfileLocalDir;
   bool                   mProfileNotified;
+#if (defined(XP_WIN) || defined(XP_MACOSX)) && defined(MOZ_CONTENT_SANDBOX)
+  nsCOMPtr<nsIFile>      mContentTempDir;
+#endif
   nsCOMArray<nsIFile>    mAppBundleDirectories;
   nsCOMArray<nsIFile>    mExtensionDirectories;
   nsCOMArray<nsIFile>    mThemeDirectories;

@@ -13,7 +13,7 @@ namespace mozilla {
 /**
  * Sides represents a set of physical sides.
  */
-struct Sides MOZ_FINAL {
+struct Sides final {
   Sides() : mBits(0) {}
   explicit Sides(SideBits aSideBits)
   {
@@ -21,10 +21,10 @@ struct Sides MOZ_FINAL {
     mBits = aSideBits;
   }
   bool IsEmpty() const { return mBits == 0; }
-  bool Top()     const { return mBits & eSideBitsTop; }
-  bool Right()   const { return mBits & eSideBitsRight; }
-  bool Bottom()  const { return mBits & eSideBitsBottom; }
-  bool Left()    const { return mBits & eSideBitsLeft; }
+  bool Top()     const { return (mBits & eSideBitsTop) != 0; }
+  bool Right()   const { return (mBits & eSideBitsRight) != 0; }
+  bool Bottom()  const { return (mBits & eSideBitsBottom) != 0; }
+  bool Left()    const { return (mBits & eSideBitsLeft) != 0; }
   bool Contains(SideBits aSideBits) const
   {
     MOZ_ASSERT((aSideBits & ~eSideBitsAll) == 0, "illegal side bits");
@@ -89,11 +89,11 @@ struct BaseMargin {
 
   T& Side(SideT aSide) {
     // This is ugly!
-    return *(&top + T(aSide));
+    return *(&top + int(aSide));
   }
   T Side(SideT aSide) const {
     // This is ugly!
-    return *(&top + T(aSide));
+    return *(&top + int(aSide));
   }
 
   void ApplySkipSides(Sides aSkipSides)
@@ -138,7 +138,7 @@ struct BaseMargin {
   }
 };
 
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 #endif /* MOZILLA_GFX_BASEMARGIN_H_ */

@@ -16,11 +16,13 @@
 #include "nsIBoxObject.h"
 #include "nsIDOMXULElement.h"
 #include "nsIDocShell.h"
+#include "nsIObserverService.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
 #include "nsIScrollableFrame.h"
 #include "nsISelectionPrivate.h"
 #include "nsISelectionController.h"
+#include "nsISimpleEnumerator.h"
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
@@ -34,12 +36,23 @@
 #include "nsITreeBoxObject.h"
 #include "nsITreeColumns.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/HTMLLabelElement.h"
 
 using namespace mozilla;
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsCoreUtils
 ////////////////////////////////////////////////////////////////////////////////
+
+bool
+nsCoreUtils::IsLabelWithControl(nsIContent* aContent)
+{
+  dom::HTMLLabelElement* label = dom::HTMLLabelElement::FromContent(aContent);
+  if (label && label->GetControl())
+    return true;
+
+  return false;
+}
 
 bool
 nsCoreUtils::HasClickListener(nsIContent *aContent)
@@ -65,7 +78,7 @@ nsCoreUtils::DispatchClickEvent(nsITreeBoxObject *aTreeBoxObj,
     return;
 
   nsCOMPtr<nsIContent> tcContent(do_QueryInterface(tcElm));
-  nsIDocument *document = tcContent->GetCurrentDoc();
+  nsIDocument *document = tcContent->GetUncomposedDoc();
   if (!document)
     return;
 
@@ -100,9 +113,9 @@ nsCoreUtils::DispatchClickEvent(nsITreeBoxObject *aTreeBoxObj,
 
   nsPoint offset;
   nsIWidget *rootWidget =
-    rootFrame->GetViewExternal()->GetNearestWidget(&offset);
+    rootFrame->GetView()->GetNearestWidget(&offset);
 
-  nsRefPtr<nsPresContext> presContext = presShell->GetPresContext();
+  RefPtr<nsPresContext> presContext = presShell->GetPresContext();
 
   int32_t cnvdX = presContext->CSSPixelsToDevPixels(tcX + x + 1) +
     presContext->AppUnitsToDevPixels(offset.x);
@@ -110,26 +123,26 @@ nsCoreUtils::DispatchClickEvent(nsITreeBoxObject *aTreeBoxObj,
     presContext->AppUnitsToDevPixels(offset.y);
 
   // XUL is just desktop, so there is no real reason for senfing touch events.
-  DispatchMouseEvent(NS_MOUSE_BUTTON_DOWN, cnvdX, cnvdY,
+  DispatchMouseEvent(eMouseDown, cnvdX, cnvdY,
                      tcContent, tcFrame, presShell, rootWidget);
 
-  DispatchMouseEvent(NS_MOUSE_BUTTON_UP, cnvdX, cnvdY,
+  DispatchMouseEvent(eMouseUp, cnvdX, cnvdY,
                      tcContent, tcFrame, presShell, rootWidget);
 }
 
 void
-nsCoreUtils::DispatchMouseEvent(uint32_t aEventType, int32_t aX, int32_t aY,
+nsCoreUtils::DispatchMouseEvent(EventMessage aMessage, int32_t aX, int32_t aY,
                                 nsIContent *aContent, nsIFrame *aFrame,
                                 nsIPresShell *aPresShell, nsIWidget *aRootWidget)
 {
-  WidgetMouseEvent event(true, aEventType, aRootWidget,
+  WidgetMouseEvent event(true, aMessage, aRootWidget,
                          WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
 
-  event.refPoint = LayoutDeviceIntPoint(aX, aY);
+  event.mRefPoint = LayoutDeviceIntPoint(aX, aY);
 
   event.clickCount = 1;
   event.button = WidgetMouseEvent::eLeftButton;
-  event.time = PR_IntervalNow();
+  event.mTime = PR_IntervalNow();
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
 
   nsEventStatus status = nsEventStatus_eIgnore;
@@ -137,22 +150,22 @@ nsCoreUtils::DispatchMouseEvent(uint32_t aEventType, int32_t aX, int32_t aY,
 }
 
 void
-nsCoreUtils::DispatchTouchEvent(uint32_t aEventType, int32_t aX, int32_t aY,
+nsCoreUtils::DispatchTouchEvent(EventMessage aMessage, int32_t aX, int32_t aY,
                                 nsIContent* aContent, nsIFrame* aFrame,
                                 nsIPresShell* aPresShell, nsIWidget* aRootWidget)
 {
   if (!dom::TouchEvent::PrefEnabled())
     return;
 
-  WidgetTouchEvent event(true, aEventType, aRootWidget);
+  WidgetTouchEvent event(true, aMessage, aRootWidget);
 
-  event.time = PR_IntervalNow();
+  event.mTime = PR_IntervalNow();
 
   // XXX: Touch has an identifier of -1 to hint that it is synthesized.
-  nsRefPtr<dom::Touch> t = new dom::Touch(-1, nsIntPoint(aX, aY),
-                                          nsIntPoint(1, 1), 0.0f, 1.0f);
+  RefPtr<dom::Touch> t = new dom::Touch(-1, LayoutDeviceIntPoint(aX, aY),
+                                        LayoutDeviceIntPoint(1, 1), 0.0f, 1.0f);
   t->SetTarget(aContent);
-  event.touches.AppendElement(t);
+  event.mTouches.AppendElement(t);
   nsEventStatus status = nsEventStatus_eIgnore;
   aPresShell->HandleEventWithTarget(&event, aFrame, aContent, &status);
 }
@@ -208,28 +221,6 @@ nsCoreUtils::GetDOMNodeFromDOMPoint(nsINode *aNode, uint32_t aOffset)
   }
 
   return aNode;
-}
-
-nsIContent*
-nsCoreUtils::GetRoleContent(nsINode *aNode)
-{
-  nsCOMPtr<nsIContent> content(do_QueryInterface(aNode));
-  if (!content) {
-    nsCOMPtr<nsIDocument> doc(do_QueryInterface(aNode));
-    if (doc) {
-      nsCOMPtr<nsIDOMHTMLDocument> htmlDoc(do_QueryInterface(aNode));
-      if (htmlDoc) {
-        nsCOMPtr<nsIDOMHTMLElement> bodyElement;
-        htmlDoc->GetBody(getter_AddRefs(bodyElement));
-        content = do_QueryInterface(bodyElement);
-      }
-      else {
-        return doc->GetDocumentElement();
-      }
-    }
-  }
-
-  return content;
 }
 
 bool
@@ -300,7 +291,7 @@ nsCoreUtils::ScrollFrameToPoint(nsIFrame *aScrollableFrame,
     return;
 
   nsPoint point =
-    aPoint.ToAppUnits(aFrame->PresContext()->AppUnitsPerDevPixel());
+    ToAppUnits(aPoint, aFrame->PresContext()->AppUnitsPerDevPixel());
   nsRect frameRect = aFrame->GetScreenRectInAppUnits();
   nsPoint deltaPoint(point.x - frameRect.x, point.y - frameRect.y);
 
@@ -425,7 +416,7 @@ nsCoreUtils::IsTabDocument(nsIDocument* aDocumentNode)
   treeItem->GetParent(getter_AddRefs(parentTreeItem));
 
   // Tab document running in own process doesn't have parent.
-  if (XRE_GetProcessType() == GeckoProcessType_Content)
+  if (XRE_IsContentProcess())
     return !parentTreeItem;
 
   // Parent of docshell for tab document running in chrome process is root.
@@ -646,4 +637,42 @@ nsCoreUtils::IsWhitespaceString(const nsSubstring& aString)
     ++iterBegin;
 
   return iterBegin == iterEnd;
+}
+
+bool
+nsCoreUtils::AccEventObserversExist()
+{
+  nsCOMPtr<nsIObserverService> obsService = services::GetObserverService();
+  NS_ENSURE_TRUE(obsService, false);
+
+  nsCOMPtr<nsISimpleEnumerator> observers;
+  obsService->EnumerateObservers(NS_ACCESSIBLE_EVENT_TOPIC,
+                                 getter_AddRefs(observers));
+  NS_ENSURE_TRUE(observers, false);
+
+  bool hasObservers = false;
+  observers->HasMoreElements(&hasObservers);
+
+  return hasObservers;
+}
+
+void
+nsCoreUtils::DispatchAccEvent(RefPtr<nsIAccessibleEvent> event)
+{
+  nsCOMPtr<nsIObserverService> obsService = services::GetObserverService();
+  NS_ENSURE_TRUE_VOID(obsService);
+
+  obsService->NotifyObservers(event, NS_ACCESSIBLE_EVENT_TOPIC, nullptr);
+}
+
+void
+nsCoreUtils::XBLBindingRole(const nsIContent* aEl, nsAString& aRole)
+{
+  for (const nsXBLBinding* binding = aEl->GetXBLBinding(); binding;
+       binding = binding->GetBaseBinding()) {
+    nsIContent* bindingElm = binding->PrototypeBinding()->GetBindingElement();
+    bindingElm->GetAttr(kNameSpaceID_None, nsGkAtoms::role, aRole);
+    if (!aRole.IsEmpty())
+      break;
+  }
 }

@@ -22,7 +22,7 @@ namespace mozilla {
 
 namespace dom {
 
-class AudioListener MOZ_FINAL : public nsWrapperCache
+class AudioListener final : public nsWrapperCache
 {
 public:
   explicit AudioListener(AudioContext* aContext);
@@ -37,7 +37,7 @@ public:
     return mContext;
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   double DopplerFactor() const
   {
@@ -117,7 +117,7 @@ private:
 
 private:
   friend class PannerNode;
-  nsRefPtr<AudioContext> mContext;
+  RefPtr<AudioContext> mContext;
   ThreeDPoint mPosition;
   ThreeDPoint mFrontVector;
   ThreeDPoint mRightVector;
@@ -127,8 +127,8 @@ private:
   nsTArray<WeakPtr<PannerNode> > mPanners;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

@@ -17,7 +17,11 @@
 #include "nsStringGlue.h"
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
+#include "mozilla/Atomics.h"
+#include "mozilla/IndexSequence.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Tuple.h"
+#include "mozilla/TypeTraits.h"
 
 //-----------------------------------------------------------------------------
 // These methods are alternatives to the methods on nsIThreadManager, provided
@@ -104,6 +108,8 @@ extern NS_METHOD NS_GetCurrentThread(nsIThread** aResult);
  *   If event is null.
  */
 extern NS_METHOD NS_DispatchToCurrentThread(nsIRunnable* aEvent);
+extern NS_METHOD
+NS_DispatchToCurrentThread(already_AddRefed<nsIRunnable>&& aEvent);
 
 /**
  * Dispatch the given event to the main thread.
@@ -118,6 +124,9 @@ extern NS_METHOD NS_DispatchToCurrentThread(nsIRunnable* aEvent);
  */
 extern NS_METHOD
 NS_DispatchToMainThread(nsIRunnable* aEvent,
+                        uint32_t aDispatchFlags = NS_DISPATCH_NORMAL);
+extern NS_METHOD
+NS_DispatchToMainThread(already_AddRefed<nsIRunnable>&& aEvent,
                         uint32_t aDispatchFlags = NS_DISPATCH_NORMAL);
 
 #ifndef XPCOM_GLUE_AVOID_NSPR
@@ -224,18 +233,46 @@ protected:
 };
 
 // This class is designed to be subclassed.
-class nsCancelableRunnable : public nsICancelableRunnable
+class CancelableRunnable : public nsRunnable,
+                             public nsICancelableRunnable
 {
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_NSIRUNNABLE
-  NS_DECL_NSICANCELABLERUNNABLE
+  NS_DECL_ISUPPORTS_INHERITED
+  // nsICancelableRunnable
+  virtual nsresult Cancel() override;
 
-  nsCancelableRunnable() {}
+  CancelableRunnable() {}
 
 protected:
-  virtual ~nsCancelableRunnable() {}
+  virtual ~CancelableRunnable() {}
 };
+
+// An event that can be used to call a C++11 functions or function objects,
+// including lambdas. The function must have no required arguments, and must
+// return void.
+template<typename Function>
+class nsRunnableFunction : public nsRunnable
+{
+public:
+  explicit nsRunnableFunction(const Function& aFunction)
+    : mFunction(aFunction)
+  { }
+
+  NS_IMETHOD Run() {
+    static_assert(mozilla::IsVoid<decltype(mFunction())>::value,
+                  "The lambda must return void!");
+    mFunction();
+    return NS_OK;
+  }
+private:
+  Function mFunction;
+};
+
+template<typename Function>
+nsRunnableFunction<Function>* NS_NewRunnableFunction(const Function& aFunction)
+{
+  return new nsRunnableFunction<Function>(aFunction);
+}
 
 // An event that can be used to call a method on a class.  The class type must
 // support reference counting. This event supports Revoke for use
@@ -268,67 +305,41 @@ public:
   typedef typename ReturnTypeEnforcer<ReturnType>::ReturnTypeIsSafe check;
 };
 
-template<class ClassType, typename Arg, bool Owning>
+template<class ClassType, bool Owning>
 struct nsRunnableMethodReceiver
 {
-  nsRefPtr<ClassType> mObj;
-  Arg mArg;
-  nsRunnableMethodReceiver(ClassType* aObj, Arg aArg)
-    : mObj(aObj)
-    , mArg(aArg)
-  {
-  }
+  RefPtr<ClassType> mObj;
+  explicit nsRunnableMethodReceiver(ClassType* aObj) : mObj(aObj) {}
   ~nsRunnableMethodReceiver() { Revoke(); }
-  void Revoke() { mObj = nullptr; }
-};
-
-template<class ClassType, bool Owning>
-struct nsRunnableMethodReceiver<ClassType, void, Owning>
-{
-  nsRefPtr<ClassType> mObj;
-  explicit nsRunnableMethodReceiver(ClassType* aObj)
-    : mObj(aObj)
-  {
-  }
-  ~nsRunnableMethodReceiver() { Revoke(); }
+  ClassType* Get() const { return mObj.get(); }
   void Revoke() { mObj = nullptr; }
 };
 
 template<class ClassType>
-struct nsRunnableMethodReceiver<ClassType, void, false>
+struct nsRunnableMethodReceiver<ClassType, false>
 {
   ClassType* MOZ_NON_OWNING_REF mObj;
   explicit nsRunnableMethodReceiver(ClassType* aObj) : mObj(aObj) {}
+  ClassType* Get() const { return mObj; }
   void Revoke() { mObj = nullptr; }
 };
 
 template<typename Method, bool Owning> struct nsRunnableMethodTraits;
 
-template<class C, typename R, typename A, bool Owning>
-struct nsRunnableMethodTraits<R(C::*)(A), Owning>
+template<class C, typename R, bool Owning, typename... As>
+struct nsRunnableMethodTraits<R(C::*)(As...), Owning>
 {
   typedef C class_type;
   typedef R return_type;
-  typedef A arg_type;
-  typedef nsRunnableMethod<C, R, Owning> base_type;
-};
-
-template<class C, typename R, bool Owning>
-struct nsRunnableMethodTraits<R(C::*)(), Owning>
-{
-  typedef C class_type;
-  typedef R return_type;
-  typedef void arg_type;
   typedef nsRunnableMethod<C, R, Owning> base_type;
 };
 
 #ifdef NS_HAVE_STDCALL
-template<class C, typename R, typename A, bool Owning>
-struct nsRunnableMethodTraits<R(__stdcall C::*)(A), Owning>
+template<class C, typename R, bool Owning, typename... As>
+struct nsRunnableMethodTraits<R(__stdcall C::*)(As...), Owning>
 {
   typedef C class_type;
   typedef R return_type;
-  typedef A arg_type;
   typedef nsRunnableMethod<C, R, Owning> base_type;
 };
 
@@ -337,57 +348,364 @@ struct nsRunnableMethodTraits<R(NS_STDCALL C::*)(), Owning>
 {
   typedef C class_type;
   typedef R return_type;
-  typedef void arg_type;
   typedef nsRunnableMethod<C, R, Owning> base_type;
 };
 #endif
 
-template<typename Method, typename Arg, bool Owning>
+
+// IsParameterStorageClass<T>::value is true if T is a parameter-storage class
+// that will be recognized by NS_New[NonOwning]RunnableMethodWithArg[s] to
+// force a specific storage&passing strategy (instead of inferring one,
+// see ParameterStorage).
+// When creating a new storage class, add a specialization for it to be
+// recognized.
+template<typename T>
+struct IsParameterStorageClass : public mozilla::FalseType {};
+
+// StoreXPassByY structs used to inform nsRunnableMethodArguments how to
+// store arguments, and how to pass them to the target method.
+
+template<typename T>
+struct StoreCopyPassByValue
+{
+  typedef T stored_type;
+  typedef T passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreCopyPassByValue(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreCopyPassByValue<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreCopyPassByConstLRef
+{
+  typedef T stored_type;
+  typedef const T& passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreCopyPassByConstLRef(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreCopyPassByConstLRef<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreCopyPassByLRef
+{
+  typedef T stored_type;
+  typedef T& passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreCopyPassByLRef(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreCopyPassByLRef<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreCopyPassByRRef
+{
+  typedef T stored_type;
+  typedef T&& passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreCopyPassByRRef(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return mozilla::Move(m); }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreCopyPassByRRef<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreRefPassByLRef
+{
+  typedef T& stored_type;
+  typedef T& passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreRefPassByLRef(A& a) : m(a) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreRefPassByLRef<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreConstRefPassByConstLRef
+{
+  typedef const T& stored_type;
+  typedef const T& passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreConstRefPassByConstLRef(const A& a) : m(a) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreConstRefPassByConstLRef<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StorensRefPtrPassByPtr
+{
+  typedef RefPtr<T> stored_type;
+  typedef T* passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StorensRefPtrPassByPtr(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return m.get(); }
+};
+template<typename S>
+struct IsParameterStorageClass<StorensRefPtrPassByPtr<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StorePtrPassByPtr
+{
+  typedef T* stored_type;
+  typedef T* passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StorePtrPassByPtr(A a) : m(a) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StorePtrPassByPtr<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreConstPtrPassByConstPtr
+{
+  typedef const T* stored_type;
+  typedef const T* passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreConstPtrPassByConstPtr(A a) : m(a) {}
+  passed_type PassAsParameter() { return m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreConstPtrPassByConstPtr<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreCopyPassByConstPtr
+{
+  typedef T stored_type;
+  typedef const T* passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreCopyPassByConstPtr(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return &m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreCopyPassByConstPtr<S>>
+  : public mozilla::TrueType {};
+
+template<typename T>
+struct StoreCopyPassByPtr
+{
+  typedef T stored_type;
+  typedef T* passed_type;
+  stored_type m;
+  template <typename A>
+  MOZ_IMPLICIT StoreCopyPassByPtr(A&& a) : m(mozilla::Forward<A>(a)) {}
+  passed_type PassAsParameter() { return &m; }
+};
+template<typename S>
+struct IsParameterStorageClass<StoreCopyPassByPtr<S>>
+  : public mozilla::TrueType {};
+
+namespace detail {
+
+template<typename TWithoutPointer>
+struct NonnsISupportsPointerStorageClass
+  : mozilla::Conditional<mozilla::IsConst<TWithoutPointer>::value,
+                         StoreConstPtrPassByConstPtr<
+                           typename mozilla::RemoveConst<TWithoutPointer>::Type>,
+                         StorePtrPassByPtr<TWithoutPointer>>
+{};
+
+template<typename>
+struct SFINAE1True : mozilla::TrueType
+{};
+
+template<class T>
+static auto HasRefCountMethodsTest(int)
+    -> SFINAE1True<decltype(mozilla::DeclVal<T>().AddRef(),
+                            mozilla::DeclVal<T>().Release())>;
+template<class>
+static auto HasRefCountMethodsTest(long) -> mozilla::FalseType;
+
+template<class T>
+struct HasRefCountMethods : decltype(HasRefCountMethodsTest<T>(0))
+{};
+
+template<typename T>
+struct IsRefcountedSmartPointer : public mozilla::FalseType
+{};
+
+template<typename T>
+struct IsRefcountedSmartPointer<RefPtr<T>> : public mozilla::TrueType
+{};
+
+template<typename T>
+struct IsRefcountedSmartPointer<nsCOMPtr<T>> : public mozilla::TrueType
+{};
+
+template<typename T>
+struct StripSmartPointer
+{
+  typedef void Type;
+};
+
+template<typename T>
+struct StripSmartPointer<RefPtr<T>>
+{
+  typedef T Type;
+};
+
+template<typename T>
+struct StripSmartPointer<nsCOMPtr<T>>
+{
+  typedef T Type;
+};
+
+template<typename TWithoutPointer>
+struct PointerStorageClass
+  : mozilla::Conditional<HasRefCountMethods<TWithoutPointer>::value,
+                         StorensRefPtrPassByPtr<TWithoutPointer>,
+                         typename NonnsISupportsPointerStorageClass<
+                           TWithoutPointer
+                         >::Type>
+{};
+
+template<typename TWithoutRef>
+struct LValueReferenceStorageClass
+  : mozilla::Conditional<mozilla::IsConst<TWithoutRef>::value,
+                         StoreConstRefPassByConstLRef<
+                           typename mozilla::RemoveConst<TWithoutRef>::Type>,
+                         StoreRefPassByLRef<TWithoutRef>>
+{};
+
+template<typename T>
+struct SmartPointerStorageClass
+  : mozilla::Conditional<IsRefcountedSmartPointer<T>::value,
+                         StorensRefPtrPassByPtr<
+                           typename StripSmartPointer<T>::Type>,
+                         StoreCopyPassByValue<T>>
+{};
+
+template<typename T>
+struct NonLValueReferenceStorageClass
+  : mozilla::Conditional<mozilla::IsRvalueReference<T>::value,
+                         StoreCopyPassByRRef<
+                           typename mozilla::RemoveReference<T>::Type>,
+                         typename SmartPointerStorageClass<T>::Type>
+{};
+
+template<typename T>
+struct NonPointerStorageClass
+  : mozilla::Conditional<mozilla::IsLvalueReference<T>::value,
+                         typename LValueReferenceStorageClass<
+                           typename mozilla::RemoveReference<T>::Type
+                         >::Type,
+                         typename NonLValueReferenceStorageClass<T>::Type>
+{};
+
+template<typename T>
+struct NonParameterStorageClass
+  : mozilla::Conditional<mozilla::IsPointer<T>::value,
+                         typename PointerStorageClass<
+                           typename mozilla::RemovePointer<T>::Type
+                         >::Type,
+                         typename NonPointerStorageClass<T>::Type>
+{};
+
+// Choose storage&passing strategy based on preferred storage type:
+// - If IsParameterStorageClass<T>::value is true, use as-is.
+// - RC*       -> StorensRefPtrPassByPtr<RC>     : Store RefPtr<RC>, pass RC*
+//   ^^ RC quacks like a ref-counted type (i.e., has AddRef and Release methods)
+// - const T*  -> StoreConstPtrPassByConstPtr<T> : Store const T*, pass const T*
+// - T*        -> StorePtrPassByPtr<T>           : Store T*, pass T*.
+// - const T&  -> StoreConstRefPassByConstLRef<T>: Store const T&, pass const T&.
+// - T&        -> StoreRefPassByLRef<T>          : Store T&, pass T&.
+// - T&&       -> StoreCopyPassByRRef<T>         : Store T, pass Move(T).
+// - RefPtr<T>, nsCOMPtr<T>
+//             -> StorensRefPtrPassByPtr<T>      : Store RefPtr<T>, pass T*
+// - Other T   -> StoreCopyPassByValue<T>        : Store T, pass T.
+// Other available explicit options:
+// -              StoreCopyPassByConstLRef<T>    : Store T, pass const T&.
+// -              StoreCopyPassByLRef<T>         : Store T, pass T& (of copy!)
+// -              StoreCopyPassByConstPtr<T>     : Store T, pass const T*
+// -              StoreCopyPassByPtr<T>          : Store T, pass T* (of copy!)
+// Or create your own class with PassAsParameter() method, optional
+// clean-up in destructor, and with associated IsParameterStorageClass<>.
+template<typename T>
+struct ParameterStorage
+  : mozilla::Conditional<IsParameterStorageClass<T>::value,
+                         T,
+                         typename NonParameterStorageClass<T>::Type>
+{};
+
+} /* namespace detail */
+
+// struct used to store arguments and later apply them to a method.
+template <typename... Ts>
+struct nsRunnableMethodArguments
+{
+  mozilla::Tuple<typename ::detail::ParameterStorage<Ts>::Type...> mArguments;
+  template <typename... As>
+  explicit nsRunnableMethodArguments(As&&... aArguments)
+    : mArguments(mozilla::Forward<As>(aArguments)...)
+  {}
+  template<typename C, typename M, typename... Args, size_t... Indices>
+  static auto
+  applyImpl(C* o, M m, mozilla::Tuple<Args...>& args,
+            mozilla::IndexSequence<Indices...>)
+      -> decltype(((*o).*m)(mozilla::Get<Indices>(args).PassAsParameter()...))
+  {
+    return ((*o).*m)(mozilla::Get<Indices>(args).PassAsParameter()...);
+  }
+  template<class C, typename M> auto apply(C* o, M m)
+      -> decltype(applyImpl(o, m, mArguments,
+                  typename mozilla::IndexSequenceFor<Ts...>::Type()))
+  {
+    return applyImpl(o, m, mArguments,
+        typename mozilla::IndexSequenceFor<Ts...>::Type());
+  }
+};
+
+template<typename Method, bool Owning, typename... Storages>
 class nsRunnableMethodImpl
   : public nsRunnableMethodTraits<Method, Owning>::base_type
 {
-  typedef typename nsRunnableMethodTraits<Method, Owning>::class_type ClassType;
-  nsRunnableMethodReceiver<ClassType, Arg, Owning> mReceiver;
+  typedef typename nsRunnableMethodTraits<Method, Owning>::class_type
+      ClassType;
+  nsRunnableMethodReceiver<ClassType, Owning> mReceiver;
   Method mMethod;
+  nsRunnableMethodArguments<Storages...> mArgs;
 public:
-  nsRunnableMethodImpl(ClassType* aObj, Method aMethod, Arg aArg)
-    : mReceiver(aObj, aArg)
-    , mMethod(aMethod)
-  {
-  }
-  NS_IMETHOD Run()
-  {
-    if (MOZ_LIKELY(mReceiver.mObj)) {
-      ((*mReceiver.mObj).*mMethod)(mReceiver.mArg);
-    }
-    return NS_OK;
-  }
-  void Revoke() { mReceiver.Revoke(); }
-};
-
-template<typename Method, bool Owning>
-class nsRunnableMethodImpl<Method, void, Owning>
-  : public nsRunnableMethodTraits<Method, Owning>::base_type
-{
-  typedef typename nsRunnableMethodTraits<Method, Owning>::class_type ClassType;
-  nsRunnableMethodReceiver<ClassType, void, Owning> mReceiver;
-  Method mMethod;
-
-public:
-  nsRunnableMethodImpl(ClassType* aObj, Method aMethod)
+  virtual ~nsRunnableMethodImpl() { Revoke(); };
+  template<typename... Args>
+  explicit nsRunnableMethodImpl(ClassType* aObj, Method aMethod,
+                                Args&&... aArgs)
     : mReceiver(aObj)
     , mMethod(aMethod)
+    , mArgs(mozilla::Forward<Args>(aArgs)...)
   {
+    static_assert(sizeof...(Storages) == sizeof...(Args), "Storages and Args should have equal sizes");
   }
-
   NS_IMETHOD Run()
   {
-    if (MOZ_LIKELY(mReceiver.mObj)) {
-      ((*mReceiver.mObj).*mMethod)();
+    if (MOZ_LIKELY(mReceiver.Get())) {
+      mArgs.apply(mReceiver.Get(), mMethod);
     }
     return NS_OK;
   }
-
   void Revoke() { mReceiver.Revoke(); }
 };
 
@@ -405,33 +723,51 @@ template<typename PtrType, typename Method>
 typename nsRunnableMethodTraits<Method, true>::base_type*
 NS_NewRunnableMethod(PtrType aPtr, Method aMethod)
 {
-  return new nsRunnableMethodImpl<Method, void, true>(aPtr, aMethod);
-}
-
-template<typename T>
-struct dependent_type
-{
-  typedef T type;
-};
-
-
-// Similar to NS_NewRunnableMethod. Call like so:
-// Type myArg;
-// nsCOMPtr<nsIRunnable> event =
-//   NS_NewRunnableMethodWithArg<Type>(myObject, &MyClass::HandleEvent, myArg);
-template<typename Arg, typename Method, typename PtrType>
-typename nsRunnableMethodTraits<Method, true>::base_type*
-NS_NewRunnableMethodWithArg(PtrType&& aPtr, Method aMethod,
-                            typename dependent_type<Arg>::type aArg)
-{
-  return new nsRunnableMethodImpl<Method, Arg, true>(aPtr, aMethod, aArg);
+  return new nsRunnableMethodImpl<Method, true>(aPtr, aMethod);
 }
 
 template<typename PtrType, typename Method>
 typename nsRunnableMethodTraits<Method, false>::base_type*
 NS_NewNonOwningRunnableMethod(PtrType&& aPtr, Method aMethod)
 {
-  return new nsRunnableMethodImpl<Method, void, false>(aPtr, aMethod);
+  return new nsRunnableMethodImpl<Method, false>(aPtr, aMethod);
+}
+
+// Similar to NS_NewRunnableMethod. Call like so:
+// nsCOMPtr<nsIRunnable> event =
+//   NS_NewRunnableMethodWithArg<Type>(myObject, &MyClass::HandleEvent, myArg);
+// 'Type' is the stored type for the argument, see ParameterStorage for details.
+template<typename Storage, typename Method, typename PtrType, typename Arg>
+typename nsRunnableMethodTraits<Method, true>::base_type*
+NS_NewRunnableMethodWithArg(PtrType&& aPtr, Method aMethod, Arg&& aArg)
+{
+  return new nsRunnableMethodImpl<Method, true, Storage>(
+      aPtr, aMethod, mozilla::Forward<Arg>(aArg));
+}
+
+// Similar to NS_NewRunnableMethod. Call like so:
+// nsCOMPtr<nsIRunnable> event =
+//   NS_NewRunnableMethodWithArg<Types,...>(myObject, &MyClass::HandleEvent, myArg1,...);
+// 'Types' are the stored type for each argument, see ParameterStorage for details.
+template<typename... Storages, typename Method, typename PtrType, typename... Args>
+typename nsRunnableMethodTraits<Method, true>::base_type*
+NS_NewRunnableMethodWithArgs(PtrType&& aPtr, Method aMethod, Args&&... aArgs)
+{
+  static_assert(sizeof...(Storages) == sizeof...(Args),
+                "<Storages...> size should be equal to number of arguments");
+  return new nsRunnableMethodImpl<Method, true, Storages...>(
+      aPtr, aMethod, mozilla::Forward<Args>(aArgs)...);
+}
+
+template<typename... Storages, typename Method, typename PtrType, typename... Args>
+typename nsRunnableMethodTraits<Method, false>::base_type*
+NS_NewNonOwningRunnableMethodWithArgs(PtrType&& aPtr, Method aMethod,
+                                      Args&&... aArgs)
+{
+  static_assert(sizeof...(Storages) == sizeof...(Args),
+                "<Storages...> size should be equal to number of arguments");
+  return new nsRunnableMethodImpl<Method, false, Storages...>(
+      aPtr, aMethod, mozilla::Forward<Args>(aArgs)...);
 }
 
 #endif  // XPCOM_GLUE_AVOID_NSPR
@@ -514,7 +850,7 @@ private:
   nsRevocableEventPtr(const nsRevocableEventPtr&);
   nsRevocableEventPtr& operator=(const nsRevocableEventPtr&);
 
-  nsRefPtr<T> mEvent;
+  RefPtr<T> mEvent;
 };
 
 /**
@@ -535,7 +871,7 @@ public:
                          nsIThread* aThread = nullptr);
 
 private:
-  volatile uint32_t mCounter;
+  mozilla::Atomic<uint32_t> mCounter;
 
   nsThreadPoolNaming(const nsThreadPoolNaming&) = delete;
   void operator=(const nsThreadPoolNaming&) = delete;
@@ -562,20 +898,5 @@ private:
 
 void
 NS_SetMainThread();
-
-/**
- * Helpers for thread to report their status when compiled with Nuwa.
- */
-#ifdef MOZILLA_INTERNAL_API
-#ifdef MOZ_NUWA_PROCESS
-extern void
-NS_SetIgnoreStatusOfCurrentThread();
-#else // MOZ_NUWA_PROCESS
-inline void
-NS_SetIgnoreStatusOfCurrentThread()
-{
-}
-#endif // MOZ_NUWA_PROCESS
-#endif // MOZILLA_INTERNAL_API
 
 #endif  // nsThreadUtils_h__

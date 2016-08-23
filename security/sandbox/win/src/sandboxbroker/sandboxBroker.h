@@ -13,6 +13,9 @@
 #define SANDBOX_EXPORT __declspec(dllimport)
 #endif
 
+#include <stdint.h>
+#include <windows.h>
+
 namespace sandbox {
   class BrokerServices;
   class TargetPolicy;
@@ -24,6 +27,9 @@ class SANDBOX_EXPORT SandboxBroker
 {
 public:
   SandboxBroker();
+
+  static bool Initialize();
+
   bool LaunchApp(const wchar_t *aPath,
                  const wchar_t *aArguments,
                  const bool aEnableLogging,
@@ -32,17 +38,24 @@ public:
 
   // Security levels for different types of processes
 #if defined(MOZ_CONTENT_SANDBOX)
-  bool SetSecurityLevelForContentProcess(bool aMoreStrict);
+  bool SetSecurityLevelForContentProcess(int32_t aSandboxLevel);
 #endif
-  bool SetSecurityLevelForPluginProcess();
+  bool SetSecurityLevelForPluginProcess(int32_t aSandboxLevel);
   bool SetSecurityLevelForIPDLUnitTestProcess();
-  bool SetSecurityLevelForGMPlugin();
+  enum SandboxLevel {
+    LockDown,
+    Restricted
+  };
+  bool SetSecurityLevelForGMPlugin(SandboxLevel aLevel);
 
   // File system permissions
   bool AllowReadFile(wchar_t const *file);
   bool AllowReadWriteFile(wchar_t const *file);
   bool AllowDirectory(wchar_t const *dir);
 
+  // Exposes AddTargetPeer from broker services, so that none sandboxed
+  // processes can be added as handle duplication targets.
+  bool AddTargetPeer(HANDLE aPeerProcess);
 private:
   static sandbox::BrokerServices *sBrokerService;
   sandbox::TargetPolicy *mPolicy;

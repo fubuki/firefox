@@ -16,45 +16,51 @@
 namespace mozilla {
 namespace gmp {
 
-class GMPParent;
+class GMPContentParent;
 
-class GMPAudioDecoderParent MOZ_FINAL : public GMPAudioDecoderProxy
-                                      , public PGMPAudioDecoderParent
+class GMPAudioDecoderParent final : public GMPAudioDecoderProxy
+                                  , public PGMPAudioDecoderParent
 {
 public:
   NS_INLINE_DECL_REFCOUNTING(GMPAudioDecoderParent)
 
-  explicit GMPAudioDecoderParent(GMPParent *aPlugin);
+  explicit GMPAudioDecoderParent(GMPContentParent *aPlugin);
 
   nsresult Shutdown();
 
   // GMPAudioDecoderProxy
-  virtual nsresult InitDecode(GMPAudioCodecType aCodecType,
-                              uint32_t aChannelCount,
-                              uint32_t aBitsPerChannel,
-                              uint32_t aSamplesPerSecond,
-                              nsTArray<uint8_t>& aExtraData,
-                              GMPAudioDecoderCallbackProxy* aCallback) MOZ_OVERRIDE;
-  virtual nsresult Decode(GMPAudioSamplesImpl& aInput) MOZ_OVERRIDE;
-  virtual nsresult Reset() MOZ_OVERRIDE;
-  virtual nsresult Drain() MOZ_OVERRIDE;
-  virtual nsresult Close() MOZ_OVERRIDE;
+  nsresult InitDecode(GMPAudioCodecType aCodecType,
+                      uint32_t aChannelCount,
+                      uint32_t aBitsPerChannel,
+                      uint32_t aSamplesPerSecond,
+                      nsTArray<uint8_t>& aExtraData,
+                      GMPAudioDecoderCallbackProxy* aCallback) override;
+  nsresult Decode(GMPAudioSamplesImpl& aInput) override;
+  nsresult Reset() override;
+  nsresult Drain() override;
+  nsresult Close() override;
 
 private:
   ~GMPAudioDecoderParent();
 
   // PGMPAudioDecoderParent
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
-  virtual bool RecvDecoded(const GMPAudioDecodedSampleData& aDecoded) MOZ_OVERRIDE;
-  virtual bool RecvInputDataExhausted() MOZ_OVERRIDE;
-  virtual bool RecvDrainComplete() MOZ_OVERRIDE;
-  virtual bool RecvResetComplete() MOZ_OVERRIDE;
-  virtual bool RecvError(const GMPErr& aError) MOZ_OVERRIDE;
-  virtual bool Recv__delete__() MOZ_OVERRIDE;
+  void ActorDestroy(ActorDestroyReason aWhy) override;
+  bool RecvDecoded(const GMPAudioDecodedSampleData& aDecoded) override;
+  bool RecvInputDataExhausted() override;
+  bool RecvDrainComplete() override;
+  bool RecvResetComplete() override;
+  bool RecvError(const GMPErr& aError) override;
+  bool RecvShutdown() override;
+  bool Recv__delete__() override;
+
+  void UnblockResetAndDrain();
 
   bool mIsOpen;
   bool mShuttingDown;
-  nsRefPtr<GMPParent> mPlugin;
+  bool mActorDestroyed;
+  bool mIsAwaitingResetComplete;
+  bool mIsAwaitingDrainComplete;
+  RefPtr<GMPContentParent> mPlugin;
   GMPAudioDecoderCallbackProxy* mCallback;
 };
 

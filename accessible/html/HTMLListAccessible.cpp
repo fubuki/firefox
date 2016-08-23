@@ -26,10 +26,8 @@ NS_IMPL_ISUPPORTS_INHERITED0(HTMLListAccessible, HyperTextAccessible)
 role
 HTMLListAccessible::NativeRole()
 {
-  if (mContent->Tag() == nsGkAtoms::dl)
-    return roles::DEFINITION_LIST;
-
-  return roles::LIST;
+  a11y::role r = GetAccService()->MarkupRole(mContent);
+  return r != roles::NOTHING ? r : roles::LIST;
 }
 
 uint64_t
@@ -53,6 +51,7 @@ HTMLLIAccessible::
   if (blockFrame && blockFrame->HasBullet()) {
     mBullet = new HTMLListBulletAccessible(mContent, mDoc);
     Document()->BindToDocument(mBullet, nullptr);
+    AppendChild(mBullet);
   }
 }
 
@@ -69,10 +68,8 @@ HTMLLIAccessible::Shutdown()
 role
 HTMLLIAccessible::NativeRole()
 {
-  if (mContent->Tag() == nsGkAtoms::dt)
-    return roles::TERM;
-
-  return roles::LISTITEM;
+  a11y::role r = GetAccService()->MarkupRole(mContent);
+  return r != roles::NOTHING ? r : roles::LISTITEM;
 }
 
 uint64_t
@@ -95,6 +92,17 @@ HTMLLIAccessible::Bounds() const
   return rect;
 }
 
+bool
+HTMLLIAccessible::InsertChildAt(uint32_t aIndex, Accessible* aChild)
+{
+  // Adjust index if there's a bullet.
+  if (mBullet && aIndex == 0 && aChild != mBullet) {
+    return HyperTextAccessible::InsertChildAt(aIndex + 1, aChild);
+  }
+
+  return HyperTextAccessible::InsertChildAt(aIndex, aChild);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLLIAccessible: public
 
@@ -106,32 +114,19 @@ HTMLLIAccessible::UpdateBullet(bool aHasBullet)
     return;
   }
 
-  DocAccessible* document = Document();
+  TreeMutation mt(this);
   if (aHasBullet) {
     mBullet = new HTMLListBulletAccessible(mContent, mDoc);
-    document->BindToDocument(mBullet, nullptr);
+    mDoc->BindToDocument(mBullet, nullptr);
     InsertChildAt(0, mBullet);
-  } else {
+    mt.AfterInsertion(mBullet);
+  }
+  else {
+    mt.BeforeRemoval(mBullet);
     RemoveChild(mBullet);
-    document->UnbindFromDocument(mBullet);
     mBullet = nullptr;
   }
-
-  // XXXtodo: fire show/hide and reorder events. That's hard to make it
-  // right now because coalescence happens by DOM node.
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// HTMLLIAccessible: Accessible protected
-
-void
-HTMLLIAccessible::CacheChildren()
-{
-  if (mBullet)
-    AppendChild(mBullet);
-
-  // Cache children from subtree.
-  AccessibleWrap::CacheChildren();
+  mt.Done();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -141,6 +136,7 @@ HTMLListBulletAccessible::
   HTMLListBulletAccessible(nsIContent* aContent, DocAccessible* aDoc) :
   LeafAccessible(aContent, aDoc)
 {
+  mGenericTypes |= eText;
   mStateFlags |= eSharedNode;
 }
 

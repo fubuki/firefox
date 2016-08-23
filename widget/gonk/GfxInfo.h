@@ -46,7 +46,7 @@ public:
   using GfxInfoBase::GetFeatureSuggestedDriverVersion;
   using GfxInfoBase::GetWebGLParameter;
 
-  virtual uint32_t OperatingSystemVersion() MOZ_OVERRIDE;
+  virtual uint32_t OperatingSystemVersion() override;
 
 #ifdef DEBUG
   NS_DECL_NSIGFXINFODEBUG
@@ -58,6 +58,7 @@ protected:
                                         int32_t *aStatus,
                                         nsAString & aSuggestedDriverVersion,
                                         const nsTArray<GfxDriverInfo>& aDriverInfo,
+                                        nsACString& aFailureId,
                                         OperatingSystem* aOS = nullptr);
   virtual const nsTArray<GfxDriverInfo>& GetGfxDriverInfo();
 };

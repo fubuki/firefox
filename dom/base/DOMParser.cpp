@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,6 +8,7 @@
 
 #include "nsIDOMDocument.h"
 #include "nsNetUtil.h"
+#include "nsIStreamListener.h"
 #include "nsStringStream.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsCRT.h"
@@ -15,6 +17,7 @@
 #include "nsDOMJSUtils.h"
 #include "nsError.h"
 #include "nsPIDOMWindow.h"
+#include "nsNullPrincipal.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -109,7 +112,7 @@ DOMParser::ParseFromString(const nsAString& str,
 
   nsAutoCString utf8str;
   // Convert from UTF16 to UTF8 using fallible allocations
-  if (!AppendUTF16toUTF8(str, utf8str, mozilla::fallible_t())) {
+  if (!AppendUTF16toUTF8(str, utf8str, mozilla::fallible)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -348,8 +351,8 @@ DOMParser::Init(nsIPrincipal* principal, nsIURI* documentURI,
     if (nsContentUtils::IsSystemPrincipal(mPrincipal)) {
       // Don't give DOMParsers the system principal.  Use a null
       // principal instead.
-      mPrincipal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-      NS_ENSURE_SUCCESS(rv, rv);
+      mPrincipal = nsNullPrincipal::Create();
+      NS_ENSURE_TRUE(mPrincipal, NS_ERROR_FAILURE);
 
       if (!mDocumentURI) {
         rv = mPrincipal->GetURI(getter_AddRefs(mDocumentURI));
@@ -378,7 +381,7 @@ DOMParser::Constructor(const GlobalObject& aOwner,
     rv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return nullptr;
   }
-  nsRefPtr<DOMParser> domParser = new DOMParser(aOwner.GetAsSupports());
+  RefPtr<DOMParser> domParser = new DOMParser(aOwner.GetAsSupports());
   rv = domParser->InitInternal(aOwner.GetAsSupports(), aPrincipal, aDocumentURI,
                                aBaseURI);
   if (rv.Failed()) {
@@ -391,7 +394,7 @@ DOMParser::Constructor(const GlobalObject& aOwner,
 DOMParser::Constructor(const GlobalObject& aOwner,
                        ErrorResult& rv)
 {
-  nsRefPtr<DOMParser> domParser = new DOMParser(aOwner.GetAsSupports());
+  RefPtr<DOMParser> domParser = new DOMParser(aOwner.GetAsSupports());
   rv = domParser->InitInternal(aOwner.GetAsSupports(),
                                nsContentUtils::SubjectPrincipal(),
                                nullptr, nullptr);
@@ -419,7 +422,7 @@ DOMParser::InitInternal(nsISupports* aOwner, nsIPrincipal* prin,
     // while GetDocumentFromCaller() gives us the window that the DOMParser()
     // call was made on.
 
-    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aOwner);
+    nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aOwner);
     if (!window) {
       return NS_ERROR_UNEXPECTED;
     }
@@ -464,9 +467,8 @@ DOMParser::SetUpDocument(DocumentFlavor aFlavor, nsIDOMDocument** aResult)
     NS_ENSURE_TRUE(!mAttemptedInit, NS_ERROR_NOT_INITIALIZED);
     AttemptedInitMarker marker(&mAttemptedInit);
 
-    nsCOMPtr<nsIPrincipal> prin =
-      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<nsIPrincipal> prin = nsNullPrincipal::Create();
+    NS_ENSURE_TRUE(prin, NS_ERROR_FAILURE);
 
     rv = Init(prin, nullptr, nullptr, scriptHandlingObject);
     NS_ENSURE_SUCCESS(rv, rv);

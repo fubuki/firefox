@@ -13,21 +13,21 @@
 namespace mozilla {
 namespace dom {
 
-class MobileConnectionArray MOZ_FINAL : public nsISupports
-                                      , public nsWrapperCache
+class MobileConnectionArray final : public nsISupports
+                                  , public nsWrapperCache
 {
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MobileConnectionArray)
 
-  explicit MobileConnectionArray(nsPIDOMWindow* aWindow);
+  explicit MobileConnectionArray(nsPIDOMWindowInner* aWindow);
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const;
 
   // WrapperCache
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   //  WebIDL
   MobileConnection*
@@ -44,8 +44,8 @@ private:
 
   bool mLengthInitialized;
 
-  nsCOMPtr<nsPIDOMWindow> mWindow;
-  nsTArray<nsRefPtr<MobileConnection>> mMobileConnections;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
+  nsTArray<RefPtr<MobileConnection>> mMobileConnections;
 };
 
 } // namespace dom

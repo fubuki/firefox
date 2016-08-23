@@ -9,7 +9,7 @@
 
 BEGIN_TEST(testSetProperty_NativeGetterStubSetter)
 {
-    JS::RootedObject obj(cx, JS_NewObject(cx, nullptr, JS::NullPtr(), JS::NullPtr()));
+    JS::RootedObject obj(cx, JS_NewPlainObject(cx));
     CHECK(obj);
 
     CHECK(JS_DefineProperty(cx, global, "globalProp", obj, JSPROP_ENUMERATE,
@@ -56,9 +56,9 @@ BEGIN_TEST(testSetProperty_NativeGetterStubSetter)
     return true;
 }
 static bool
-NativeGet(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleValue vp)
+NativeGet(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleValue vp)
 {
-    vp.set(INT_TO_JSVAL(17));
+    vp.setInt32(17);
     return true;
 }
 END_TEST(testSetProperty_NativeGetterStubSetter)
@@ -68,7 +68,7 @@ BEGIN_TEST(testSetProperty_InheritedGlobalSetter)
     // This is a JSAPI test because jsapi-test globals do not have a resolve
     // hook and therefore can use the property cache in some cases where the
     // shell can't.
-    MOZ_RELEASE_ASSERT(!JS_GetClass(global)->resolve);
+    MOZ_RELEASE_ASSERT(!JS_GetClass(global)->getResolve());
 
     CHECK(JS_DefineProperty(cx, global, "HOTLOOP", 8, 0));
     EXEC("var n = 0;\n"

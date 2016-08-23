@@ -12,44 +12,34 @@
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 #include "MainThreadUtils.h"
+#include "nsThreadUtils.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Move.h"
 
 #ifdef XPCOM_GLUE_AVOID_NSPR
 #error NS_ProxyRelease implementation depends on NSPR.
 #endif
 
-/**
- * Ensure that a nsCOMPtr is released on the target thread.
- *
- * @see NS_ProxyRelease(nsIEventTarget*, nsISupports*, bool)
- */
+
 template<class T>
-inline NS_HIDDEN_(nsresult)
-NS_ProxyRelease(nsIEventTarget* aTarget, nsCOMPtr<T>& aDoomed,
-                bool aAlwaysProxy = false)
+class nsProxyReleaseEvent : public nsRunnable
 {
-  T* raw = nullptr;
-  aDoomed.swap(raw);
-  return NS_ProxyRelease(aTarget, raw, aAlwaysProxy);
-}
+public:
+  explicit nsProxyReleaseEvent(already_AddRefed<T> aDoomed)
+  : mDoomed(aDoomed.take()) {}
+
+  NS_IMETHOD Run()
+  {
+    NS_IF_RELEASE(mDoomed);
+    return NS_OK;
+  }
+
+private:
+  T* MOZ_OWNING_REF mDoomed;
+};
 
 /**
- * Ensure that a nsRefPtr is released on the target thread.
- *
- * @see NS_ProxyRelease(nsIEventTarget*, nsISupports*, bool)
- */
-template<class T>
-inline NS_HIDDEN_(nsresult)
-NS_ProxyRelease(nsIEventTarget* aTarget, nsRefPtr<T>& aDoomed,
-                bool aAlwaysProxy = false)
-{
-  T* raw = nullptr;
-  aDoomed.swap(raw);
-  return NS_ProxyRelease(aTarget, raw, aAlwaysProxy);
-}
-
-/**
- * Ensures that the delete of a nsISupports object occurs on the target thread.
+ * Ensures that the delete of a smart pointer occurs on the target thread.
  *
  * @param aTarget
  *        the target thread where the doomed object should be released.
@@ -57,13 +47,72 @@ NS_ProxyRelease(nsIEventTarget* aTarget, nsRefPtr<T>& aDoomed,
  *        the doomed object; the object to be released on the target thread.
  * @param aAlwaysProxy
  *        normally, if NS_ProxyRelease is called on the target thread, then the
- *        doomed object will released directly.  however, if this parameter is
+ *        doomed object will be released directly. However, if this parameter is
  *        true, then an event will always be posted to the target thread for
  *        asynchronous release.
  */
-nsresult
-NS_ProxyRelease(nsIEventTarget* aTarget, nsISupports* aDoomed,
-                bool aAlwaysProxy = false);
+template<class T>
+inline NS_HIDDEN_(void)
+NS_ProxyRelease(nsIEventTarget* aTarget, already_AddRefed<T> aDoomed,
+                bool aAlwaysProxy = false)
+{
+  // Auto-managing release of the pointer.
+  RefPtr<T> doomed = aDoomed;
+  nsresult rv;
+
+  if (!doomed || !aTarget) {
+    return;
+  }
+
+  if (!aAlwaysProxy) {
+    bool onCurrentThread = false;
+    rv = aTarget->IsOnCurrentThread(&onCurrentThread);
+    if (NS_SUCCEEDED(rv) && onCurrentThread) {
+      return;
+    }
+  }
+
+  nsCOMPtr<nsIRunnable> ev = new nsProxyReleaseEvent<T>(doomed.forget());
+
+  rv = aTarget->Dispatch(ev, NS_DISPATCH_NORMAL);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("failed to post proxy release event, leaking!");
+    // It is better to leak the aDoomed object than risk crashing as
+    // a result of deleting it on the wrong thread.
+  }
+}
+
+/**
+ * Ensures that the delete of a smart pointer occurs on the main thread.
+ *
+ * @param aDoomed
+ *        the doomed object; the object to be released on the main thread.
+ * @param aAlwaysProxy
+ *        normally, if NS_ReleaseOnMainThread is called on the main thread,
+ *        then the doomed object will be released directly. However, if this
+ *        parameter is true, then an event will always be posted to the main
+ *        thread for asynchronous release.
+ */
+template<class T>
+inline NS_HIDDEN_(void)
+NS_ReleaseOnMainThread(already_AddRefed<T> aDoomed,
+                       bool aAlwaysProxy = false)
+{
+  // NS_ProxyRelease treats a null event target as "the current thread".  So a
+  // handle on the main thread is only necessary when we're not already on the
+  // main thread or the release must happen asynchronously.
+  nsCOMPtr<nsIThread> mainThread;
+  if (!NS_IsMainThread() || aAlwaysProxy) {
+    nsresult rv = NS_GetMainThread(getter_AddRefs(mainThread));
+
+    if (NS_FAILED(rv)) {
+      NS_WARNING("Could not get main thread! Leaking.");
+      return;
+    }
+  }
+
+  NS_ProxyRelease(mainThread, mozilla::Move(aDoomed), aAlwaysProxy);
+}
 
 /**
  * Class to safely handle main-thread-only pointers off the main thread.
@@ -88,7 +137,7 @@ NS_ProxyRelease(nsIEventTarget* aTarget, nsISupports* aDoomed,
  * to the holder anywhere they please. These references are meant to be opaque
  * when accessed off-main-thread (assertions enforce this).
  *
- * The semantics of nsRefPtr<nsMainThreadPtrHolder<T> > would be cumbersome, so
+ * The semantics of RefPtr<nsMainThreadPtrHolder<T> > would be cumbersome, so
  * we also introduce nsMainThreadPtrHandle<T>, which is conceptually identical
  * to the above (though it includes various convenience methods). The basic
  * pattern is as follows.
@@ -104,7 +153,7 @@ NS_ProxyRelease(nsIEventTarget* aTarget, nsISupports* aDoomed,
  * an nsMainThreadPtrHandle<T> rather than an nsCOMPtr<T>.
  */
 template<class T>
-class nsMainThreadPtrHolder MOZ_FINAL
+class nsMainThreadPtrHolder final
 {
 public:
   // We can only acquire a pointer on the main thread. We to fail fast for
@@ -129,13 +178,7 @@ private:
     if (NS_IsMainThread()) {
       NS_IF_RELEASE(mRawPtr);
     } else if (mRawPtr) {
-      nsCOMPtr<nsIThread> mainThread;
-      NS_GetMainThread(getter_AddRefs(mainThread));
-      if (!mainThread) {
-        NS_WARNING("Couldn't get main thread! Leaking pointer.");
-        return;
-      }
-      NS_ProxyRelease(mainThread, mRawPtr);
+      NS_ReleaseOnMainThread(dont_AddRef(mRawPtr));
     }
   }
 
@@ -177,10 +220,11 @@ private:
 template<class T>
 class nsMainThreadPtrHandle
 {
-  nsRefPtr<nsMainThreadPtrHolder<T>> mPtr;
+  RefPtr<nsMainThreadPtrHolder<T>> mPtr;
 
 public:
   nsMainThreadPtrHandle() : mPtr(nullptr) {}
+  MOZ_IMPLICIT nsMainThreadPtrHandle(decltype(nullptr)) : mPtr(nullptr) {}
   explicit nsMainThreadPtrHandle(nsMainThreadPtrHolder<T>* aHolder)
     : mPtr(aHolder)
   {
@@ -229,6 +273,12 @@ public:
     }
     return *mPtr == *aOther.mPtr;
   }
+  bool operator!=(const nsMainThreadPtrHandle<T>& aOther) const
+  {
+    return !operator==(aOther);
+  }
+  bool operator==(decltype(nullptr)) const { return mPtr == nullptr; }
+  bool operator!=(decltype(nullptr)) const { return mPtr != nullptr; }
   bool operator!() const {
     return !mPtr || !*mPtr;
   }

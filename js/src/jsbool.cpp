@@ -23,7 +23,6 @@
 #include "vm/BooleanObject-inl.h"
 
 using namespace js;
-using namespace js::types;
 
 const Class BooleanObject::class_ = {
     "Boolean",
@@ -38,7 +37,7 @@ IsBoolean(HandleValue v)
 
 #if JS_HAS_TOSOURCE
 MOZ_ALWAYS_INLINE bool
-bool_toSource_impl(JSContext *cx, CallArgs args)
+bool_toSource_impl(JSContext* cx, const CallArgs& args)
 {
     HandleValue thisv = args.thisv();
     MOZ_ASSERT(IsBoolean(thisv));
@@ -49,7 +48,7 @@ bool_toSource_impl(JSContext *cx, CallArgs args)
     if (!sb.append("(new Boolean(") || !BooleanToStringBuffer(b, sb) || !sb.append("))"))
         return false;
 
-    JSString *str = sb.finishString();
+    JSString* str = sb.finishString();
     if (!str)
         return false;
     args.rval().setString(str);
@@ -57,7 +56,7 @@ bool_toSource_impl(JSContext *cx, CallArgs args)
 }
 
 static bool
-bool_toSource(JSContext *cx, unsigned argc, Value *vp)
+bool_toSource(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return CallNonGenericMethod<IsBoolean, bool_toSource_impl>(cx, args);
@@ -65,25 +64,25 @@ bool_toSource(JSContext *cx, unsigned argc, Value *vp)
 #endif
 
 MOZ_ALWAYS_INLINE bool
-bool_toString_impl(JSContext *cx, CallArgs args)
+bool_toString_impl(JSContext* cx, const CallArgs& args)
 {
     HandleValue thisv = args.thisv();
     MOZ_ASSERT(IsBoolean(thisv));
 
     bool b = thisv.isBoolean() ? thisv.toBoolean() : thisv.toObject().as<BooleanObject>().unbox();
-    args.rval().setString(js_BooleanToString(cx, b));
+    args.rval().setString(BooleanToString(cx, b));
     return true;
 }
 
 static bool
-bool_toString(JSContext *cx, unsigned argc, Value *vp)
+bool_toString(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return CallNonGenericMethod<IsBoolean, bool_toString_impl>(cx, args);
 }
 
 MOZ_ALWAYS_INLINE bool
-bool_valueOf_impl(JSContext *cx, CallArgs args)
+bool_valueOf_impl(JSContext* cx, const CallArgs& args)
 {
     HandleValue thisv = args.thisv();
     MOZ_ASSERT(IsBoolean(thisv));
@@ -94,7 +93,7 @@ bool_valueOf_impl(JSContext *cx, CallArgs args)
 }
 
 static bool
-bool_valueOf(JSContext *cx, unsigned argc, Value *vp)
+bool_valueOf(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return CallNonGenericMethod<IsBoolean, bool_valueOf_impl>(cx, args);
@@ -110,14 +109,20 @@ static const JSFunctionSpec boolean_methods[] = {
 };
 
 static bool
-Boolean(JSContext *cx, unsigned argc, Value *vp)
+Boolean(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
     bool b = args.length() != 0 ? JS::ToBoolean(args[0]) : false;
 
     if (args.isConstructing()) {
-        JSObject *obj = BooleanObject::create(cx, b);
+        RootedObject newTarget (cx, &args.newTarget().toObject());
+        RootedObject proto(cx);
+
+        if (!GetPrototypeFromConstructor(cx, newTarget, &proto))
+            return false;
+
+        JSObject* obj = BooleanObject::create(cx, b, proto);
         if (!obj)
             return false;
         args.rval().setObject(*obj);
@@ -127,8 +132,8 @@ Boolean(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
-JSObject *
-js_InitBooleanClass(JSContext *cx, HandleObject obj)
+JSObject*
+js::InitBooleanClass(JSContext* cx, HandleObject obj)
 {
     MOZ_ASSERT(obj->isNative());
 
@@ -155,8 +160,8 @@ js_InitBooleanClass(JSContext *cx, HandleObject obj)
     return booleanProto;
 }
 
-JSString *
-js_BooleanToString(ExclusiveContext *cx, bool b)
+JSString*
+js::BooleanToString(ExclusiveContext* cx, bool b)
 {
     return b ? cx->names().true_ : cx->names().false_;
 }

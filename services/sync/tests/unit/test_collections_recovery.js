@@ -6,7 +6,7 @@ Cu.import("resource://services-sync/service.js");
 Cu.import("resource://services-sync/util.js");
 Cu.import("resource://testing-common/services/sync/utils.js");
 
-add_identity_test(this, function test_missing_crypto_collection() {
+add_identity_test(this, function* test_missing_crypto_collection() {
   let johnHelper = track_collections_helper();
   let johnU      = johnHelper.with_updated_collection;
   let johnColls  = johnHelper.collections;
@@ -33,7 +33,7 @@ add_identity_test(this, function test_missing_crypto_collection() {
   };
   let collections = ["clients", "bookmarks", "forms", "history",
                      "passwords", "prefs", "tabs"];
-  for each (let coll in collections) {
+  for (let coll of collections) {
     handlers["/1.1/johndoe/storage/" + coll] =
       johnU(coll, new ServerCollection({}, true).handler());
   }

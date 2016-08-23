@@ -27,8 +27,8 @@ public:
     return mSVGElement;
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx)
-    MOZ_OVERRIDE MOZ_FINAL;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+    override final;
 
   virtual float BaseVal() = 0;
   virtual void SetBaseVal(float aBaseVal) = 0;
@@ -41,7 +41,7 @@ protected:
   }
   virtual ~SVGAnimatedNumber() {};
 
-  nsRefPtr<nsSVGElement> mSVGElement;
+  RefPtr<nsSVGElement> mSVGElement;
 };
 
 } // namespace dom

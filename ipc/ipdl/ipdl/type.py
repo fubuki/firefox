@@ -97,6 +97,8 @@ class TypeVisitor:
     def visitFDType(self, s, *args):
         pass
 
+    def visitEndpointType(self, s, *args):
+        pass
 
 class Type:
     def __cmp__(self, o):
@@ -205,6 +207,7 @@ class IPDLType(Type):
     def isShmem(self): return False
     def isChmod(self): return False
     def isFD(self): return False
+    def isEndpoint(self): return False
 
     def isAsync(self): return self.sendSemantics == ASYNC
     def isSync(self): return self.sendSemantics == SYNC
@@ -216,6 +219,12 @@ class IPDLType(Type):
     def convertsTo(cls, lesser, greater):
         if (lesser.priorityRange[0] < greater.priorityRange[0] or
             lesser.priorityRange[1] > greater.priorityRange[1]):
+            return False
+
+        # Protocols that use intr semantics are not allowed to use
+        # message priorities.
+        if (greater.isInterrupt() and
+            lesser.priorityRange != (NORMAL_PRIORITY, NORMAL_PRIORITY)):
             return False
 
         if lesser.isAsync():
@@ -453,6 +462,16 @@ class FDType(IPDLType):
     def __init__(self, qname):
         self.qname = qname
     def isFD(self): return True
+
+    def name(self):
+        return self.qname.baseid
+    def fullname(self):
+        return str(self.qname)
+
+class EndpointType(IPDLType):
+    def __init__(self, qname):
+        self.qname = qname
+    def isEndpoint(self): return True
 
     def name(self):
         return self.qname.baseid
@@ -699,6 +718,15 @@ class GatherDecls(TcheckVisitor):
                 shortname=p.name,
                 fullname=fullname)
 
+            p.parentEndpointDecl = self.declare(
+                loc=p.loc,
+                type=EndpointType(QualifiedId(p.loc, 'Endpoint<' + fullname + 'Parent>', ['mozilla', 'ipc'])),
+                shortname='Endpoint<' + p.name + 'Parent>')
+            p.childEndpointDecl = self.declare(
+                loc=p.loc,
+                type=EndpointType(QualifiedId(p.loc, 'Endpoint<' + fullname + 'Child>', ['mozilla', 'ipc'])),
+                shortname='Endpoint<' + p.name + 'Child>')
+
             # XXX ugh, this sucks.  but we need this information to compute
             # what friend decls we need in generated C++
             p.decl.type._ast = p
@@ -772,6 +800,8 @@ class GatherDecls(TcheckVisitor):
         inc.tu.accept(self)
         if inc.tu.protocol:
             self.symtab.declare(inc.tu.protocol.decl)
+            self.symtab.declare(inc.tu.protocol.parentEndpointDecl)
+            self.symtab.declare(inc.tu.protocol.childEndpointDecl)
         else:
             # This is a header.  Import its "exported" globals into
             # our scope.
@@ -1095,7 +1125,7 @@ class GatherDecls(TcheckVisitor):
 
         msgtype = MessageType(md.priority, md.sendSemantics, md.direction,
                               ctor=isctor, dtor=isdtor, cdtype=cdtype,
-                              compress=(md.compress == 'compress'))
+                              compress=md.compress)
 
         # replace inparam Param nodes with proper Decls
         def paramToDecl(param):

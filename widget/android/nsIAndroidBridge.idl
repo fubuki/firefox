@@ -3,11 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsISupports.idl"
-#include "nsIDOMWindow.idl"
 
-[scriptable, uuid(0843f3c1-043e-4c64-9d8c-091370548c05)]
+interface mozIDOMWindowProxy;
+
+[scriptable, uuid(e8420a7b-659b-4325-968b-a114a6a067aa)]
 interface nsIBrowserTab : nsISupports {
-  readonly attribute nsIDOMWindow window;
+  readonly attribute mozIDOMWindowProxy window;
   readonly attribute float scale;
 };
 
@@ -24,26 +25,19 @@ interface nsIUITelemetryObserver : nsISupports {
                 in wstring extras);
 };
 
-[scriptable, uuid(78ec5811-78ee-4239-a554-3303f823dbbc)]
+[scriptable, uuid(0370450f-2e9c-4d16-b333-8ca6ce31a5ff)]
 interface nsIAndroidBrowserApp : nsISupports {
   readonly attribute nsIBrowserTab selectedTab;
   nsIBrowserTab getBrowserTab(in int32_t tabId);
-  void getPreferences(in int32_t requestId,
-                      [array, size_is(count)] in wstring prefNames,
-                      in unsigned long count);
-  void observePreferences(in int32_t requestId,
-                          [array, size_is(count)] in wstring prefNames,
-                          in unsigned long count);
-  void removePreferenceObservers(in int32_t requestId);
   nsIUITelemetryObserver getUITelemetryObserver();
 };
 
-[scriptable, uuid(59cfcb35-69b7-47b2-8155-32b193272666)]
+[scriptable, uuid(92ae801d-da9c-4a24-b2b6-344c4af7008b)]
 interface nsIAndroidViewport : nsISupports {
   readonly attribute float x;
   readonly attribute float y;
-  readonly attribute float width;
-  readonly attribute float height;
+  readonly attribute int32_t width;
+  readonly attribute int32_t height;
   readonly attribute float pageLeft;
   readonly attribute float pageTop;
   readonly attribute float pageRight;

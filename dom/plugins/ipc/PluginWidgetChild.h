@@ -2,15 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_plugins_PluginWidgetParent_h
-#define mozilla_plugins_PluginWidgetParent_h
+#ifndef mozilla_plugins_PluginWidgetChild_h
+#define mozilla_plugins_PluginWidgetChild_h
 
 #include "mozilla/plugins/PPluginWidgetChild.h"
 
 namespace mozilla {
 namespace widget {
 class PluginWidgetProxy;
-}
+} // namespace widget
 namespace plugins {
 
 class PluginWidgetChild : public PPluginWidgetChild
@@ -19,7 +19,15 @@ public:
   PluginWidgetChild();
   virtual ~PluginWidgetChild();
 
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
+  virtual void ActorDestroy(ActorDestroyReason aWhy) override;
+
+  void SetWidget(mozilla::widget::PluginWidgetProxy* aWidget) {
+    mWidget = aWidget;
+  }
+  void ProxyShutdown();
+
+private:
+  void KillWidget();
 
   mozilla::widget::PluginWidgetProxy* mWidget;
 };
@@ -27,5 +35,5 @@ public:
 } // namespace plugins
 } // namespace mozilla
 
-#endif // mozilla_plugins_PluginWidgetParent_h
+#endif // mozilla_plugins_PluginWidgetChild_h
 

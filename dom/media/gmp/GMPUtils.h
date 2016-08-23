@@ -7,6 +7,13 @@
 #define GMPUtils_h_
 
 #include "mozilla/UniquePtr.h"
+#include "nsTArray.h"
+#include "nsCOMPtr.h"
+#include "nsClassHashtable.h"
+
+class nsIFile;
+class nsCString;
+class nsISimpleEnumerator;
 
 namespace mozilla {
 
@@ -18,11 +25,60 @@ struct DestroyPolicy
   }
 };
 
-// Ideally, this would be a template alias, but GCC 4.6 doesn't support them.  See bug 1124021.
 template<typename T>
-struct GMPUnique {
-  typedef mozilla::UniquePtr<T, DestroyPolicy<T>> Ptr;
+using GMPUniquePtr = mozilla::UniquePtr<T, DestroyPolicy<T>>;
+
+bool GetEMEVoucherPath(nsIFile** aPath);
+
+bool EMEVoucherFileExists();
+
+void
+SplitAt(const char* aDelims,
+        const nsACString& aInput,
+        nsTArray<nsCString>& aOutTokens);
+
+nsCString
+ToBase64(const nsTArray<uint8_t>& aBytes);
+
+bool
+FileExists(nsIFile* aFile);
+
+// Enumerate directory entries for a specified path.
+class DirectoryEnumerator {
+public:
+
+  enum Mode {
+    DirsOnly, // Enumeration only includes directories.
+    FilesAndDirs // Enumeration includes directories and non-directory files.
+  };
+
+  DirectoryEnumerator(nsIFile* aPath, Mode aMode);
+
+  already_AddRefed<nsIFile> Next();
+
+private:
+  Mode mMode;
+  nsCOMPtr<nsISimpleEnumerator> mIter;
 };
+
+class GMPInfoFileParser {
+public:
+  bool Init(nsIFile* aFile);
+  bool Contains(const nsCString& aKey) const;
+  nsCString Get(const nsCString& aKey) const;
+private:
+  nsClassHashtable<nsCStringHashKey, nsCString> mValues;
+};
+
+bool
+ReadIntoArray(nsIFile* aFile,
+              nsTArray<uint8_t>& aOutDst,
+              size_t aMaxLength);
+
+bool
+ReadIntoString(nsIFile* aFile,
+               nsCString& aOutDst,
+               size_t aMaxLength);
 
 } // namespace mozilla
 

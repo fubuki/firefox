@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,9 +37,9 @@ public:
                                            const KeyboardEventInit& aParam,
                                            ErrorResult& aRv);
 
-  virtual JSObject* WrapObjectInternal(JSContext* aCx) MOZ_OVERRIDE
+  virtual JSObject* WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
   {
-    return KeyboardEventBinding::Wrap(aCx, this);
+    return KeyboardEventBinding::Wrap(aCx, this, aGivenProto);
   }
 
   bool AltKey();
@@ -55,20 +56,20 @@ public:
   bool IsComposing();
   uint32_t CharCode();
   uint32_t KeyCode();
-  virtual uint32_t Which() MOZ_OVERRIDE;
+  virtual uint32_t Which() override;
   uint32_t Location();
 
   void GetCode(nsAString& aCode);
+  void GetInitDict(KeyboardEventInit& aParam);
 
   void InitKeyEvent(const nsAString& aType, bool aCanBubble, bool aCancelable,
-                    nsIDOMWindow* aView, bool aCtrlKey, bool aAltKey,
+                    nsGlobalWindow* aView, bool aCtrlKey, bool aAltKey,
                     bool aShiftKey, bool aMetaKey,
-                    uint32_t aKeyCode, uint32_t aCharCode,
-                    ErrorResult& aRv)
+                    uint32_t aKeyCode, uint32_t aCharCode)
   {
-    aRv = InitKeyEvent(aType, aCanBubble, aCancelable, aView,
-                       aCtrlKey, aAltKey, aShiftKey,aMetaKey,
-                       aKeyCode, aCharCode);
+    auto* view = aView ? aView->AsInner() : nullptr;
+    InitKeyEvent(aType, aCanBubble, aCancelable, view, aCtrlKey, aAltKey,
+                 aShiftKey, aMetaKey, aKeyCode, aCharCode);
   }
 
 protected:
@@ -91,5 +92,10 @@ private:
 
 } // namespace dom
 } // namespace mozilla
+
+already_AddRefed<mozilla::dom::KeyboardEvent>
+NS_NewDOMKeyboardEvent(mozilla::dom::EventTarget* aOwner,
+                       nsPresContext* aPresContext,
+                       mozilla::WidgetKeyboardEvent* aEvent);
 
 #endif // mozilla_dom_KeyboardEvent_h_

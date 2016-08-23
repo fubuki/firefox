@@ -112,13 +112,13 @@ static eEventAction
 GetActionForEvent(nsIDOMEvent* aEvent)
 {
   WidgetKeyboardEvent* keyEvent =
-    aEvent->GetInternalNSEvent()->AsKeyboardEvent();
+    aEvent->WidgetEventPtr()->AsKeyboardEvent();
   if (!keyEvent) {
     return eEventAction_Suppress;
   }
 
   if (keyEvent->mFlags.mInSystemGroup) {
-    NS_ASSERTION(keyEvent->message == NS_KEY_DOWN,
+    NS_ASSERTION(keyEvent->mMessage == eKeyDown,
       "Assuming we're listening only keydown event in system group");
     return eEventAction_StopPropagation;
   }
@@ -126,8 +126,8 @@ GetActionForEvent(nsIDOMEvent* aEvent)
   if (keyEvent->IsAlt() || keyEvent->IsControl() || keyEvent->IsMeta()) {
     // Don't consume keydown event because following keypress event may be
     // handled as access key or shortcut key.
-    return (keyEvent->message == NS_KEY_DOWN) ? eEventAction_StopPropagation :
-                                                eEventAction_Suppress;
+    return (keyEvent->mMessage == eKeyDown) ? eEventAction_StopPropagation :
+                                              eEventAction_Suppress;
   }
 
   static const uint32_t kOKKeyCodes[] = {
@@ -162,7 +162,7 @@ nsPrintPreviewListener::HandleEvent(nsIDOMEvent* aEvent)
 {
   nsCOMPtr<nsIContent> content = do_QueryInterface(
     aEvent ? aEvent->InternalDOMEvent()->GetOriginalTarget() : nullptr);
-  if (content && !content->IsXUL()) {
+  if (content && !content->IsXULElement()) {
     eEventAction action = ::GetActionForEvent(aEvent);
     switch (action) {
       case eEventAction_Tab:
@@ -173,13 +173,13 @@ nsPrintPreviewListener::HandleEvent(nsIDOMEvent* aEvent)
         if (eventString.EqualsLiteral("keydown")) {
           // Handle tabbing explicitly here since we don't want focus ending up
           // inside the content document, bug 244128.
-          nsIDocument* doc = content->GetCurrentDoc();
+          nsIDocument* doc = content->GetUncomposedDoc();
           NS_ASSERTION(doc, "no document");
 
           nsIDocument* parentDoc = doc->GetParentDocument();
           NS_ASSERTION(parentDoc, "no parent document");
 
-          nsCOMPtr<nsIDOMWindow> win = do_QueryInterface(parentDoc->GetWindow());
+          nsCOMPtr<nsPIDOMWindowOuter> win = parentDoc->GetWindow();
 
           nsIFocusManager* fm = nsFocusManager::GetFocusManager();
           if (fm && win) {
@@ -195,7 +195,7 @@ nsPrintPreviewListener::HandleEvent(nsIDOMEvent* aEvent)
           }
         }
       }
-      // fall-through
+      MOZ_FALLTHROUGH;
       case eEventAction_Suppress:
         aEvent->StopPropagation();
         aEvent->PreventDefault();

@@ -12,6 +12,7 @@ include protocol PBrowser;
 include protocol PWyciwygChannel;
 include protocol PFTPChannel;
 include protocol PWebSocket;
+include protocol PWebSocketEventListener;
 include protocol PTCPSocket;
 include protocol PTCPServerSocket;
 include protocol PUDPSocket;
@@ -20,6 +21,7 @@ include protocol PDNSRequest;
 include protocol PChannelDiverter;
 include protocol PBlob; //FIXME: bug #792908
 include protocol PFileDescriptorSet;
+include protocol PDataChannel;
 
 include protocol PRtspController;
 include protocol PRtspChannel;
@@ -30,6 +32,7 @@ include PBrowserOrId;
 
 using class IPC::SerializedLoadContext from "SerializedLoadContext.h";
 using mozilla::dom::TabId from "mozilla/dom/ipc/IdType.h";
+using class IPC::Principal from "mozilla/dom/PermissionMessageUtils.h";
 
 namespace mozilla {
 namespace net {
@@ -43,50 +46,73 @@ prio(normal upto urgent) sync protocol PNecko
   manages PWyciwygChannel;
   manages PFTPChannel;
   manages PWebSocket;
+  manages PWebSocketEventListener;
   manages PTCPSocket;
   manages PTCPServerSocket;
   manages PUDPSocket;
   manages PDNSRequest;
   manages PRemoteOpenFile;
+  manages PDataChannel;
   manages PRtspController;
   manages PRtspChannel;
   manages PChannelDiverter;
 
 parent:
-  __delete__();
+  async __delete__();
 
   prio(urgent) async PCookieService();
-  PHttpChannel(PBrowserOrId browser,
-               SerializedLoadContext loadContext,
-               HttpChannelCreationArgs args);
-  PWyciwygChannel();
-  PFTPChannel(PBrowserOrId browser, SerializedLoadContext loadContext,
-              FTPChannelCreationArgs args);
+  async PHttpChannel(PBrowserOrId browser,
+                     SerializedLoadContext loadContext,
+                     HttpChannelCreationArgs args);
+  async PWyciwygChannel();
+  async PFTPChannel(PBrowserOrId browser, SerializedLoadContext loadContext,
+                    FTPChannelCreationArgs args);
 
-  PWebSocket(PBrowserOrId browser, SerializedLoadContext loadContext);
-  PTCPServerSocket(uint16_t localPort, uint16_t backlog, nsString binaryType);
-  PUDPSocket(nsCString filter);
+  async PWebSocket(PBrowserOrId browser, SerializedLoadContext loadContext,
+                   uint32_t aSerialID);
+  async PTCPServerSocket(uint16_t localPort, uint16_t backlog, bool useArrayBuffers);
+  async PUDPSocket(Principal principal, nsCString filter);
 
-  PDNSRequest(nsCString hostName, uint32_t flags);
+  async PDNSRequest(nsCString hostName, uint32_t flags, nsCString networkInterface);
 
-  PRemoteOpenFile(SerializedLoadContext loadContext,
-                  URIParams fileuri,
-                  OptionalURIParams appuri);
+  async PWebSocketEventListener(uint64_t aInnerWindowID);
 
-  HTMLDNSPrefetch(nsString hostname, uint16_t flags);
-  CancelHTMLDNSPrefetch(nsString hostname, uint16_t flags, nsresult reason);
-  PRtspController();
-  PRtspChannel(RtspChannelConnectArgs args);
-  PChannelDiverter(ChannelDiverterArgs channel);
+  /* Predictor Methods */
+  async PredPredict(OptionalURIParams targetURI, OptionalURIParams sourceURI,
+                    uint32_t reason, SerializedLoadContext loadContext,
+                    bool hasVerifier);
+  async PredLearn(URIParams targetURI, OptionalURIParams sourceURI,
+                  uint32_t reason, SerializedLoadContext loadContext);
+  async PredReset();
+
+  async PRemoteOpenFile(SerializedLoadContext loadContext,
+                        URIParams fileuri,
+                        OptionalURIParams appuri);
+
+  async SpeculativeConnect(URIParams uri, bool anonymous);
+  async HTMLDNSPrefetch(nsString hostname, uint16_t flags);
+  async CancelHTMLDNSPrefetch(nsString hostname, uint16_t flags, nsresult reason);
+
+  /**
+   * channelId is used to establish a connection between redirect channels in
+   * the parent and the child when we're redirecting to a data: URI.
+   */
+  async PDataChannel(uint32_t channelId);
+
+  async PRtspController();
+  async PRtspChannel(RtspChannelConnectArgs args);
+  async PChannelDiverter(ChannelDiverterArgs channel);
 
   /**
    * These are called from the child with the results of the auth prompt.
    * callbackId is the id that was passed in PBrowser::AsyncAuthPrompt,
    * corresponding to an nsIAuthPromptCallback
    */
-  OnAuthAvailable(uint64_t callbackId, nsString user,
-                  nsString password, nsString domain);
-  OnAuthCancelled(uint64_t callbackId, bool userCancel);
+  async OnAuthAvailable(uint64_t callbackId, nsString user,
+                        nsString password, nsString domain);
+  async OnAuthCancelled(uint64_t callbackId, bool userCancel);
+
+  async RemoveSchedulingContext(nsCString scid);
 
 child:
   /*
@@ -94,16 +120,23 @@ child:
    * NestedFrameId is the id corresponding to the PBrowser.  It is the same id
    * that was passed to the PBrowserOrId param in to the PHttpChannel constructor
    */
-  AsyncAuthPromptForNestedFrame(TabId nestedFrameId, nsCString uri,
-                                nsString realm, uint64_t callbackId);
+  async AsyncAuthPromptForNestedFrame(TabId nestedFrameId, nsCString uri,
+                                      nsString realm, uint64_t callbackId);
   // Notifies child that a given app is now offline (or online)
-  AppOfflineStatus(uint32_t appId, bool offline);
+  async AppOfflineStatus(uint32_t appId, bool offline);
+
+  /* Predictor Methods */
+  async PredOnPredictPrefetch(URIParams uri, uint32_t httpStatus);
+  async PredOnPredictPreconnect(URIParams uri);
+  async PredOnPredictDNS(URIParams uri);
+
+  async SpeculativeConnectRequest(nsCString notificationData);
 
 both:
   // Actually we need PTCPSocket() for parent. But ipdl disallows us having different
   // signatures on parent and child. So when constructing the parent side object, we just 
   // leave host/port unused.
-  PTCPSocket(nsString host, uint16_t port);
+  async PTCPSocket(nsString host, uint16_t port);
 };
 
 

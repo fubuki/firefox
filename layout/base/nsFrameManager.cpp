@@ -57,8 +57,7 @@ struct PlaceholderMapEntry : public PLDHashEntryHdr {
 };
 
 static bool
-PlaceholderMapMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
-                         const void *key)
+PlaceholderMapMatchEntry(const PLDHashEntryHdr *hdr, const void *key)
 {
   const PlaceholderMapEntry *entry =
     static_cast<const PlaceholderMapEntry*>(hdr);
@@ -69,20 +68,27 @@ PlaceholderMapMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
 }
 
 static const PLDHashTableOps PlaceholderMapOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
-  PL_DHashVoidPtrKeyStub,
+  PLDHashTable::HashVoidPtrKeyStub,
   PlaceholderMapMatchEntry,
-  PL_DHashMoveEntryStub,
-  PL_DHashClearEntryStub,
-  PL_DHashFinalizeStub,
+  PLDHashTable::MoveEntryStub,
+  PLDHashTable::ClearEntryStub,
   nullptr
 };
+
+nsFrameManagerBase::nsFrameManagerBase()
+  : mPresShell(nullptr)
+  , mRootFrame(nullptr)
+  , mPlaceholderMap(&PlaceholderMapOps, sizeof(PlaceholderMapEntry))
+  , mUndisplayedMap(nullptr)
+  , mDisplayContentsMap(nullptr)
+  , mIsDestroyingFrames(false)
+{
+}
 
 //----------------------------------------------------------------------
 
 // XXXldb This seems too complicated for what I think it's doing, and it
-// should also be using pldhash rather than plhash to use less memory.
+// should also be using PLDHashTable rather than plhash to use less memory.
 
 class nsFrameManagerBase::UndisplayedMap {
 public:
@@ -156,13 +162,10 @@ nsFrameManager::GetPlaceholderFrameFor(const nsIFrame* aFrame)
 {
   NS_PRECONDITION(aFrame, "null param unexpected");
 
-  if (mPlaceholderMap.ops) {
-    PlaceholderMapEntry *entry = static_cast<PlaceholderMapEntry*>
-                                            (PL_DHashTableLookup(const_cast<PLDHashTable*>(&mPlaceholderMap),
-                                aFrame));
-    if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
-      return entry->placeholderFrame;
-    }
+  auto entry = static_cast<PlaceholderMapEntry*>
+    (const_cast<PLDHashTable*>(&mPlaceholderMap)->Search(aFrame));
+  if (entry) {
+    return entry->placeholderFrame;
   }
 
   return nullptr;
@@ -174,12 +177,8 @@ nsFrameManager::RegisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame)
   NS_PRECONDITION(aPlaceholderFrame, "null param unexpected");
   NS_PRECONDITION(nsGkAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
                   "unexpected frame type");
-  if (!mPlaceholderMap.ops) {
-    PL_DHashTableInit(&mPlaceholderMap, &PlaceholderMapOps, nullptr,
-                      sizeof(PlaceholderMapEntry));
-  }
-  PlaceholderMapEntry *entry = static_cast<PlaceholderMapEntry*>(PL_DHashTableAdd(&mPlaceholderMap,
-                              aPlaceholderFrame->GetOutOfFlowFrame()));
+  auto entry = static_cast<PlaceholderMapEntry*>
+    (mPlaceholderMap.Add(aPlaceholderFrame->GetOutOfFlowFrame(), fallible));
   if (!entry)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -196,29 +195,17 @@ nsFrameManager::UnregisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame
   NS_PRECONDITION(nsGkAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
                   "unexpected frame type");
 
-  if (mPlaceholderMap.ops) {
-    PL_DHashTableRemove(&mPlaceholderMap,
-                        aPlaceholderFrame->GetOutOfFlowFrame());
-  }
-}
-
-static PLDHashOperator
-UnregisterPlaceholders(PLDHashTable* table, PLDHashEntryHdr* hdr,
-                       uint32_t number, void* arg)
-{
-  PlaceholderMapEntry* entry = static_cast<PlaceholderMapEntry*>(hdr);
-  entry->placeholderFrame->SetOutOfFlowFrame(nullptr);
-  return PL_DHASH_NEXT;
+  mPlaceholderMap.Remove(aPlaceholderFrame->GetOutOfFlowFrame());
 }
 
 void
 nsFrameManager::ClearPlaceholderFrameMap()
 {
-  if (mPlaceholderMap.ops) {
-    PL_DHashTableEnumerate(&mPlaceholderMap, UnregisterPlaceholders, nullptr);
-    PL_DHashTableFinish(&mPlaceholderMap);
-    mPlaceholderMap.ops = nullptr;
+  for (auto iter = mPlaceholderMap.Iter(); !iter.Done(); iter.Next()) {
+    auto entry = static_cast<PlaceholderMapEntry*>(iter.Get());
+    entry->placeholderFrame->SetOutOfFlowFrame(nullptr);
   }
+  mPlaceholderMap.Clear();
 }
 
 //----------------------------------------------------------------------
@@ -564,8 +551,8 @@ nsFrameManager::CaptureFrameStateFor(nsIFrame* aFrame,
   // Exit early if we get empty key
   nsAutoCString stateKey;
   nsIContent* content = aFrame->GetContent();
-  nsIDocument* doc = content ? content->GetCurrentDoc() : nullptr;
-  rv = nsContentUtils::GenerateStateKey(content, doc, stateKey);
+  nsIDocument* doc = content ? content->GetUncomposedDoc() : nullptr;
+  rv = statefulFrame->GenerateStateKey(content, doc, stateKey);
   if(NS_FAILED(rv) || stateKey.IsEmpty()) {
     return;
   }
@@ -627,8 +614,8 @@ nsFrameManager::RestoreFrameStateFor(nsIFrame* aFrame,
   }
 
   nsAutoCString stateKey;
-  nsIDocument* doc = content->GetCurrentDoc();
-  nsresult rv = nsContentUtils::GenerateStateKey(content, doc, stateKey);
+  nsIDocument* doc = content->GetUncomposedDoc();
+  nsresult rv = statefulFrame->GenerateStateKey(content, doc, stateKey);
   if (NS_FAILED(rv) || stateKey.IsEmpty()) {
     return;
   }

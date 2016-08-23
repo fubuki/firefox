@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -112,7 +113,7 @@ public:
   {
     // We only need the document here to cause frame construction, so
     // we need the current doc, not the owner doc.
-    nsIDocument* doc = mBoundElement->GetCurrentDoc();
+    nsIDocument* doc = mBoundElement->GetUncomposedDoc();
     if (!doc)
       return;
 
@@ -167,8 +168,8 @@ public:
 // nsXBLStreamListener, a helper class used for
 // asynchronous parsing of URLs
 /* Header file */
-class nsXBLStreamListener MOZ_FINAL : public nsIStreamListener,
-                                      public nsIDOMEventListener
+class nsXBLStreamListener final : public nsIStreamListener,
+                                  public nsIDOMEventListener
 {
 public:
   NS_DECL_ISUPPORTS
@@ -187,7 +188,7 @@ private:
   ~nsXBLStreamListener();
 
   nsCOMPtr<nsIStreamListener> mInner;
-  nsAutoTArray<nsXBLBindingRequest*, 8> mBindingRequests;
+  AutoTArray<nsXBLBindingRequest*, 8> mBindingRequests;
 
   nsCOMPtr<nsIWeakReference> mBoundDocument;
   nsCOMPtr<nsIXMLContentSink> mSink; // Only set until OnStartRequest
@@ -317,7 +318,7 @@ nsXBLStreamListener::HandleEvent(nsIDOMEvent* aEvent)
     // ready.
     if (count > 0) {
       nsXBLBindingRequest* req = mBindingRequests.ElementAt(0);
-      nsIDocument* document = req->mBoundElement->GetCurrentDoc();
+      nsIDocument* document = req->mBoundElement->GetUncomposedDoc();
       if (document)
         document->FlushPendingNotifications(Flush_ContentAndNotify);
     }
@@ -335,7 +336,7 @@ nsXBLStreamListener::HandleEvent(nsIDOMEvent* aEvent)
 
     // Put our doc info in the doc table.
     nsBindingManager *xblDocBindingManager = bindingDocument->BindingManager();
-    nsRefPtr<nsXBLDocumentInfo> info =
+    RefPtr<nsXBLDocumentInfo> info =
       xblDocBindingManager->GetXBLDocumentInfo(documentURI);
     xblDocBindingManager->RemoveXBLDocumentInfo(info); // Break the self-imposed cycle.
     if (!info) {
@@ -376,9 +377,6 @@ nsXBLStreamListener::HandleEvent(nsIDOMEvent* aEvent)
 
 // Implementation /////////////////////////////////////////////////////////////////
 
-// Static member variable initialization
-bool nsXBLService::gAllowDataURIs = false;
-
 // Implement our nsISupports methods
 NS_IMPL_ISUPPORTS(nsXBLService, nsISupportsWeakReference)
 
@@ -392,7 +390,6 @@ nsXBLService::Init()
 // Constructors/Destructors
 nsXBLService::nsXBLService(void)
 {
-  Preferences::AddBoolVarCache(&gAllowDataURIs, "layout.debug.enable_data_xbl");
 }
 
 nsXBLService::~nsXBLService(void)
@@ -452,7 +449,7 @@ nsXBLService::LoadBindings(nsIContent* aContent, nsIURI* aURL,
   }
 
   bool ready;
-  nsRefPtr<nsXBLBinding> newBinding;
+  RefPtr<nsXBLBinding> newBinding;
   if (NS_FAILED(rv = GetBinding(aContent, aURL, false, aOriginPrincipal,
                                 &ready, getter_AddRefs(newBinding)))) {
     return rv;
@@ -539,7 +536,7 @@ nsXBLService::AttachGlobalKeyHandler(EventTarget* aTarget)
   nsCOMPtr<nsIContent> contentNode(do_QueryInterface(aTarget));
   if (contentNode) {
     // Only attach if we're really in a document
-    nsCOMPtr<nsIDocument> doc = contentNode->GetCurrentDoc();
+    nsCOMPtr<nsIDocument> doc = contentNode->GetUncomposedDoc();
     if (doc)
       piTarget = doc; // We're a XUL keyset. Attach to our document.
   }
@@ -556,25 +553,10 @@ nsXBLService::AttachGlobalKeyHandler(EventTarget* aTarget)
   nsCOMPtr<nsIDOMElement> elt(do_QueryInterface(contentNode));
 
   // Create the key handler
-  nsRefPtr<nsXBLWindowKeyHandler> handler =
+  RefPtr<nsXBLWindowKeyHandler> handler =
     NS_NewXBLWindowKeyHandler(elt, piTarget);
 
-  // listen to these events
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                  TrustedEventsAtSystemGroupBubble());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                  TrustedEventsAtSystemGroupBubble());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                  TrustedEventsAtSystemGroupBubble());
-
-  // The capturing listener is only used for XUL keysets to properly handle
-  // shortcut keys in a multi-process environment.
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                  TrustedEventsAtSystemGroupCapture());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                  TrustedEventsAtSystemGroupCapture());
-  manager->AddEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                  TrustedEventsAtSystemGroupCapture());
+  handler->InstallKeyboardEventListenersTo(manager);
 
   if (contentNode)
     return contentNode->SetProperty(nsGkAtoms::listener,
@@ -600,7 +582,7 @@ nsXBLService::DetachGlobalKeyHandler(EventTarget* aTarget)
     return NS_ERROR_FAILURE;
 
   // Only attach if we're really in a document
-  nsCOMPtr<nsIDocument> doc = contentNode->GetCurrentDoc();
+  nsCOMPtr<nsIDocument> doc = contentNode->GetUncomposedDoc();
   if (doc)
     piTarget = do_QueryInterface(doc);
 
@@ -614,19 +596,8 @@ nsXBLService::DetachGlobalKeyHandler(EventTarget* aTarget)
   if (!handler)
     return NS_ERROR_FAILURE;
 
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                     TrustedEventsAtSystemGroupBubble());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                     TrustedEventsAtSystemGroupBubble());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                     TrustedEventsAtSystemGroupBubble());
-
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keydown"),
-                                     TrustedEventsAtSystemGroupCapture());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keyup"),
-                                     TrustedEventsAtSystemGroupCapture());
-  manager->RemoveEventListenerByType(handler, NS_LITERAL_STRING("keypress"),
-                                     TrustedEventsAtSystemGroupCapture());
+  static_cast<nsXBLWindowKeyHandler*>(handler)->
+    RemoveKeyboardEventListenersFrom(manager);
 
   contentNode->DeleteProperty(nsGkAtoms::listener);
 
@@ -650,7 +621,7 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
                          bool* aIsReady, nsXBLBinding** aResult)
 {
   // More than 6 binding URIs are rare, see bug 55070 comment 18.
-  nsAutoTArray<nsIURI*, 6> uris;
+  AutoTArray<nsCOMPtr<nsIURI>, 6> uris;
   return GetBinding(aBoundElement, aURI, aPeekOnly, aOriginPrincipal, aIsReady,
                     aResult, uris);
 }
@@ -666,7 +637,8 @@ MayBindToContent(nsXBLPrototypeBinding* aProtoBinding, nsIContent* aBoundElement
 
   // We let XUL content and content in XUL documents through, since XUL is
   // restricted anyway and we want to minimize remote XUL breakage.
-  if (aBoundElement->IsXUL() || aBoundElement->OwnerDoc()->IsXUL()) {
+  if (aBoundElement->IsXULElement() ||
+      aBoundElement->OwnerDoc()->IsXULElement()) {
     return true;
   }
 
@@ -706,7 +678,7 @@ nsresult
 nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
                          bool aPeekOnly, nsIPrincipal* aOriginPrincipal,
                          bool* aIsReady, nsXBLBinding** aResult,
-                         nsTArray<nsIURI*>& aDontExtendURIs)
+                         nsTArray<nsCOMPtr<nsIURI>>& aDontExtendURIs)
 {
   NS_ASSERTION(aPeekOnly || aResult,
                "Must have non-null out param if not just peeking to see "
@@ -723,7 +695,7 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
 
   nsCOMPtr<nsIDocument> boundDocument = aBoundElement->OwnerDoc();
 
-  nsRefPtr<nsXBLDocumentInfo> docInfo;
+  RefPtr<nsXBLDocumentInfo> docInfo;
   nsresult rv = LoadBindingDocumentInfo(aBoundElement, boundDocument, aURI,
                                         aOriginPrincipal,
                                         false, getter_AddRefs(docInfo));
@@ -732,7 +704,8 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
   if (!docInfo)
     return NS_ERROR_FAILURE;
 
-  nsXBLPrototypeBinding* protoBinding = docInfo->GetPrototypeBinding(ref);
+  WeakPtr<nsXBLPrototypeBinding> protoBinding =
+    docInfo->GetPrototypeBinding(ref);
 
   if (!protoBinding) {
 #ifdef DEBUG
@@ -764,12 +737,10 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
    return NS_ERROR_FAILURE;
   }
 
-  NS_ENSURE_TRUE(aDontExtendURIs.AppendElement(protoBinding->BindingURI()),
-                 NS_ERROR_OUT_OF_MEMORY);
+  aDontExtendURIs.AppendElement(protoBinding->BindingURI());
   nsCOMPtr<nsIURI> altBindingURI = protoBinding->AlternateBindingURI();
   if (altBindingURI) {
-    NS_ENSURE_TRUE(aDontExtendURIs.AppendElement(altBindingURI),
-                   NS_ERROR_OUT_OF_MEMORY);
+    aDontExtendURIs.AppendElement(altBindingURI);
   }
 
   // Our prototype binding must have all its resources loaded.
@@ -784,8 +755,8 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
   rv = protoBinding->ResolveBaseBinding();
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsIURI* baseBindingURI;
-  nsXBLPrototypeBinding* baseProto = protoBinding->GetBasePrototype();
+  nsCOMPtr<nsIURI> baseBindingURI;
+  WeakPtr<nsXBLPrototypeBinding> baseProto = protoBinding->GetBasePrototype();
   if (baseProto) {
     baseBindingURI = baseProto->BindingURI();
   }
@@ -816,9 +787,9 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
     }
   }
 
-  nsRefPtr<nsXBLBinding> baseBinding;
+  RefPtr<nsXBLBinding> baseBinding;
   if (baseBindingURI) {
-    nsIContent* child = protoBinding->GetBindingElement();
+    nsCOMPtr<nsIContent> child = protoBinding->GetBindingElement();
     rv = GetBinding(aBoundElement, baseBindingURI, aPeekOnly,
                     child->NodePrincipal(), aIsReady,
                     getter_AddRefs(baseBinding), aDontExtendURIs);
@@ -830,8 +801,8 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
 
   if (!aPeekOnly) {
     // Make a new binding
+    NS_ENSURE_STATE(protoBinding);
     nsXBLBinding *newBinding = new nsXBLBinding(protoBinding);
-    NS_ENSURE_TRUE(newBinding, NS_ERROR_OUT_OF_MEMORY);
 
     if (baseBinding) {
       if (!baseProto) {
@@ -844,15 +815,6 @@ nsXBLService::GetBinding(nsIContent* aBoundElement, nsIURI* aURI,
   }
 
   return NS_OK;
-}
-
-static bool SchemeIs(nsIURI* aURI, const char* aScheme)
-{
-  nsCOMPtr<nsIURI> baseURI = NS_GetInnermostURI(aURI);
-  NS_ENSURE_TRUE(baseURI, false);
-
-  bool isScheme = false;
-  return NS_SUCCEEDED(baseURI->SchemeIs(aScheme, &isScheme)) && isScheme;
 }
 
 static bool
@@ -882,45 +844,18 @@ nsXBLService::LoadBindingDocumentInfo(nsIContent* aBoundElement,
   NS_PRECONDITION(!aOriginPrincipal || aBoundDocument,
                   "If we're doing a security check, we better have a document!");
 
-  nsresult rv;
-  if (aOriginPrincipal) {
-    // Security check - Enforce same-origin policy, except to chrome.
-    // We have to be careful to not pass aContent as the context here.
-    // Otherwise, if there is a JS-implemented content policy, we will attempt
-    // to wrap the content node, which will try to load XBL bindings for it, if
-    // any. Since we're not done loading this binding yet, that will reenter
-    // this method and we'll end up creating a binding and then immediately
-    // clobbering it in our table.  That makes things very confused, leading to
-    // misbehavior and crashes.
-    rv = nsContentUtils::
-      CheckSecurityBeforeLoad(aBindingURI, aOriginPrincipal,
-                              nsIScriptSecurityManager::ALLOW_CHROME,
-                              gAllowDataURIs,
-                              nsIContentPolicy::TYPE_XBL,
-                              aBoundDocument);
-    NS_ENSURE_SUCCESS(rv, NS_ERROR_XBL_BLOCKED);
-
-    if (!IsSystemOrChromeURLPrincipal(aOriginPrincipal)) {
-      // Also make sure that we're same-origin with the bound document
-      // except if the stylesheet has the system principal.
-      if (!(gAllowDataURIs && SchemeIs(aBindingURI, "data")) &&
-          !SchemeIs(aBindingURI, "chrome")) {
-        rv = aBoundDocument->NodePrincipal()->CheckMayLoad(aBindingURI,
-                                                           true, false);
-        NS_ENSURE_SUCCESS(rv, NS_ERROR_XBL_BLOCKED);
-      }
-
-      // Finally check if this document is allowed to use XBL at all.
-      NS_ENSURE_TRUE(aBoundDocument->AllowXULXBL(),
-                     NS_ERROR_XBL_BLOCKED);
-    }
+  *aResult = nullptr;
+  // Allow XBL in unprivileged documents if it's specified in a privileged or
+  // chrome: stylesheet. This allows themes to specify XBL bindings.
+  if (aOriginPrincipal && !IsSystemOrChromeURLPrincipal(aOriginPrincipal)) {
+    NS_ENSURE_TRUE(!aBoundDocument || aBoundDocument->AllowXULXBL(),
+                   NS_ERROR_XBL_BLOCKED);
   }
 
-  *aResult = nullptr;
-  nsRefPtr<nsXBLDocumentInfo> info;
+  RefPtr<nsXBLDocumentInfo> info;
 
   nsCOMPtr<nsIURI> documentURI;
-  rv = aBindingURI->CloneIgnoringRef(getter_AddRefs(documentURI));
+  nsresult rv = aBindingURI->CloneIgnoringRef(getter_AddRefs(documentURI));
   NS_ENSURE_SUCCESS(rv, rv);
 
 #ifdef MOZ_XUL
@@ -958,7 +893,7 @@ nsXBLService::LoadBindingDocumentInfo(nsIContent* aBoundElement,
                   ni->Equals(nsGkAtoms::thumb, kNameSpaceID_XUL) ||
                   ((ni->Equals(nsGkAtoms::input) ||
                     ni->Equals(nsGkAtoms::select)) &&
-                   aBoundElement->IsHTML()))) && !aForceSyncLoad) {
+                   aBoundElement->IsHTMLElement()))) && !aForceSyncLoad) {
       // The third line of defense is to investigate whether or not the
       // document is currently being loaded asynchronously.  If so, there's no
       // document yet, but we need to glom on our request so that it will be
@@ -1004,9 +939,10 @@ nsXBLService::LoadBindingDocumentInfo(nsIContent* aBoundElement,
         aForceSyncLoad = true;
 
       nsCOMPtr<nsIDocument> document;
-      FetchBindingDocument(aBoundElement, aBoundDocument, documentURI,
-                           aBindingURI, aOriginPrincipal, aForceSyncLoad,
-                           getter_AddRefs(document));
+      rv = FetchBindingDocument(aBoundElement, aBoundDocument, documentURI,
+                                aBindingURI, aOriginPrincipal, aForceSyncLoad,
+                                getter_AddRefs(document));
+      NS_ENSURE_SUCCESS(rv, rv);
 
       if (document) {
         nsBindingManager *xblDocBindingManager = document->BindingManager();
@@ -1080,36 +1016,31 @@ nsXBLService::FetchBindingDocument(nsIContent* aBoundElement, nsIDocument* aBoun
 
   if (aOriginPrincipal) {
     // if there is an originPrincipal we should also have aBoundDocument
-    NS_ASSERTION(aBoundDocument, "can not create a channel without aBoundDocument");
+    MOZ_ASSERT(aBoundDocument, "can not create a channel without aBoundDocument");
+
     rv = NS_NewChannelWithTriggeringPrincipal(getter_AddRefs(channel),
                                               aDocumentURI,
                                               aBoundDocument,
                                               aOriginPrincipal,
-                                              nsILoadInfo::SEC_NORMAL,
-                                              nsIContentPolicy::TYPE_OTHER,
+                                              nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS |
+                                              nsILoadInfo::SEC_ALLOW_CHROME,
+                                              nsIContentPolicy::TYPE_XBL,
                                               loadGroup);
   }
   else {
     rv = NS_NewChannel(getter_AddRefs(channel),
                        aDocumentURI,
                        nsContentUtils::GetSystemPrincipal(),
-                       nsILoadInfo::SEC_NORMAL,
-                       nsIContentPolicy::TYPE_OTHER,
+                       nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS,
+                       nsIContentPolicy::TYPE_XBL,
                        loadGroup);
   }
-
   NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<nsIInterfaceRequestor> sameOriginChecker = nsContentUtils::GetSameOriginChecker();
-  NS_ENSURE_TRUE(sameOriginChecker, NS_ERROR_OUT_OF_MEMORY);
-
-  channel->SetNotificationCallbacks(sameOriginChecker);
 
   if (!aForceSyncLoad) {
     // We can be asynchronous
     nsXBLStreamListener* xblListener =
       new nsXBLStreamListener(aBoundDocument, xblSink, doc);
-    NS_ENSURE_TRUE(xblListener,NS_ERROR_OUT_OF_MEMORY);
 
     // Add ourselves to the list of loading docs.
     nsBindingManager *bindingManager;
@@ -1127,7 +1058,7 @@ nsXBLService::FetchBindingDocument(nsIContent* aBoundElement, nsIDocument* aBoun
     xblListener->AddRequest(req);
 
     // Now kick off the async read.
-    rv = channel->AsyncOpen(xblListener, nullptr);
+    rv = channel->AsyncOpen2(xblListener);
     if (NS_FAILED(rv)) {
       // Well, we won't be getting a load.  Make sure to clean up our stuff!
       if (bindingManager) {
@@ -1149,7 +1080,7 @@ nsXBLService::FetchBindingDocument(nsIContent* aBoundElement, nsIDocument* aBoun
 
   // Now do a blocking synchronous parse of the file.
   nsCOMPtr<nsIInputStream> in;
-  rv = channel->Open(getter_AddRefs(in));
+  rv = channel->Open2(getter_AddRefs(in));
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = nsSyncLoadService::PushSyncStreamToListener(in, listener, channel);

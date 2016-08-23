@@ -29,7 +29,7 @@ function AutoCompleteInput(aSearches) {
 }
 
 AutoCompleteInput.prototype = {
-  constructor: AutoCompleteInput, 
+  constructor: AutoCompleteInput,
 
   searches: null,
 
@@ -37,7 +37,7 @@ AutoCompleteInput.prototype = {
   timeout: 10,
   searchParam: "",
   textValue: "",
-  disableAutoComplete: false,  
+  disableAutoComplete: false,
   completeDefaultIndex: false,
 
   get searchCount() {
@@ -80,7 +80,7 @@ AutoCompleteInput.prototype = {
 function run_test()
 {
   do_test_pending();
-  promiseAddVisits(url).then(continue_test);
+  PlacesTestUtils.addVisits(url).then(continue_test);
 }
 
 function continue_test()

@@ -23,7 +23,6 @@ class SharedSurface_ANGLEShareHandle
 {
 public:
     static UniquePtr<SharedSurface_ANGLEShareHandle> Create(GLContext* gl,
-                                                            EGLContext context,
                                                             EGLConfig config,
                                                             const gfx::IntSize& size,
                                                             bool hasAlpha);
@@ -36,9 +35,10 @@ public:
 
 protected:
     GLLibraryEGL* const mEGL;
-    const EGLContext mContext;
     const EGLSurface mPBuffer;
+public:
     const HANDLE mShareHandle;
+protected:
     RefPtr<IDXGIKeyedMutex> mKeyedMutex;
     RefPtr<IDXGIKeyedMutex> mConsumerKeyedMutex;
     RefPtr<ID3D11Texture2D> mConsumerTexture;
@@ -49,7 +49,6 @@ protected:
                                    GLLibraryEGL* egl,
                                    const gfx::IntSize& size,
                                    bool hasAlpha,
-                                   EGLContext context,
                                    EGLSurface pbuffer,
                                    HANDLE shareHandle,
                                    const RefPtr<IDXGIKeyedMutex>& keyedMutex,
@@ -60,29 +59,21 @@ protected:
 public:
     virtual ~SharedSurface_ANGLEShareHandle();
 
-    virtual void LockProdImpl() MOZ_OVERRIDE;
-    virtual void UnlockProdImpl() MOZ_OVERRIDE;
+    virtual void LockProdImpl() override;
+    virtual void UnlockProdImpl() override;
 
-    virtual void Fence() MOZ_OVERRIDE;
-    virtual void ProducerAcquireImpl() MOZ_OVERRIDE;
-    virtual void ProducerReleaseImpl() MOZ_OVERRIDE;
-    virtual void ConsumerAcquireImpl() MOZ_OVERRIDE;
-    virtual void ConsumerReleaseImpl() MOZ_OVERRIDE;
-    virtual bool WaitSync() MOZ_OVERRIDE;
-    virtual bool PollSync() MOZ_OVERRIDE;
-
-    virtual void Fence_ContentThread_Impl() MOZ_OVERRIDE;
-    virtual bool WaitSync_ContentThread_Impl() MOZ_OVERRIDE;
-    virtual bool PollSync_ContentThread_Impl() MOZ_OVERRIDE;
-
-    // Implementation-specific functions below:
-    HANDLE GetShareHandle() {
-        return mShareHandle;
-    }
+    virtual void ProducerAcquireImpl() override;
+    virtual void ProducerReleaseImpl() override;
+    virtual void ProducerReadAcquireImpl() override;
+    virtual void ProducerReadReleaseImpl() override;
 
     const RefPtr<ID3D11Texture2D>& GetConsumerTexture() const {
         return mConsumerTexture;
     }
+
+    virtual bool ToSurfaceDescriptor(layers::SurfaceDescriptor* const out_descriptor) override;
+
+    virtual bool ReadbackBySharedHandle(gfx::DataSourceSurface* out_surface) override;
 };
 
 
@@ -93,24 +84,23 @@ class SurfaceFactory_ANGLEShareHandle
 protected:
     GLContext* const mProdGL;
     GLLibraryEGL* const mEGL;
-    EGLContext mContext;
-    EGLConfig mConfig;
+    const EGLConfig mConfig;
 
 public:
     static UniquePtr<SurfaceFactory_ANGLEShareHandle> Create(GLContext* gl,
-                                                             const SurfaceCaps& caps);
+                                                             const SurfaceCaps& caps,
+                                                             const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                                             const layers::TextureFlags& flags);
 
 protected:
-    SurfaceFactory_ANGLEShareHandle(GLContext* gl,
-                                    GLLibraryEGL* egl,
-                                    const SurfaceCaps& caps,
-                                    bool* const out_success);
+    SurfaceFactory_ANGLEShareHandle(GLContext* gl, const SurfaceCaps& caps,
+                                    const RefPtr<layers::ClientIPCAllocator>& allocator,
+                                    const layers::TextureFlags& flags, GLLibraryEGL* egl,
+                                    EGLConfig config);
 
-    virtual UniquePtr<SharedSurface> CreateShared(const gfx::IntSize& size) MOZ_OVERRIDE {
+    virtual UniquePtr<SharedSurface> CreateShared(const gfx::IntSize& size) override {
         bool hasAlpha = mReadCaps.alpha;
-        return SharedSurface_ANGLEShareHandle::Create(mProdGL,
-                                                      mContext, mConfig,
-                                                      size, hasAlpha);
+        return SharedSurface_ANGLEShareHandle::Create(mProdGL, mConfig, size, hasAlpha);
     }
 };
 

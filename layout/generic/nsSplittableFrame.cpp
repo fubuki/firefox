@@ -14,8 +14,6 @@
 
 using namespace mozilla;
 
-NS_IMPL_FRAMEARENA_HELPERS(nsSplittableFrame)
-
 void
 nsSplittableFrame::Init(nsIContent*       aContent,
                         nsContainerFrame* aParent,
@@ -277,6 +275,20 @@ nsSplittableFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState) co
   }
 
  return skip;
+}
+
+LogicalSides
+nsSplittableFrame::PreReflowBlockLevelLogicalSkipSides() const
+{
+  if (MOZ_UNLIKELY(IS_TRUE_OVERFLOW_CONTAINER(this))) {
+    return LogicalSides(mozilla::eLogicalSideBitsBBoth);
+  }
+  if (MOZ_LIKELY(StyleBorder()->mBoxDecorationBreak !=
+                   NS_STYLE_BOX_DECORATION_BREAK_CLONE) &&
+      GetPrevInFlow()) {
+    return LogicalSides(mozilla::eLogicalSideBitsBStart);
+  }
+  return LogicalSides();
 }
 
 #ifdef DEBUG

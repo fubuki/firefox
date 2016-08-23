@@ -20,7 +20,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
 
 const CHROME_BASE = "chrome://mochitests/content/browser/browser/base/content/test/general/";
 // Preference helpers.
-let changedPrefs = new Set();
+var changedPrefs = new Set();
 
 function setPref(name, value) {
   changedPrefs.add(name);
@@ -34,42 +34,44 @@ registerCleanupFunction(function() {
   }
 });
 
-let gTests = [
+var gTests = [
 {
   desc: "Test the remote commands",
   teardown: function* () {
     gBrowser.removeCurrentTab();
-    yield fxAccounts.signOut();
+    yield signOut();
   },
   run: function* ()
   {
     setPref("identity.fxaccounts.remote.signup.uri",
             "https://example.com/browser/browser/base/content/test/general/accounts_testRemoteCommands.html");
-    yield promiseNewTabLoadEvent("about:accounts");
+    let tab = yield promiseNewTabLoadEvent("about:accounts");
+    let mm = tab.linkedBrowser.messageManager;
 
     let deferred = Promise.defer();
 
+    // We'll get a message when openPrefs() is called, which this test should
+    // arrange.
+    let promisePrefsOpened = promiseOneMessage(tab, "test:openPrefsCalled");
     let results = 0;
     try {
-      let win = gBrowser.contentWindow;
-      win.addEventListener("message", function testLoad(e) {
-        if (e.data.type == "testResult") {
-          ok(e.data.pass, e.data.info);
+      mm.addMessageListener("test:response", function responseHandler(msg) {
+        let data = msg.data.data;
+        if (data.type == "testResult") {
+          ok(data.pass, data.info);
           results++;
-        }
-        else if (e.data.type == "testsComplete") {
-          is(results, e.data.count, "Checking number of results received matches the number of tests that should have run");
-          win.removeEventListener("message", testLoad, false, true);
+        } else if (data.type == "testsComplete") {
+          is(results, data.count, "Checking number of results received matches the number of tests that should have run");
+          mm.removeMessageListener("test:response", responseHandler);
           deferred.resolve();
         }
-
-      }, false, true);
-
+      });
     } catch(e) {
       ok(false, "Failed to get all commands");
       deferred.reject();
     }
     yield deferred.promise;
+    yield promisePrefsOpened;
   }
 },
 {
@@ -87,7 +89,8 @@ let gTests = [
       stage: false, // parent of 'manage' and 'intro'
       manage: false,
       intro: false, // this is  "get started"
-      remote: true
+      remote: true,
+      networkError: false
     });
   }
 },
@@ -114,7 +117,48 @@ let gTests = [
       stage: true, // parent of 'manage' and 'intro'
       manage: true,
       intro: false, // this is  "get started"
-      remote: false
+      remote: false,
+      networkError: false
+    });
+  }
+},
+{
+  desc: "Test action=signin - captive portal",
+  teardown: () => gBrowser.removeCurrentTab(),
+  run: function* ()
+  {
+    const signinUrl = "https://redirproxy.example.com/test";
+    setPref("identity.fxaccounts.remote.signin.uri", signinUrl);
+    let [tab, url] = yield promiseNewTabWithIframeLoadEvent("about:accounts?action=signin");
+    yield checkVisibilities(tab, {
+      stage: true, // parent of 'manage' and 'intro'
+      manage: false,
+      intro: false, // this is  "get started"
+      remote: false,
+      networkError: true
+    });
+  }
+},
+{
+  desc: "Test action=signin - offline",
+  teardown: () => {
+    gBrowser.removeCurrentTab();
+    BrowserOffline.toggleOfflineStatus();
+  },
+  run: function* ()
+  {
+    BrowserOffline.toggleOfflineStatus();
+    Services.cache2.clear();
+
+    const signinUrl = "https://unknowndomain.cow";
+    setPref("identity.fxaccounts.remote.signin.uri", signinUrl);
+    let [tab, url] = yield promiseNewTabWithIframeLoadEvent("about:accounts?action=signin");
+    yield checkVisibilities(tab, {
+      stage: true, // parent of 'manage' and 'intro'
+      manage: false,
+      intro: false, // this is  "get started"
+      remote: false,
+      networkError: true
     });
   }
 },
@@ -132,7 +176,8 @@ let gTests = [
       stage: false, // parent of 'manage' and 'intro'
       manage: false,
       intro: false, // this is  "get started"
-      remote: true
+      remote: true,
+      networkError: false
     });
   },
 },
@@ -151,7 +196,8 @@ let gTests = [
       stage: true, // parent of 'manage' and 'intro'
       manage: true,
       intro: false, // this is  "get started"
-      remote: false
+      remote: false,
+      networkError: false
     });
   },
 },
@@ -217,10 +263,10 @@ let gTests = [
     yield OS.File.writeAtomic(fxAccountsStorage, JSON.stringify(signedInUser));
     info("Wrote file " + fxAccountsStorage);
 
-    // this is a little subtle - we load about:blank so we get a tab, then
-    // we send a message which does both (a) load the URL we want and (b) mocks
-    // the default profile path used by about:accounts.
-    let tab = yield promiseNewTabLoadEvent("about:blank?");
+    // this is a little subtle - we load about:robots so we get a non-remote
+    // tab, then we send a message which does both (a) load the URL we want and
+    // (b) mocks the default profile path used by about:accounts.
+    let tab = yield promiseNewTabLoadEvent("about:robots");
     let readyPromise = promiseOneMessage(tab, "test:load-with-mocked-profile-path-response");
 
     let mm = tab.linkedBrowser.messageManager;
@@ -261,7 +307,7 @@ let gTests = [
     mockDir.createUnique(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
     // but leave it empty, so we don't think a user is logged in.
 
-    let tab = yield promiseNewTabLoadEvent("about:blank?");
+    let tab = yield promiseNewTabLoadEvent("about:robots");
     let readyPromise = promiseOneMessage(tab, "test:load-with-mocked-profile-path-response");
 
     let mm = tab.linkedBrowser.messageManager;

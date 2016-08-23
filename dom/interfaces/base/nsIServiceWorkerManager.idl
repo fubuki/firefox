@@ -5,19 +5,79 @@
 
 #include "domstubs.idl"
 
+interface mozIDOMWindow;
+interface nsPIDOMWindowInner;
+interface mozIDOMWindowProxy;
+interface nsIArray;
 interface nsIDocument;
+interface nsIInterceptedChannel;
+interface nsIPrincipal;
+interface nsIRunnable;
 interface nsIURI;
 
-[builtinclass, uuid(d6a9d4b6-39b0-4cd2-957d-28a57df5a031)]
+[scriptable, uuid(52ee2c9d-ee87-4caf-9588-23ae77ff8798)]
 interface nsIServiceWorkerUnregisterCallback : nsISupports
 {
   // aState is true if the unregistration succeded.
   // It's false if this ServiceWorkerRegistration doesn't exist.
-  [noscript] void UnregisterSucceeded(in bool aState);
-  [noscript] void UnregisterFailed();
+  void unregisterSucceeded(in bool aState);
+  void unregisterFailed();
 };
 
-[builtinclass, uuid(78fdfe7c-0e2c-4157-ac6e-3952b61df36a)]
+interface nsIWorkerDebugger;
+
+[scriptable, builtinclass, uuid(76e357ed-208d-4e4c-9165-1c4059707879)]
+interface nsIServiceWorkerInfo : nsISupports
+{
+  readonly attribute DOMString scriptSpec;
+  readonly attribute DOMString cacheName;
+
+  readonly attribute nsIWorkerDebugger debugger;
+
+  void attachDebugger();
+
+  void detachDebugger();
+};
+
+[scriptable, uuid(87e63548-d440-4b8a-b158-65ad1de0211E)]
+interface nsIServiceWorkerRegistrationInfoListener : nsISupports
+{
+  void onChange();
+};
+
+[scriptable, builtinclass, uuid(ddbc1fd4-2f2e-4fca-a395-6e010bbedfe3)]
+interface nsIServiceWorkerRegistrationInfo : nsISupports
+{
+  readonly attribute nsIPrincipal principal;
+
+  readonly attribute DOMString scope;
+  readonly attribute DOMString scriptSpec;
+
+  readonly attribute nsIServiceWorkerInfo installingWorker;
+  readonly attribute nsIServiceWorkerInfo waitingWorker;
+  readonly attribute nsIServiceWorkerInfo activeWorker;
+
+  // Allows to get the related nsIServiceWorkerInfo for a given
+  // nsIWorkerDebugger. Over time we shouldn't need this anymore,
+  // and instead always control then nsIWorkerDebugger from
+  // nsIServiceWorkerInfo and not the other way around.  Returns
+  // null if the service worker is no longer registered.
+  nsIServiceWorkerInfo getWorkerByID(in unsigned long long aID);
+
+  void addListener(in nsIServiceWorkerRegistrationInfoListener listener);
+
+  void removeListener(in nsIServiceWorkerRegistrationInfoListener listener);
+};
+
+[scriptable, uuid(9e523e7c-ad6f-4df0-8077-c74aebbc679d)]
+interface nsIServiceWorkerManagerListener : nsISupports
+{
+  void onRegister(in nsIServiceWorkerRegistrationInfo aInfo);
+
+  void onUnregister(in nsIServiceWorkerRegistrationInfo aInfo);
+};
+
+[scriptable, builtinclass, uuid(7404c8e8-4d47-4449-8ed1-47d1261d4e33)]
 interface nsIServiceWorkerManager : nsISupports
 {
   /**
@@ -28,30 +88,30 @@ interface nsIServiceWorkerManager : nsISupports
    *
    * Returns a Promise.
    */
-  nsISupports register(in DOMString aScope, in DOMString aScriptURI);
+  nsISupports register(in mozIDOMWindow aWindow, in nsIURI aScope, in nsIURI aScriptURI);
 
   /**
    * Unregister an existing ServiceWorker registration for `aScope`.
    * It keeps aCallback alive until the operation is concluded.
    */
-  void unregister(in nsIServiceWorkerUnregisterCallback aCallback,
+  void unregister(in nsIPrincipal aPrincipal,
+                  in nsIServiceWorkerUnregisterCallback aCallback,
                   in DOMString aScope);
 
   // Returns a Promise
-  nsISupports getRegistrations(in nsIDOMWindow aWindow);
+  nsISupports getRegistrations(in mozIDOMWindow aWindow);
 
   // Returns a Promise
-  nsISupports getRegistration(in nsIDOMWindow aWindow, in DOMString aScope);
+  nsISupports getRegistration(in mozIDOMWindow aWindow, in DOMString aScope);
 
   // Returns a Promise
-  nsISupports getReadyPromise(in nsIDOMWindow aWindow);
+  nsISupports getReadyPromise(in mozIDOMWindow aWindow);
 
   // Remove ready pending Promise
-  void removeReadyPromise(in nsIDOMWindow aWindow);
+  void removeReadyPromise(in mozIDOMWindow aWindow);
 
-  // aTarget MUST be a ServiceWorkerRegistration.
-  [noscript] void AddRegistrationEventListener(in nsIURI aPageURI, in nsIDOMEventTarget aTarget);
-  [noscript] void RemoveRegistrationEventListener(in nsIURI aPageURI, in nsIDOMEventTarget aTarget);
+  nsIServiceWorkerRegistrationInfo getRegistrationByPrincipal(in nsIPrincipal aPrincipal,
+                                                              in DOMString aScope);
 
   /**
    * Call this to request that document `aDoc` be controlled by a ServiceWorker
@@ -59,7 +119,7 @@ interface nsIServiceWorkerManager : nsISupports
    *
    * This MUST only be called once per document!
    */
-  [notxpcom,nostdcall] void MaybeStartControlling(in nsIDocument aDoc);
+  [notxpcom,nostdcall] void MaybeStartControlling(in nsIDocument aDoc, in DOMString aDocumentId);
 
   /**
    * Documents that have called MaybeStartControlling() should call this when
@@ -74,22 +134,69 @@ interface nsIServiceWorkerManager : nsISupports
    * a valid entry that window is allowed to load, otherwise this will return nullptr.
    * These are only meant to be called from ServiceWorkerRegistration instances.
    */
-  [noscript] nsISupports GetInstalling(in nsIDOMWindow aWindow, in DOMString aScope);
-  [noscript] nsISupports GetWaiting(in nsIDOMWindow aWindow, in DOMString aScope);
-  [noscript] nsISupports GetActive(in nsIDOMWindow aWindow, in DOMString aScope);
+  [noscript] nsISupports GetInstalling(in nsPIDOMWindowInner aWindow, in DOMString aScope);
+  [noscript] nsISupports GetWaiting(in nsPIDOMWindowInner aWindow, in DOMString aScope);
+  [noscript] nsISupports GetActive(in nsPIDOMWindowInner aWindow, in DOMString aScope);
 
   /*
-   * Returns a ServiceWorker.
+   * Returns a ServiceWorker object representing the active worker controlling this
+   * window.
    */
-  [noscript] nsISupports GetDocumentController(in nsIDOMWindow aWindow);
+  [noscript] nsISupports GetDocumentController(in nsPIDOMWindowInner aWindow);
 
   /*
-   * This implements the update algorithm.
+   * Clears ServiceWorker registrations from memory and disk for the specified
+   * host.
+   * - All ServiceWorker instances change their state to redundant.
+   * - Existing ServiceWorker instances handling fetches will keep running.
+   * - All documents will immediately stop being controlled.
+   * - Unregister jobs will be queued for all registrations.
+   *   This eventually results in the registration being deleted from disk too.
    */
-  void update(in DOMString aScope);
+  void removeAndPropagate(in AUTF8String aHost);
 
   // Testing
-  DOMString getScopeForUrl(in DOMString path);
+  DOMString getScopeForUrl(in nsIPrincipal aPrincipal, in DOMString aPath);
+
+  // Note: This is meant to be used only by about:serviceworkers.
+  // It returns an array of nsIServiceWorkerRegistrationInfos.
+  nsIArray getAllRegistrations();
+
+  // Note: This is meant to be used only by about:serviceworkers.
+  // It calls softUpdate() for each child process.
+  [implicit_jscontext] void propagateSoftUpdate(in jsval aOriginAttributes,
+                                                in DOMString aScope);
+
+  // Note: This is meant to be used only by about:serviceworkers.
+  // It calls unregister() in each child process. The callback is used to
+  // inform when unregister() is completed on the current process.
+  void propagateUnregister(in nsIPrincipal aPrincipal,
+                           in nsIServiceWorkerUnregisterCallback aCallback,
+                           in DOMString aScope);
+
+  void sendNotificationClickEvent(in ACString aOriginSuffix,
+                                  in ACString scope,
+                                  in AString aID,
+                                  in AString aTitle,
+                                  in AString aDir,
+                                  in AString aLang,
+                                  in AString aBody,
+                                  in AString aTag,
+                                  in AString aIcon,
+                                  in AString aData,
+                                  in AString aBehavior);
+  [optional_argc] void sendPushEvent(in ACString aOriginAttributes,
+                                     in ACString aScope,
+                                     [optional] in uint32_t aDataLength,
+                                     [optional, array, size_is(aDataLength)] in uint8_t aDataBytes);
+  void sendPushSubscriptionChangeEvent(in ACString aOriginAttributes,
+                                       in ACString scope);
+
+  void addListener(in nsIServiceWorkerManagerListener aListener);
+
+  void removeListener(in nsIServiceWorkerManagerListener aListener);
+
+  bool shouldReportToWindow(in mozIDOMWindowProxy aWindow, in ACString aScope);
 };
 
 %{ C++

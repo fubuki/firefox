@@ -1,25 +1,25 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_indexeddb_idbmutablefile_h__
-#define mozilla_dom_indexeddb_idbmutablefile_h__
+#ifndef mozilla_dom_idbmutablefile_h__
+#define mozilla_dom_idbmutablefile_h__
 
 #include "js/TypeDecls.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/dom/FileModeBinding.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/FileModeBinding.h"
-#include "mozilla/dom/MutableFile.h"
-#include "mozilla/dom/quota/PersistenceType.h"
+#include "mozilla/dom/MutableFileBase.h"
 #include "nsAutoPtr.h"
 #include "nsCycleCollectionParticipant.h"
+#include "nsHashKeys.h"
+#include "nsString.h"
+#include "nsTHashtable.h"
 
-class nsIDOMFile;
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 
@@ -28,92 +28,58 @@ class ErrorResult;
 namespace dom {
 
 class DOMRequest;
-class MetadataParameters;
-
-namespace indexedDB {
-
-class FileInfo;
+class File;
 class IDBDatabase;
 class IDBFileHandle;
 
-class IDBMutableFile MOZ_FINAL
+namespace indexedDB {
+class BackgroundMutableFileChild;
+}
+
+class IDBMutableFile final
   : public DOMEventTargetHelper
   , public MutableFileBase
 {
-  typedef mozilla::dom::MetadataParameters MetadataParameters;
-  typedef mozilla::dom::quota::PersistenceType PersistenceType;
+  RefPtr<IDBDatabase> mDatabase;
+
+  nsTHashtable<nsPtrHashKey<IDBFileHandle>> mFileHandles;
 
   nsString mName;
   nsString mType;
 
-  nsRefPtr<IDBDatabase> mDatabase;
-  nsRefPtr<FileInfo> mFileInfo;
-
-  const nsCString mGroup;
-  const nsCString mOrigin;
-  const PersistenceType mPersistenceType;
-
   Atomic<bool> mInvalidated;
 
 public:
-  static already_AddRefed<IDBMutableFile>
-  Create(IDBDatabase* aDatabase,
-         const nsAString& aName,
-         const nsAString& aType,
-         already_AddRefed<FileInfo> aFileInfo);
+  IDBMutableFile(IDBDatabase* aDatabase,
+                 indexedDB::BackgroundMutableFileChild* aActor,
+                 const nsAString& aName,
+                 const nsAString& aType);
 
-  const nsAString&
-  Name() const
+  void
+  SetLazyData(const nsAString& aName,
+              const nsAString& aType)
   {
-    return mName;
-  }
-
-  const nsAString&
-  Type() const
-  {
-    return mType;
+    mName = aName;
+    mType = aType;
   }
 
   int64_t
   GetFileId() const;
 
-  FileInfo*
-  GetFileInfo() const
-  {
-    return mFileInfo;
-  }
-
-  already_AddRefed<nsIDOMFile>
-  CreateFileObject(IDBFileHandle* aFileHandle,
-                   MetadataParameters* aMetadataParams);
-
   void
   Invalidate();
 
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(IDBMutableFile, DOMEventTargetHelper)
+  void
+  RegisterFileHandle(IDBFileHandle* aFileHandle);
 
-  virtual bool
-  IsInvalid() MOZ_OVERRIDE;
+  void
+  UnregisterFileHandle(IDBFileHandle* aFileHandle);
 
-  virtual nsIOfflineStorage*
-  Storage() MOZ_OVERRIDE;
-
-  virtual already_AddRefed<nsISupports>
-  CreateStream(bool aReadOnly) MOZ_OVERRIDE;
-
-  virtual void
-  SetThreadLocals() MOZ_OVERRIDE;
-
-  virtual void
-  UnsetThreadLocals() MOZ_OVERRIDE;
-
-  // nsWrapperCache
-  virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  void
+  AbortFileHandles();
 
   // WebIDL
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const
   {
     return GetOwner();
@@ -143,22 +109,32 @@ public:
   IMPL_EVENT_HANDLER(abort)
   IMPL_EVENT_HANDLER(error)
 
-private:
-  IDBMutableFile(IDBDatabase* aDatabase,
-                 const nsAString& aName,
-                 const nsAString& aType,
-                 already_AddRefed<FileInfo> aFileInfo,
-                 const nsACString& aGroup,
-                 const nsACString& aOrigin,
-                 const nsACString& aStorageId,
-                 PersistenceType aPersistenceType,
-                 already_AddRefed<nsIFile> aFile);
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(IDBMutableFile, DOMEventTargetHelper)
 
+  // nsWrapperCache
+  virtual JSObject*
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
+
+  // MutableFileBase
+  virtual const nsString&
+  Name() const override;
+
+  virtual const nsString&
+  Type() const override;
+
+  virtual bool
+  IsInvalidated() override;
+
+  virtual already_AddRefed<File>
+  CreateFileFor(BlobImpl* aBlobImpl,
+                FileHandleBase* aFileHandle) override;
+
+private:
   ~IDBMutableFile();
 };
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla
 
-#endif // mozilla_dom_indexeddb_idbmutablefile_h__
+#endif // mozilla_dom_idbmutablefile_h__

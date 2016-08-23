@@ -7,7 +7,7 @@
 const BUTTONID = "test-widget-saved-earlier";
 const AREAID = "test-area-saved-earlier";
 
-let hadSavedState;
+var hadSavedState;
 function test() {
   // Hack our way into the module to fake a saved state that isn't there...
   let backstagePass = Cu.import("resource:///modules/CustomizableUI.jsm", {});
@@ -38,7 +38,7 @@ function test() {
     placementArraysEqual(CustomizableUI.AREA_NAVBAR, newSavedState.placements[CustomizableUI.AREA_NAVBAR],
                          CustomizableUI.getWidgetIdsInArea(CustomizableUI.AREA_NAVBAR));
   }
-};
+}
 
 registerCleanupFunction(function() {
   let backstagePass = Cu.import("resource:///modules/CustomizableUI.jsm", {});

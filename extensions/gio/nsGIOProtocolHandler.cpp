@@ -16,9 +16,18 @@
 #include "nsIStringBundle.h"
 #include "nsIStandardURL.h"
 #include "nsMimeTypes.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
+#include "nsServiceManagerUtils.h"
+#include "nsIURI.h"
+#include "nsIAuthPrompt.h"
+#include "nsIChannel.h"
+#include "nsIInputStream.h"
+#include "nsIProtocolHandler.h"
 #include "nsNullPrincipal.h"
 #include "mozilla/Monitor.h"
+#include "plstr.h"
+#include "prtime.h"
 #include <gio/gio.h>
 #include <algorithm>
 
@@ -28,12 +37,8 @@
 //-----------------------------------------------------------------------------
 
 // NSPR_LOG_MODULES=gio:5
-#ifdef PR_LOGGING
-static PRLogModuleInfo *sGIOLog;
-#define LOG(args) PR_LOG(sGIOLog, PR_LOG_DEBUG, args)
-#else
-#define LOG(args)
-#endif
+static mozilla::LazyLogModule sGIOLog("gio");
+#define LOG(args) MOZ_LOG(sGIOLog, mozilla::LogLevel::Debug, args)
 
 
 //-----------------------------------------------------------------------------
@@ -136,7 +141,7 @@ static void mount_operation_ask_password (GMountOperation   *mount_op,
                                           gpointer          user_data);
 //-----------------------------------------------------------------------------
 
-class nsGIOInputStream MOZ_FINAL : public nsIInputStream
+class nsGIOInputStream final : public nsIInputStream
 {
    ~nsGIOInputStream() { Close(); }
 
@@ -610,17 +615,10 @@ nsGIOInputStream::Close()
     mDirListPtr = nullptr;
   }
 
-  if (mChannel)
-  {
-    nsresult rv = NS_OK;
+  if (mChannel) {
+    NS_ReleaseOnMainThread(dont_AddRef(mChannel));
 
-    nsCOMPtr<nsIThread> thread = do_GetMainThread();
-    if (thread)
-      rv = NS_ProxyRelease(thread, mChannel);
-
-    NS_ASSERTION(thread && NS_SUCCEEDED(rv), "leaking channel reference");
     mChannel = nullptr;
-    (void) rv;
   }
 
   mSpec.Truncate(); // free memory
@@ -870,20 +868,22 @@ mount_operation_ask_password (GMountOperation   *mount_op,
   }
   if (NS_FAILED(rv) || !retval) {  //  was || user == '\0' || pass == '\0'
     g_mount_operation_reply(mount_op, G_MOUNT_OPERATION_ABORTED);
+    free(user);
+    free(pass);
     return;
   }
   /* GIO should accept UTF8 */
   g_mount_operation_set_username(mount_op, NS_ConvertUTF16toUTF8(user).get());
   g_mount_operation_set_password(mount_op, NS_ConvertUTF16toUTF8(pass).get());
-  nsMemory::Free(user);
-  nsMemory::Free(pass);
+  free(user);
+  free(pass);
   g_mount_operation_reply(mount_op, G_MOUNT_OPERATION_HANDLED);
 }
 
 //-----------------------------------------------------------------------------
 
-class nsGIOProtocolHandler MOZ_FINAL : public nsIProtocolHandler
-                                     , public nsIObserver
+class nsGIOProtocolHandler final : public nsIProtocolHandler
+                                 , public nsIObserver
 {
   public:
     NS_DECL_ISUPPORTS
@@ -906,10 +906,6 @@ NS_IMPL_ISUPPORTS(nsGIOProtocolHandler, nsIProtocolHandler, nsIObserver)
 nsresult
 nsGIOProtocolHandler::Init()
 {
-#ifdef PR_LOGGING
-  sGIOLog = PR_NewLogModule("gio");
-#endif
-
   nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
   if (prefs)
   {
@@ -1058,38 +1054,17 @@ nsGIOProtocolHandler::NewChannel2(nsIURI* aURI,
   if (NS_FAILED(rv))
     return rv;
 
-  nsRefPtr<nsGIOInputStream> stream = new nsGIOInputStream(spec);
+  RefPtr<nsGIOInputStream> stream = new nsGIOInputStream(spec);
   if (!stream) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  // Bug 1087720 (and Bug 1099296):
-  // Once all callsites have been updated to call NewChannel2() instead of NewChannel()
-  // we should have a non-null loadInfo consistently. Until then we have to brach on the
-  // loadInfo and provide default arguments to create a NewInputStreamChannel.
-  if (aLoadInfo) {
-    rv = NS_NewInputStreamChannelInternal(aResult,
-                                          aURI,
-                                          stream,
-                                          NS_LITERAL_CSTRING(UNKNOWN_CONTENT_TYPE),
-                                          EmptyCString(), // aContentCharset
-                                          aLoadInfo);
-  }
-  else {
-    nsCOMPtr<nsIPrincipal> nullPrincipal =
-      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    // start out assuming an unknown content-type.  we'll set the content-type
-    // to something better once we open the URI.
-    rv = NS_NewInputStreamChannel(aResult,
-                                  aURI,
-                                  stream,
-                                  nullPrincipal,
-                                  nsILoadInfo::SEC_NORMAL,
-                                  nsIContentPolicy::TYPE_OTHER,
-                                  NS_LITERAL_CSTRING(UNKNOWN_CONTENT_TYPE));
-  }
+  rv = NS_NewInputStreamChannelInternal(aResult,
+                                        aURI,
+                                        stream,
+                                        NS_LITERAL_CSTRING(UNKNOWN_CONTENT_TYPE),
+                                        EmptyCString(), // aContentCharset
+                                        aLoadInfo);
   if (NS_SUCCEEDED(rv)) {
     stream->SetChannel(*aResult);
   }

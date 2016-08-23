@@ -24,16 +24,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "CustomizableUI",
   "resource:///modules/CustomizableUI.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SocialService",
   "resource://gre/modules/SocialService.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PageMetadata",
+  "resource://gre/modules/PageMetadata.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-  "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
   "resource://gre/modules/Promise.jsm");
 
-XPCOMUtils.defineLazyServiceGetter(this, "unescapeService",
-                                   "@mozilla.org/feed-unescapehtml;1",
-                                   "nsIScriptableUnescapeHTML");
 
 function promiseSetAnnotation(aURI, providerList) {
   let deferred = Promise.defer();
@@ -96,7 +93,7 @@ this.Social = {
       // Retrieve the current set of providers, and set the current provider.
       SocialService.getOrderedProviderList(function (providers) {
         Social._updateProviderCache(providers);
-        Social._updateWorkerState(SocialService.enabled);
+        Social._updateEnabledState(SocialService.enabled);
         deferred.resolve(false);
       });
     } else {
@@ -114,15 +111,14 @@ this.Social = {
       }
       if (topic == "provider-enabled") {
         Social._updateProviderCache(providers);
-        Social._updateWorkerState(true);
+        Social._updateEnabledState(true);
         Services.obs.notifyObservers(null, "social:" + topic, origin);
         return;
       }
       if (topic == "provider-disabled") {
-        // a provider was removed from the list of providers, that does not
-        // affect worker state for other providers
+        // a provider was removed from the list of providers, update states
         Social._updateProviderCache(providers);
-        Social._updateWorkerState(providers.length > 0);
+        Social._updateEnabledState(providers.length > 0);
         Services.obs.notifyObservers(null, "social:" + topic, origin);
         return;
       }
@@ -137,8 +133,10 @@ this.Social = {
     return deferred.promise;
   },
 
-  _updateWorkerState: function(enable) {
-    [p.enabled = enable for (p of Social.providers) if (p.enabled != enable)];
+  _updateEnabledState: function(enable) {
+    for (let p of Social.providers) {
+      p.enabled = enable;
+    }
   },
 
   // Called to update our cache of providers and set the current provider
@@ -214,7 +212,7 @@ this.Social = {
         }]
       };
       PlacesUtils.asyncHistory.updatePlaces(place, {
-        handleError: function () Cu.reportError("couldn't update history for socialmark annotation"),
+        handleError: () => Cu.reportError("couldn't update history for socialmark annotation"),
         handleResult: function () {},
         handleCompletion: function () {
           promiseSetAnnotation(aURI, providerList).then(function() {
@@ -241,12 +239,6 @@ this.Social = {
         }).then(null, Cu.reportError);
       }
     }).then(null, Cu.reportError);
-  },
-
-  setErrorListener: function(iframe, errorHandler) {
-    if (iframe.socialErrorListener)
-      return iframe.socialErrorListener;
-    return new SocialErrorListener(iframe, errorHandler);
   }
 };
 
@@ -266,26 +258,24 @@ function CreateSocialStatusWidget(aId, aProvider) {
 
   CustomizableUI.createWidget({
     id: aId,
-    type: 'custom',
+    type: "custom",
     removable: true,
     defaultArea: CustomizableUI.AREA_NAVBAR,
     onBuild: function(aDocument) {
-      let node = aDocument.createElement('toolbarbutton');
+      let node = aDocument.createElement("toolbarbutton");
       node.id = this.id;
-      node.setAttribute('class', 'toolbarbutton-1 chromeclass-toolbar-additional social-status-button badged-button');
+      node.setAttribute("class", "toolbarbutton-1 chromeclass-toolbar-additional social-status-button badged-button");
       node.style.listStyleImage = "url(" + (aProvider.icon32URL || aProvider.iconURL) + ")";
       node.setAttribute("origin", aProvider.origin);
       node.setAttribute("label", aProvider.name);
       node.setAttribute("tooltiptext", aProvider.name);
       node.setAttribute("oncommand", "SocialStatus.showPopup(this);");
-
-      if (PrivateBrowsingUtils.isWindowPrivate(aDocument.defaultView))
-        node.setAttribute("disabled", "true");
+      node.setAttribute("constrain-size", "true");
 
       return node;
     }
   });
-};
+}
 
 function CreateSocialMarkWidget(aId, aProvider) {
   if (!aProvider.markURL)
@@ -299,14 +289,15 @@ function CreateSocialMarkWidget(aId, aProvider) {
 
   CustomizableUI.createWidget({
     id: aId,
-    type: 'custom',
+    type: "custom",
     removable: true,
     defaultArea: CustomizableUI.AREA_NAVBAR,
     onBuild: function(aDocument) {
-      let node = aDocument.createElement('toolbarbutton');
+      let node = aDocument.createElement("toolbarbutton");
       node.id = this.id;
-      node.setAttribute('class', 'toolbarbutton-1 chromeclass-toolbar-additional social-mark-button');
-      node.setAttribute('type', "socialmark");
+      node.setAttribute("class", "toolbarbutton-1 chromeclass-toolbar-additional social-mark-button");
+      node.setAttribute("type", "socialmark");
+      node.setAttribute("constrain-size", "true");
       node.style.listStyleImage = "url(" + (aProvider.unmarkedIcon || aProvider.icon32URL || aProvider.iconURL) + ")";
       node.setAttribute("origin", aProvider.origin);
 
@@ -319,85 +310,7 @@ function CreateSocialMarkWidget(aId, aProvider) {
       return node;
     }
   });
-};
-
-// Error handling class used to listen for network errors in the social frames
-// and replace them with a social-specific error page
-function SocialErrorListener(iframe, errorHandler) {
-  this.setErrorMessage = errorHandler;
-  this.iframe = iframe;
-  iframe.socialErrorListener = this;
-  // Force a layout flush by calling .clientTop so that the docShell of this
-  // frame is created for the error listener
-  iframe.clientTop;
-  iframe.docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                                   .getInterface(Ci.nsIWebProgress)
-                                   .addProgressListener(this,
-                                                        Ci.nsIWebProgress.NOTIFY_STATE_REQUEST |
-                                                        Ci.nsIWebProgress.NOTIFY_LOCATION);
 }
-
-SocialErrorListener.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
-                                         Ci.nsISupportsWeakReference,
-                                         Ci.nsISupports]),
-
-  remove: function() {
-    this.iframe.docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                                     .getInterface(Ci.nsIWebProgress)
-                                     .removeProgressListener(this);
-    delete this.iframe.socialErrorListener;
-  },
-
-  onStateChange: function SPL_onStateChange(aWebProgress, aRequest, aState, aStatus) {
-    let failure = false;
-    if ((aState & Ci.nsIWebProgressListener.STATE_STOP)) {
-      if (aRequest instanceof Ci.nsIHttpChannel) {
-        try {
-          // Change the frame to an error page on 4xx (client errors)
-          // and 5xx (server errors).  responseStatus throws if it is not set.
-          failure = aRequest.responseStatus >= 400 &&
-                    aRequest.responseStatus < 600;
-        } catch (e) {
-          failure = aStatus == Components.results.NS_ERROR_CONNECTION_REFUSED;
-        }
-      }
-    }
-
-    // Calling cancel() will raise some OnStateChange notifications by itself,
-    // so avoid doing that more than once
-    if (failure && aStatus != Components.results.NS_BINDING_ABORTED) {
-      aRequest.cancel(Components.results.NS_BINDING_ABORTED);
-      let origin = this.iframe.getAttribute("origin");
-      if (origin) {
-        let provider = Social._getProviderFromOrigin(origin);
-        provider.errorState = "content-error";
-      }
-      this.setErrorMessage(aWebProgress.QueryInterface(Ci.nsIDocShell)
-                              .chromeEventHandler);
-    }
-  },
-
-  onLocationChange: function SPL_onLocationChange(aWebProgress, aRequest, aLocation, aFlags) {
-    if (aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_ERROR_PAGE) {
-      aRequest.cancel(Components.results.NS_BINDING_ABORTED);
-      let origin = this.iframe.getAttribute("origin");
-      if (origin) {
-        let provider = Social._getProviderFromOrigin(origin);
-        if (!provider.errorState)
-          provider.errorState = "content-error";
-      }
-      schedule(function() {
-        this.setErrorMessage(aWebProgress.QueryInterface(Ci.nsIDocShell)
-                              .chromeEventHandler);
-      }.bind(this));
-    }
-  },
-
-  onProgressChange: function SPL_onProgressChange() {},
-  onStatusChange: function SPL_onStatusChange() {},
-  onSecurityChange: function SPL_onSecurityChange() {},
-};
 
 
 function sizeSocialPanelToContent(panel, iframe, requestedSize) {
@@ -520,6 +433,10 @@ this.OpenGraphBuilder = {
           query["body"] = body;
         }
       });
+      // if the url template doesn't have title and no text was provided, add the title as the text.
+      if (!query.text && !query.title && pageData.title) {
+        query.text = pageData.title;
+      }
     }
     var str = [];
     for (let p in query)
@@ -528,180 +445,4 @@ this.OpenGraphBuilder = {
       endpointURL = endpointURL + "?" + str.join("&");
     return endpointURL;
   },
-
-  getData: function(aDocument, target) {
-    let res = {
-      url: this._validateURL(aDocument, aDocument.documentURI),
-      title: aDocument.title,
-      previews: []
-    };
-    this._getMetaData(aDocument, res);
-    this._getLinkData(aDocument, res);
-    this._getPageData(aDocument, res);
-    res.microdata = this.getMicrodata(aDocument, target);
-    return res;
-  },
-
-  getMicrodata: function (aDocument, target) {
-    return getMicrodata(aDocument, target);
-  },
-
-  _getMetaData: function(aDocument, o) {
-    // query for standardized meta data
-    let els = aDocument.querySelectorAll("head > meta[property], head > meta[name]");
-    if (els.length < 1)
-      return;
-    let url;
-    for (let el of els) {
-      let value = el.getAttribute("content")
-      if (!value)
-        continue;
-      value = unescapeService.unescape(value.trim());
-      let key = el.getAttribute("property") || el.getAttribute("name");
-      if (!key)
-        continue;
-      // There are a wide array of possible meta tags, expressing articles,
-      // products, etc. so all meta tags are passed through but we touch up the
-      // most common attributes.
-      o[key] = value;
-      switch (key) {
-        case "title":
-        case "og:title":
-          o.title = value;
-          break;
-        case "description":
-        case "og:description":
-          o.description = value;
-          break;
-        case "og:site_name":
-          o.siteName = value;
-          break;
-        case "medium":
-        case "og:type":
-          o.medium = value;
-          break;
-        case "og:video":
-          url = this._validateURL(aDocument, value);
-          if (url)
-            o.source = url;
-          break;
-        case "og:url":
-          url = this._validateURL(aDocument, value);
-          if (url)
-            o.url = url;
-          break;
-        case "og:image":
-          url = this._validateURL(aDocument, value);
-          if (url)
-            o.previews.push(url);
-          break;
-      }
-    }
-  },
-
-  _getLinkData: function(aDocument, o) {
-    let els = aDocument.querySelectorAll("head > link[rel], head > link[id]");
-    for (let el of els) {
-      let url = el.getAttribute("href");
-      if (!url)
-        continue;
-      url = this._validateURL(aDocument, unescapeService.unescape(url.trim()));
-      switch (el.getAttribute("rel") || el.getAttribute("id")) {
-        case "shorturl":
-        case "shortlink":
-          o.shortUrl = url;
-          break;
-        case "canonicalurl":
-        case "canonical":
-          o.url = url;
-          break;
-        case "image_src":
-          o.previews.push(url);
-          break;
-        case "alternate":
-          // expressly for oembed support but we're liberal here and will let
-          // other alternate links through. oembed defines an href, supplied by
-          // the site, where you can fetch additional meta data about a page.
-          // We'll let the client fetch the oembed data themselves, but they
-          // need the data from this link.
-          if (!o.alternate)
-            o.alternate = [];
-          o.alternate.push({
-            "type": el.getAttribute("type"),
-            "href": el.getAttribute("href"),
-            "title": el.getAttribute("title")
-          })
-      }
-    }
-  },
-
-  // scrape through the page for data we want
-  _getPageData: function(aDocument, o) {
-    if (o.previews.length < 1)
-      o.previews = this._getImageUrls(aDocument);
-  },
-
-  _validateURL: function(aDocument, url) {
-    let docURI = Services.io.newURI(aDocument.documentURI, null, null);
-    let uri = Services.io.newURI(docURI.resolve(url), null, null);
-    if (["http", "https", "ftp", "ftps"].indexOf(uri.scheme) < 0)
-      return null;
-    uri.userPass = "";
-    return uri.spec;
-  },
-
-  _getImageUrls: function(aDocument) {
-    let l = [];
-    let els = aDocument.querySelectorAll("img");
-    for (let el of els) {
-      let src = el.getAttribute("src");
-      if (src) {
-        l.push(this._validateURL(aDocument, unescapeService.unescape(src)));
-        // we don't want a billion images
-        if (l.length > 5)
-          break;
-      }
-    }
-    return l;
-  }
 };
-
-// getMicrodata (and getObject) based on wg algorythm to convert microdata to json
-// http://www.whatwg.org/specs/web-apps/current-work/multipage/microdata-2.html#json
-function  getMicrodata(document, target) {
-
-  function _getObject(item) {
-    let result = {};
-    if (item.itemType.length)
-      result.types = [i for (i of item.itemType)];
-    if (item.itemId)
-      result.itemId = item.itemid;
-    if (item.properties.length)
-      result.properties = {};
-    for (let elem of item.properties) {
-      let value;
-      if (elem.itemScope)
-        value = _getObject(elem);
-      else if (elem.itemValue)
-        value = elem.itemValue;
-      // handle mis-formatted microdata
-      else if (elem.hasAttribute("content"))
-        value = elem.getAttribute("content");
-
-      for (let prop of elem.itemProp) {
-        if (!result.properties[prop])
-          result.properties[prop] = [];
-        result.properties[prop].push(value);
-      }
-    }
-    return result;
-  }
-
-  let result = { items: [] };
-  let elms = target ? [target] : document.getItems();
-  for (let el of elms) {
-    if (el.itemScope)
-      result.items.push(_getObject(el));
-  }
-  return result;
-}

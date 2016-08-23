@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,7 +37,7 @@ getDefaultServiceId()
   return id;
 }
 
-} // Anonymous namespace
+} // namespace
 
 NS_IMPL_ISUPPORTS(TelephonyIPCService,
                   nsITelephonyService,
@@ -141,8 +142,8 @@ TelephonyIPCService::UnregisterListener(nsITelephonyListener *aListener)
 
 nsresult
 TelephonyIPCService::SendRequest(nsITelephonyListener *aListener,
-                                  nsITelephonyCallback *aCallback,
-                                  const IPCTelephonyRequest& aRequest)
+                                 nsITelephonyCallback *aCallback,
+                                 const IPCTelephonyRequest& aRequest)
 {
   if (!mPTelephonyChild) {
     NS_WARNING("TelephonyService used after shutdown has begun!");
@@ -233,27 +234,18 @@ TelephonyIPCService::ResumeCall(uint32_t aClientId, uint32_t aCallIndex,
 }
 
 NS_IMETHODIMP
-TelephonyIPCService::ConferenceCall(uint32_t aClientId)
+TelephonyIPCService::ConferenceCall(uint32_t aClientId,
+                                    nsITelephonyCallback *aCallback)
 {
-  if (!mPTelephonyChild) {
-    NS_WARNING("TelephonyService used after shutdown has begun!");
-    return NS_ERROR_FAILURE;
-  }
-
-  mPTelephonyChild->SendConferenceCall(aClientId);
-  return NS_OK;
+  return SendRequest(nullptr, aCallback, ConferenceCallRequest(aClientId));
 }
 
 NS_IMETHODIMP
-TelephonyIPCService::SeparateCall(uint32_t aClientId, uint32_t aCallIndex)
+TelephonyIPCService::SeparateCall(uint32_t aClientId, uint32_t aCallIndex,
+                                  nsITelephonyCallback *aCallback)
 {
-  if (!mPTelephonyChild) {
-    NS_WARNING("TelephonyService used after shutdown has begun!");
-    return NS_ERROR_FAILURE;
-  }
-
-  mPTelephonyChild->SendSeparateCall(aClientId, aCallIndex);
-  return NS_OK;
+  return SendRequest(nullptr, aCallback, SeparateCallRequest(aClientId,
+                                                             aCallIndex));
 }
 
 NS_IMETHODIMP
@@ -264,27 +256,17 @@ TelephonyIPCService::HangUpConference(uint32_t aClientId,
 }
 
 NS_IMETHODIMP
-TelephonyIPCService::HoldConference(uint32_t aClientId)
+TelephonyIPCService::HoldConference(uint32_t aClientId,
+                                    nsITelephonyCallback *aCallback)
 {
-  if (!mPTelephonyChild) {
-    NS_WARNING("TelephonyService used after shutdown has begun!");
-    return NS_ERROR_FAILURE;
-  }
-
-  mPTelephonyChild->SendHoldConference(aClientId);
-  return NS_OK;
+  return SendRequest(nullptr, aCallback, HoldConferenceRequest(aClientId));
 }
 
 NS_IMETHODIMP
-TelephonyIPCService::ResumeConference(uint32_t aClientId)
+TelephonyIPCService::ResumeConference(uint32_t aClientId,
+                                      nsITelephonyCallback *aCallback)
 {
-  if (!mPTelephonyChild) {
-    NS_WARNING("TelephonyService used after shutdown has begun!");
-    return NS_ERROR_FAILURE;
-  }
-
-  mPTelephonyChild->SendResumeConference(aClientId);
-  return NS_OK;
+  return SendRequest(nullptr, aCallback, ResumeConferenceRequest(aClientId));
 }
 
 NS_IMETHODIMP
@@ -386,19 +368,10 @@ TelephonyIPCService::SetSpeakerEnabled(bool aEnabled)
 // nsITelephonyListener
 
 NS_IMETHODIMP
-TelephonyIPCService::CallStateChanged(nsITelephonyCallInfo* aInfo)
+TelephonyIPCService::CallStateChanged(uint32_t aLength, nsITelephonyCallInfo** aAllInfo)
 {
   for (uint32_t i = 0; i < mListeners.Length(); i++) {
-    mListeners[i]->CallStateChanged(aInfo);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-TelephonyIPCService::ConferenceCallStateChanged(uint16_t aCallState)
-{
-  for (uint32_t i = 0; i < mListeners.Length(); i++) {
-    mListeners[i]->ConferenceCallStateChanged(aCallState);
+    mListeners[i]->CallStateChanged(aLength, aAllInfo);
   }
   return NS_OK;
 }
@@ -435,16 +408,6 @@ TelephonyIPCService::NotifyConferenceError(const nsAString& aName,
 {
   for (uint32_t i = 0; i < mListeners.Length(); i++) {
     mListeners[i]->NotifyConferenceError(aName, aMessage);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-TelephonyIPCService::NotifyError(uint32_t aClientId, int32_t aCallIndex,
-                                  const nsAString& aError)
-{
-  for (uint32_t i = 0; i < mListeners.Length(); i++) {
-    mListeners[i]->NotifyError(aClientId, aCallIndex, aError);
   }
   return NS_OK;
 }

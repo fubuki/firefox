@@ -89,7 +89,7 @@ BGRIntToRGBString(DWORD color, nsAString& aResult)
   aResult.Append(ToHexString(g));
   aResult.Append(ToHexString(b));
 }
-} // anonymous namespace
+} // namespace
 
 static AsyncColorChooser* gColorChooser;
 
@@ -190,13 +190,13 @@ nsColorPicker::~nsColorPicker()
 NS_IMPL_ISUPPORTS(nsColorPicker, nsIColorPicker)
 
 NS_IMETHODIMP
-nsColorPicker::Init(nsIDOMWindow* parent,
+nsColorPicker::Init(mozIDOMWindowProxy* parent,
                     const nsAString& title,
                     const nsAString& aInitialColor)
 {
   NS_PRECONDITION(parent,
       "Null parent passed to colorpicker, no color picker for you!");
-  mParentWidget =  WidgetUtils::DOMWindowToWidget(parent);
+  mParentWidget =  WidgetUtils::DOMWindowToWidget(nsPIDOMWindowOuter::From(parent));
   mInitialColor = ColorStringToRGB(aInitialColor);
   return NS_OK;
 }

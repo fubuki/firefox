@@ -19,7 +19,7 @@
 #include "nsIWeakReferenceUtils.h"      // for nsWeakPtr
 #include "nscore.h"                     // for NS_IMETHOD, nsresult, etc
 
-class nsIDOMWindow;
+class nsPIDOMWindowOuter;
 class nsITransaction;
 class nsITransactionManager;
 class nsPICommandUpdater;
@@ -35,10 +35,10 @@ public:
 
   // nsISupports
   NS_DECL_ISUPPORTS
-  
+
   // nsISelectionListener
   NS_DECL_NSISELECTIONLISTENER
-  
+
   // nsIDocumentStateListener
   NS_DECL_NSIDOCUMENTSTATELISTENER
 
@@ -46,25 +46,25 @@ public:
   NS_DECL_NSITIMERCALLBACK
 
   /** nsITransactionListener interfaces
-    */  
-  NS_IMETHOD WillDo(nsITransactionManager *aManager, nsITransaction *aTransaction, bool *aInterrupt) MOZ_OVERRIDE;
-  NS_IMETHOD DidDo(nsITransactionManager *aManager, nsITransaction *aTransaction, nsresult aDoResult) MOZ_OVERRIDE;
-  NS_IMETHOD WillUndo(nsITransactionManager *aManager, nsITransaction *aTransaction, bool *aInterrupt) MOZ_OVERRIDE;
-  NS_IMETHOD DidUndo(nsITransactionManager *aManager, nsITransaction *aTransaction, nsresult aUndoResult) MOZ_OVERRIDE;
-  NS_IMETHOD WillRedo(nsITransactionManager *aManager, nsITransaction *aTransaction, bool *aInterrupt) MOZ_OVERRIDE;
-  NS_IMETHOD DidRedo(nsITransactionManager *aManager, nsITransaction *aTransaction, nsresult aRedoResult) MOZ_OVERRIDE;
-  NS_IMETHOD WillBeginBatch(nsITransactionManager *aManager, bool *aInterrupt) MOZ_OVERRIDE;
-  NS_IMETHOD DidBeginBatch(nsITransactionManager *aManager, nsresult aResult) MOZ_OVERRIDE;
-  NS_IMETHOD WillEndBatch(nsITransactionManager *aManager, bool *aInterrupt) MOZ_OVERRIDE;
-  NS_IMETHOD DidEndBatch(nsITransactionManager *aManager, nsresult aResult) MOZ_OVERRIDE;
+    */
+  NS_IMETHOD WillDo(nsITransactionManager *aManager, nsITransaction *aTransaction, bool *aInterrupt) override;
+  NS_IMETHOD DidDo(nsITransactionManager *aManager, nsITransaction *aTransaction, nsresult aDoResult) override;
+  NS_IMETHOD WillUndo(nsITransactionManager *aManager, nsITransaction *aTransaction, bool *aInterrupt) override;
+  NS_IMETHOD DidUndo(nsITransactionManager *aManager, nsITransaction *aTransaction, nsresult aUndoResult) override;
+  NS_IMETHOD WillRedo(nsITransactionManager *aManager, nsITransaction *aTransaction, bool *aInterrupt) override;
+  NS_IMETHOD DidRedo(nsITransactionManager *aManager, nsITransaction *aTransaction, nsresult aRedoResult) override;
+  NS_IMETHOD WillBeginBatch(nsITransactionManager *aManager, bool *aInterrupt) override;
+  NS_IMETHOD DidBeginBatch(nsITransactionManager *aManager, nsresult aResult) override;
+  NS_IMETHOD WillEndBatch(nsITransactionManager *aManager, bool *aInterrupt) override;
+  NS_IMETHOD DidEndBatch(nsITransactionManager *aManager, nsresult aResult) override;
   NS_IMETHOD WillMerge(nsITransactionManager *aManager, nsITransaction *aTopTransaction,
-                       nsITransaction *aTransactionToMerge, bool *aInterrupt) MOZ_OVERRIDE;
+                       nsITransaction *aTransactionToMerge, bool *aInterrupt) override;
   NS_IMETHOD DidMerge(nsITransactionManager *aManager, nsITransaction *aTopTransaction,
                       nsITransaction *aTransactionToMerge,
-                      bool aDidMerge, nsresult aMergeResult) MOZ_OVERRIDE;
+                      bool aDidMerge, nsresult aMergeResult) override;
 
 
-  nsresult   Init(nsIDOMWindow* aDOMWindow);
+  nsresult   Init(nsPIDOMWindowOuter* aDOMWindow);
 
 protected:
 
@@ -75,24 +75,24 @@ protected:
     eStateOff             = false,
     eStateOn              = true
   };
-  
+
   bool          SelectionIsCollapsed();
-  nsresult      UpdateDirtyState(bool aNowDirty);  
+  nsresult      UpdateDirtyState(bool aNowDirty);
   nsresult      UpdateOneCommand(const char* aCommand);
   nsresult      UpdateCommandGroup(const nsAString& aCommandGroup);
 
   already_AddRefed<nsPICommandUpdater> GetCommandUpdater();
-  
+
   nsresult      PrimeUpdateTimer();
   void          TimerCallback();
   nsCOMPtr<nsITimer>  mUpdateTimer;
 
   nsWeakPtr     mDOMWindow;
   nsWeakPtr     mDocShell;
-  int8_t        mDirtyState;  
-  int8_t        mSelectionCollapsed;  
+  int8_t        mDirtyState;
+  int8_t        mSelectionCollapsed;
   bool          mFirstDoOfFirstUndo;
-    
+
 
 };
 

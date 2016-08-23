@@ -2,15 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cr = Components.results;
-const Cu = Components.utils;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cr = Components.results;
+var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/Services.jsm");
 
 // Import common head.
-let (commonFile = do_get_file("../head_common.js", false)) {
+{
+  let commonFile = do_get_file("../head_common.js", false);
   let uri = Services.io.newFileURI(commonFile);
   Services.scriptloader.loadSubScript(uri.spec, this);
 }
@@ -23,7 +24,7 @@ let (commonFile = do_get_file("../head_common.js", false)) {
  * titles, tags and tests that a given search term matches certain pages.
  */
 
-let current_test = 0;
+var current_test = 0;
 
 function AutoCompleteInput(aSearches) {
   this.searches = aSearches;
@@ -43,7 +44,7 @@ AutoCompleteInput.prototype = {
   onSearchComplete: function() {},
   setSelectedIndex: function() {},
   get searchCount() { return this.searches.length; },
-  getSearchAt: function(aIndex) this.searches[aIndex],
+  getSearchAt: function(aIndex) { return this.searches[aIndex]; },
   QueryInterface: XPCOMUtils.generateQI([
     Ci.nsIAutoCompleteInput,
     Ci.nsIAutoCompletePopup,
@@ -54,7 +55,7 @@ function toURI(aSpec) {
   return uri(aSpec);
 }
 
-let appendTags = true;
+var appendTags = true;
 // Helper to turn off tag matching in results
 function ignoreTags()
 {
@@ -104,7 +105,7 @@ function ensure_results(aSearch, aExpected)
         uri = toURI(kURIs[uri]).spec;
         title = kTitles[title];
         if (tags && appendTags)
-          title += " \u2013 " + tags.map(function(aTag) kTitles[aTag]);
+          title += " \u2013 " + tags.map(aTag => kTitles[aTag]);
         print("Checking against expected '" + uri + "', '" + title + "'...");
 
         // Got a match on both uri and title?
@@ -156,12 +157,12 @@ var prefs = Cc["@mozilla.org/preferences-service;1"].
             getService(Ci.nsIPrefBranch);
 
 // Some date not too long ago
-let gDate = new Date(Date.now() - 1000 * 60 * 60) * 1000;
+var gDate = new Date(Date.now() - 1000 * 60 * 60) * 1000;
 // Store the page info for each uri
-let gPages = [];
+var gPages = [];
 
 // Initialization tasks to be run before the next test
-let gNextTestSetupTasks = [];
+var gNextTestSetupTasks = [];
 
 /**
  * Adds a page, and creates various properties for it depending on the
@@ -197,7 +198,7 @@ function addPageBook(aURI, aTitle, aBook, aTags, aKey, aTransitionType, aNoVisit
   gNextTestSetupTasks.push([task_addPageBook, arguments]);
 }
 
-function task_addPageBook(aURI, aTitle, aBook, aTags, aKey, aTransitionType, aNoVisit)
+function* task_addPageBook(aURI, aTitle, aBook, aTags, aKey, aTransitionType, aNoVisit)
 {
   // Add a page entry for the current uri
   gPages[aURI] = [aURI, aBook != undefined ? aBook : aTitle, aTags];
@@ -211,7 +212,7 @@ function task_addPageBook(aURI, aTitle, aBook, aTags, aKey, aTransitionType, aNo
 
   // Add the page and a visit if we need to
   if (!aNoVisit) {
-    yield promiseAddVisits({
+    yield PlacesTestUtils.addVisits({
       uri: uri,
       transition: aTransitionType || TRANSITION_LINK,
       visitDate: gDate,
@@ -229,12 +230,12 @@ function task_addPageBook(aURI, aTitle, aBook, aTags, aKey, aTransitionType, aNo
 
     // Add a keyword to the bookmark if we need to
     if (aKey != undefined)
-      bmsvc.setKeywordForBookmark(bmid, aKey);
+      yield PlacesUtils.keywords.insert({url: uri.spec, keyword: aKey});
 
     // Add tags if we need to
     if (aTags != undefined && aTags.length > 0) {
       // Convert each tag index into the title
-      let tags = aTags.map(function(aTag) kTitles[aTag]);
+      let tags = aTags.map(aTag => kTitles[aTag]);
       tagsvc.tagURI(uri, tags);
       out.push("\ntags=" + tags);
     }
@@ -265,11 +266,11 @@ function run_test() {
   if (func)
     func();
 
-  Task.spawn(function () {
+  Task.spawn(function* () {
     // Iterate over all tasks and execute them
     for (let [, [fn, args]] in Iterator(gNextTestSetupTasks)) {
       yield fn.apply(this, args);
-    };
+    }
 
     // Clean up to allow tests to register more functions.
     gNextTestSetupTasks = [];
@@ -277,9 +278,9 @@ function run_test() {
     // At this point frecency could still be updating due to latest pages
     // updates.  This is not a problem in real life, but autocomplete tests
     // should return reliable resultsets, thus we have to wait.
-    yield promiseAsyncUpdates();
+    yield PlacesTestUtils.promiseAsyncUpdates();
 
-  }).then(function () ensure_results(search, expected),
+  }).then(() => ensure_results(search, expected),
           do_report_unexpected_exception);
 }
 
@@ -291,7 +292,7 @@ function removePages(aURIs)
 
 function do_removePages(aURIs)
 {
-  for each (let uri in aURIs)
+  for (let uri of aURIs)
     histsvc.removePage(toURI(kURIs[uri]));
 }
 
@@ -301,10 +302,10 @@ function markTyped(aURIs, aTitle)
   gNextTestSetupTasks.push([task_markTyped, arguments]);
 }
 
-function task_markTyped(aURIs, aTitle)
+function* task_markTyped(aURIs, aTitle)
 {
   for (let uri of aURIs) {
-    yield promiseAddVisits({
+    yield PlacesTestUtils.addVisits({
       uri: toURI(kURIs[uri]),
       transition: TRANSITION_TYPED,
       title: kTitles[aTitle]

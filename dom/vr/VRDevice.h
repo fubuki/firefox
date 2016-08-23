@@ -1,4 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,11 +21,11 @@
 #include "nsWrapperCache.h"
 
 #include "gfxVR.h"
+#include "VRDeviceProxy.h"
 
 namespace mozilla {
 namespace dom {
-
-class Element;
+class Navigator;
 
 class VRFieldOfViewReadOnly : public nsWrapperCache
 {
@@ -40,31 +41,43 @@ public:
   {
   }
 
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(VRFieldOfViewReadOnly)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(VRFieldOfViewReadOnly)
+
   double UpDegrees() const { return mUpDegrees; }
   double RightDegrees() const { return mRightDegrees; }
   double DownDegrees() const { return mDownDegrees; }
   double LeftDegrees() const { return mLeftDegrees; }
 
+  nsISupports* GetParentObject() const { return mParent; }
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
+
 protected:
+  virtual ~VRFieldOfViewReadOnly() {}
+
   nsCOMPtr<nsISupports> mParent;
+
   double mUpDegrees;
   double mRightDegrees;
   double mDownDegrees;
   double mLeftDegrees;
 };
 
-class VRFieldOfView MOZ_FINAL : public VRFieldOfViewReadOnly
+class VRFieldOfView final : public VRFieldOfViewReadOnly
 {
-  ~VRFieldOfView() {}
 public:
+  VRFieldOfView(nsISupports* aParent, const gfx::VRFieldOfView& aSrc)
+    : VRFieldOfViewReadOnly(aParent,
+                            aSrc.upDegrees, aSrc.rightDegrees,
+                            aSrc.downDegrees, aSrc.leftDegrees)
+  {}
+
   explicit VRFieldOfView(nsISupports* aParent,
                          double aUpDegrees = 0.0, double aRightDegrees = 0.0,
                          double aDownDegrees = 0.0, double aLeftDegrees = 0.0)
-    : VRFieldOfViewReadOnly(aParent, aUpDegrees, aRightDegrees, aDownDegrees, aLeftDegrees)
+    : VRFieldOfViewReadOnly(aParent,
+                            aUpDegrees, aRightDegrees, aDownDegrees, aLeftDegrees)
   {}
-
-  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(VRFieldOfView)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(VRFieldOfView)
 
   static already_AddRefed<VRFieldOfView>
   Constructor(const GlobalObject& aGlobal, const VRFieldOfViewInit& aParams,
@@ -76,8 +89,7 @@ public:
               double aDownDegrees, double aLeftDegrees,
               ErrorResult& aRv);
 
-  nsISupports* GetParentObject() const { return mParent; }
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   void SetUpDegrees(double aVal) { mUpDegrees = aVal; }
   void SetRightDegrees(double aVal) { mRightDegrees = aVal; }
@@ -85,11 +97,11 @@ public:
   void SetLeftDegrees(double aVal) { mLeftDegrees = aVal; }
 };
 
-class VRPositionState MOZ_FINAL : public nsWrapperCache
+class VRPositionState final : public nsWrapperCache
 {
   ~VRPositionState() {}
 public:
-  explicit VRPositionState(nsISupports* aParent, const gfx::VRHMDSensorState& aState);
+  VRPositionState(nsISupports* aParent, const gfx::VRHMDSensorState& aState);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(VRPositionState)
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(VRPositionState)
@@ -109,7 +121,7 @@ public:
   DOMPoint* GetAngularAcceleration();
 
   nsISupports* GetParentObject() const { return mParent; }
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 protected:
   nsCOMPtr<nsISupports> mParent;
@@ -117,23 +129,57 @@ protected:
   double mTimeStamp;
   gfx::VRHMDSensorState mVRState;
 
-  nsRefPtr<DOMPoint> mPosition;
-  nsRefPtr<DOMPoint> mLinearVelocity;
-  nsRefPtr<DOMPoint> mLinearAcceleration;
+  RefPtr<DOMPoint> mPosition;
+  RefPtr<DOMPoint> mLinearVelocity;
+  RefPtr<DOMPoint> mLinearAcceleration;
 
-  nsRefPtr<DOMPoint> mOrientation;
-  nsRefPtr<DOMPoint> mAngularVelocity;
-  nsRefPtr<DOMPoint> mAngularAcceleration;
+  RefPtr<DOMPoint> mOrientation;
+  RefPtr<DOMPoint> mAngularVelocity;
+  RefPtr<DOMPoint> mAngularAcceleration;
+};
+
+class VREyeParameters final : public nsWrapperCache
+{
+public:
+  VREyeParameters(nsISupports* aParent,
+                  const gfx::VRFieldOfView& aMinFOV,
+                  const gfx::VRFieldOfView& aMaxFOV,
+                  const gfx::VRFieldOfView& aRecFOV,
+                  const gfx::Point3D& aEyeTranslation,
+                  const gfx::VRFieldOfView& aCurFOV,
+                  const gfx::IntRect& aRenderRect);
+
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(VREyeParameters)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(VREyeParameters)
+
+  VRFieldOfView* MinimumFieldOfView();
+  VRFieldOfView* MaximumFieldOfView();
+  VRFieldOfView* RecommendedFieldOfView();
+  DOMPoint* EyeTranslation();
+
+  VRFieldOfView* CurrentFieldOfView();
+  DOMRect* RenderRect();
+
+  nsISupports* GetParentObject() const { return mParent; }
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
+protected:
+  ~VREyeParameters() {}
+
+  nsCOMPtr<nsISupports> mParent;
+
+  RefPtr<VRFieldOfView> mMinFOV;
+  RefPtr<VRFieldOfView> mMaxFOV;
+  RefPtr<VRFieldOfView> mRecFOV;
+  RefPtr<DOMPoint> mEyeTranslation;
+  RefPtr<VRFieldOfView> mCurFOV;
+  RefPtr<DOMRect> mRenderRect;
 };
 
 class VRDevice : public nsISupports,
                  public nsWrapperCache
 {
 public:
-  // create new VRDevice objects for all known underlying gfx::vr devices
-  static bool CreateAllKnownVRDevices(nsISupports *aParent, nsTArray<nsRefPtr<VRDevice>>& aDevices);
 
-public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(VRDevice)
 
@@ -142,8 +188,6 @@ public:
   void GetDeviceName(nsAString& aDeviceName) const { aDeviceName = mDeviceName; }
 
   bool IsValid() { return mValid; }
-
-  virtual void Shutdown() { }
 
   nsISupports* GetParentObject() const
   {
@@ -157,22 +201,36 @@ public:
 
   VRDeviceType GetType() const { return mType; }
 
+  static bool RefreshVRDevices(dom::Navigator* aNavigator);
+  static void UpdateVRDevices(nsTArray<RefPtr<VRDevice> >& aDevices,
+                              nsISupports* aParent);
+
+  gfx::VRDeviceProxy *GetHMD() {
+    return mHMD;
+  }
+
 protected:
-  VRDevice(nsISupports* aParent, VRDeviceType aType)
+  VRDevice(nsISupports* aParent,
+           gfx::VRDeviceProxy* aHMD,
+           VRDeviceType aType)
     : mParent(aParent)
+    , mHMD(aHMD)
     , mType(aType)
     , mValid(false)
   {
+    MOZ_COUNT_CTOR(VRDevice);
     mHWID.AssignLiteral("uknown");
     mDeviceId.AssignLiteral("unknown");
     mDeviceName.AssignLiteral("unknown");
   }
 
-  virtual ~VRDevice() {
-    Shutdown();
+  virtual ~VRDevice()
+  {
+    MOZ_COUNT_DTOR(VRDevice);
   }
 
   nsCOMPtr<nsISupports> mParent;
+  RefPtr<gfx::VRDeviceProxy> mHMD;
   nsString mHWID;
   nsString mDeviceId;
   nsString mDeviceName;
@@ -185,48 +243,72 @@ protected:
 class HMDVRDevice : public VRDevice
 {
 public:
-  virtual already_AddRefed<DOMPoint> GetEyeTranslation(VREye aEye) = 0;
+  virtual already_AddRefed<VREyeParameters> GetEyeParameters(VREye aEye) = 0;
 
   virtual void SetFieldOfView(const VRFieldOfViewInit& aLeftFOV,
                               const VRFieldOfViewInit& aRightFOV,
                               double zNear, double zFar) = 0;
-  virtual already_AddRefed<VRFieldOfView> GetCurrentEyeFieldOfView(VREye aEye) = 0;
-  virtual already_AddRefed<VRFieldOfView> GetRecommendedEyeFieldOfView(VREye aEye) = 0;
-  virtual already_AddRefed<VRFieldOfView> GetMaximumEyeFieldOfView(VREye aEye) = 0;
-  virtual already_AddRefed<DOMRect> GetRecommendedEyeRenderRect(VREye aEye) = 0;
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
-
-  void XxxToggleElementVR(Element& aElement);
-
-  gfx::VRHMDInfo *GetHMD() { return mHMD.get(); }
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 protected:
-  HMDVRDevice(nsISupports* aParent, gfx::VRHMDInfo* aHMD)
-    : VRDevice(aParent, VRDevice::HMD)
-    , mHMD(aHMD)
-  { }
+  HMDVRDevice(nsISupports* aParent, gfx::VRDeviceProxy* aHMD)
+    : VRDevice(aParent, aHMD, VRDevice::HMD)
+  {
+    MOZ_COUNT_CTOR_INHERITED(HMDVRDevice, VRDevice);
+  }
 
-  virtual ~HMDVRDevice() { }
+  virtual ~HMDVRDevice()
+  {
+    MOZ_COUNT_DTOR_INHERITED(HMDVRDevice, VRDevice);
+  }
+};
 
-  nsRefPtr<gfx::VRHMDInfo> mHMD;
+class HMDInfoVRDevice : public HMDVRDevice
+{
+public:
+  HMDInfoVRDevice(nsISupports* aParent, gfx::VRDeviceProxy* aHMD);
+  virtual ~HMDInfoVRDevice();
+
+  /* If a field of view that is set to all 0's is passed in,
+   * the recommended field of view for that eye is used.
+   */
+  virtual void SetFieldOfView(const VRFieldOfViewInit& aLeftFOV,
+                              const VRFieldOfViewInit& aRightFOV,
+                              double zNear, double zFar) override;
+  virtual already_AddRefed<VREyeParameters> GetEyeParameters(VREye aEye) override;
 };
 
 class PositionSensorVRDevice : public VRDevice
 {
 public:
-  virtual already_AddRefed<VRPositionState> GetState(double timeOffset) = 0;
-
-  virtual void ZeroSensor() = 0;
-
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual already_AddRefed<VRPositionState> GetState() = 0;
+  virtual already_AddRefed<VRPositionState> GetImmediateState() = 0;
+  virtual void ResetSensor() = 0;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 protected:
-  explicit PositionSensorVRDevice(nsISupports* aParent)
-    : VRDevice(aParent, VRDevice::PositionSensor)
-  { }
+  explicit PositionSensorVRDevice(nsISupports* aParent, gfx::VRDeviceProxy* aHMD)
+    : VRDevice(aParent, aHMD, VRDevice::PositionSensor)
+  {
+    MOZ_COUNT_CTOR_INHERITED(PositionSensorVRDevice, VRDevice);
+  }
 
-  virtual ~PositionSensorVRDevice() { }
+  virtual ~PositionSensorVRDevice()
+  {
+    MOZ_COUNT_DTOR_INHERITED(PositionSensorVRDevice, VRDevice);
+  }
+};
+
+class HMDPositionVRDevice : public PositionSensorVRDevice
+{
+public:
+  HMDPositionVRDevice(nsISupports* aParent, gfx::VRDeviceProxy* aHMD);
+  ~HMDPositionVRDevice();
+
+  virtual already_AddRefed<VRPositionState> GetState() override;
+  virtual already_AddRefed<VRPositionState> GetImmediateState() override;
+  virtual void ResetSensor() override;
 };
 
 } // namespace dom

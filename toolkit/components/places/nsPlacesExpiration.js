@@ -27,6 +27,9 @@ const Cu = Components.utils;
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+  "resource://gre/modules/PlacesUtils.jsm");
+
 ////////////////////////////////////////////////////////////////////////////////
 //// Constants
 
@@ -119,17 +122,17 @@ const ANALYZE_PAGES_THRESHOLD = 100;
 // expiration will be more aggressive, to bring back history to a saner size.
 const OVERLIMIT_PAGES_THRESHOLD = 1000;
 
-const USECS_PER_DAY = 86400000000;
+const MSECS_PER_DAY = 86400000;
 const ANNOS_EXPIRE_POLICIES = [
   { bind: "expire_days",
     type: Ci.nsIAnnotationService.EXPIRE_DAYS,
-    time: 7 * USECS_PER_DAY },
+    time: 7 * 1000 * MSECS_PER_DAY },
   { bind: "expire_weeks",
     type: Ci.nsIAnnotationService.EXPIRE_WEEKS,
-    time: 30 * USECS_PER_DAY },
+    time: 30 * 1000 * MSECS_PER_DAY },
   { bind: "expire_months",
     type: Ci.nsIAnnotationService.EXPIRE_MONTHS,
-    time: 180 * USECS_PER_DAY },
+    time: 180 * 1000 * MSECS_PER_DAY },
 ];
 
 // When we expire we can use these limits:
@@ -194,7 +197,7 @@ const EXPIRATION_QUERIES = {
   },
 
   // Finds orphan URIs in the database.
-  // Notice we won't notify single removed URIs on removeAllPages, so we don't
+  // Notice we won't notify single removed URIs on History.clear(), so we don't
   // run this query in such a case, but just delete URIs.
   // This could run in the middle of adding a visit or bookmark to a new page.
   // In such a case since it is async, could end up expiring the orphan page
@@ -236,6 +239,15 @@ const EXPIRATION_QUERIES = {
             LIMIT :limit_uris
           )`,
     actions: ACTION.CLEAR_HISTORY
+  },
+
+  // Hosts accumulated during the places delete are updated through a trigger
+  // (see nsPlacesTriggers.h).
+  QUERY_UPDATE_HOSTS: {
+    sql: `DELETE FROM moz_updatehosts_temp`,
+    actions: ACTION.CLEAR_HISTORY | ACTION.TIMED | ACTION.TIMED_OVERLIMIT |
+             ACTION.SHUTDOWN_DIRTY | ACTION.IDLE_DIRTY | ACTION.IDLE_DAILY |
+             ACTION.DEBUG
   },
 
   // Expire orphan icons from the database.
@@ -359,8 +371,10 @@ const EXPIRATION_QUERIES = {
   QUERY_SELECT_NOTIFICATIONS: {
     sql: `SELECT url, guid, MAX(visit_date) AS visit_date,
                  MAX(IFNULL(MIN(p_id, 1), MIN(v_id, 0))) AS whole_entry,
-                 expected_results
-          FROM expiration_notify
+                 expected_results,
+                 (SELECT MAX(visit_date) FROM expiration_notify
+                  WHERE url = n.url AND p_id ISNULL) AS most_recent_expired_visit
+          FROM expiration_notify n
           GROUP BY url`,
     actions: ACTION.TIMED | ACTION.TIMED_OVERLIMIT | ACTION.SHUTDOWN_DIRTY |
              ACTION.IDLE_DIRTY | ACTION.IDLE_DAILY | ACTION.DEBUG
@@ -400,6 +414,24 @@ const EXPIRATION_QUERIES = {
   },
 };
 
+/**
+ * Sends a bookmarks notification through the given observers.
+ *
+ * @param observers
+ *        array of nsINavBookmarkObserver objects.
+ * @param notification
+ *        the notification name.
+ * @param args
+ *        array of arguments to pass to the notification.
+ */
+function notify(observers, notification, args = []) {
+  for (let observer of observers) {
+    try {
+      observer[notification](...args);
+    } catch (ex) {}
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //// nsPlacesExpiration definition
 
@@ -430,9 +462,6 @@ function nsPlacesExpiration()
     return db;
   });
 
-  XPCOMUtils.defineLazyServiceGetter(this, "_hsn",
-                                     "@mozilla.org/browser/nav-history-service;1",
-                                     "nsPIPlacesHistoryListenersNotifier");
   XPCOMUtils.defineLazyServiceGetter(this, "_sys",
                                      "@mozilla.org/system-info;1",
                                      "nsIPropertyBag2");
@@ -626,9 +655,27 @@ nsPlacesExpiration.prototype = {
       let guid = row.getResultByName("guid");
       let visitDate = row.getResultByName("visit_date");
       let wholeEntry = row.getResultByName("whole_entry");
+      let mostRecentExpiredVisit = row.getResultByName("most_recent_expired_visit");
+      let reason = Ci.nsINavHistoryObserver.REASON_EXPIRED;
+      let observers = PlacesUtils.history.getObservers();
+
+      if (mostRecentExpiredVisit) {
+        try {
+          let days = parseInt((Date.now() - (mostRecentExpiredVisit / 1000)) / MSECS_PER_DAY);
+          Services.telemetry
+                  .getHistogramById("PLACES_MOST_RECENT_EXPIRED_VISIT_DAYS")
+                  .add(days);
+        } catch (ex) {
+          Components.utils.reportError("Unable to report telemetry.");
+        }
+      }
+
       // Dispatch expiration notifications to history.
-      this._hsn.notifyOnPageExpired(uri, visitDate, wholeEntry, guid,
-                                    Ci.nsINavHistoryObserver.REASON_EXPIRED, 0);
+      if (wholeEntry) {
+        notify(observers, "onDeleteURI", [uri, guid, reason]);
+      } else {
+        notify(observers, "onDeleteVisits", [uri, visitDate, guid, reason, 0]);
+      }
     }
   },
 
@@ -697,7 +744,9 @@ nsPlacesExpiration.prototype = {
     }
     return aNewStatus;
   },
-  get status() this._status,
+  get status() {
+    return this._status;
+  },
 
   _isIdleObserver: false,
   _expireOnIdle: false,
@@ -722,7 +771,9 @@ nsPlacesExpiration.prototype = {
       this._expireOnIdle = aExpireOnIdle;
     return this._expireOnIdle;
   },
-  get expireOnIdle() this._expireOnIdle,
+  get expireOnIdle() {
+    return this._expireOnIdle;
+  },
 
   _loadPrefs: function PEX__loadPrefs() {
     // Get the user's limit, if it was set.
@@ -854,7 +905,8 @@ nsPlacesExpiration.prototype = {
    */
   _finalizeInternalStatements: function PEX__finalizeInternalStatements()
   {
-    for each (let stmt in this._cachedStatements) {
+    for (let queryType in this._cachedStatements) {
+      let stmt = this._cachedStatements[queryType];
       stmt.finalize();
     }
   },
@@ -962,7 +1014,7 @@ nsPlacesExpiration.prototype = {
     if (this._timer)
       this._timer.cancel();
     if (this._shuttingDown)
-      return;
+      return undefined;
     let interval = this.status != STATUS.DIRTY ?
       this._interval * EXPIRE_AGGRESSIVITY_MULTIPLIER : this._interval;
 
@@ -990,5 +1042,5 @@ nsPlacesExpiration.prototype = {
 ////////////////////////////////////////////////////////////////////////////////
 //// Module Registration
 
-let components = [nsPlacesExpiration];
+var components = [nsPlacesExpiration];
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);

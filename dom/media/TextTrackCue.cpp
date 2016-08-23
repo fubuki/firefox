@@ -43,7 +43,7 @@ TextTrackCue::SetDefaultCueSettings()
   mVertical = DirectionSetting::_empty;
 }
 
-TextTrackCue::TextTrackCue(nsPIDOMWindow* aOwnerWindow,
+TextTrackCue::TextTrackCue(nsPIDOMWindowInner* aOwnerWindow,
                            double aStartTime,
                            double aEndTime,
                            const nsAString& aText,
@@ -61,7 +61,7 @@ TextTrackCue::TextTrackCue(nsPIDOMWindow* aOwnerWindow,
   }
 }
 
-TextTrackCue::TextTrackCue(nsPIDOMWindow* aOwnerWindow,
+TextTrackCue::TextTrackCue(nsPIDOMWindowInner* aOwnerWindow,
                            double aStartTime,
                            double aEndTime,
                            const nsAString& aText,
@@ -91,7 +91,7 @@ TextTrackCue::~TextTrackCue()
 nsresult
 TextTrackCue::StashDocument()
 {
-  nsPIDOMWindow* window = GetOwner();
+  nsPIDOMWindowInner* window = GetOwner();
   if (!window) {
     return NS_ERROR_NO_INTERFACE;
   }
@@ -122,7 +122,7 @@ TextTrackCue::GetCueAsHTML()
     ClearOnShutdown(&sParserWrapper);
   }
 
-  nsPIDOMWindow* window = mDocument->GetWindow();
+  nsPIDOMWindowInner* window = mDocument->GetInnerWindow();
   if (!window) {
     return mDocument->CreateDocumentFragment();
   }
@@ -133,7 +133,7 @@ TextTrackCue::GetCueAsHTML()
   if (!div) {
     return mDocument->CreateDocumentFragment();
   }
-  nsRefPtr<DocumentFragment> docFrag = mDocument->CreateDocumentFragment();
+  RefPtr<DocumentFragment> docFrag = mDocument->CreateDocumentFragment();
   nsCOMPtr<nsIDOMNode> throwAway;
   docFrag->AppendChild(div, getter_AddRefs(throwAway));
 
@@ -147,9 +147,9 @@ TextTrackCue::SetTrackElement(HTMLTrackElement* aTrackElement)
 }
 
 JSObject*
-TextTrackCue::WrapObject(JSContext* aCx)
+TextTrackCue::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return VTTCueBinding::Wrap(aCx, this);
+  return VTTCueBinding::Wrap(aCx, this, aGivenProto);
 }
 
 TextTrackRegion*

@@ -26,12 +26,15 @@ extern "C" {
  *        preference type (PREF_STRING, PREF_INT, or PREF_BOOL)
  * @param defPref
  *        preference type (true: default, false: user preference)
+ * @param stickyPref
+ *        default preference marked as a "sticky" pref
  */
 typedef void (*PrefReader)(void       *closure,
                            const char *pref,
                            PrefValue   val,
                            PrefType    type,
-                           bool        defPref);
+                           bool        defPref,
+                           bool        stickyPref);
 
 /* structure fields are private */
 typedef struct PrefParseState {
@@ -51,7 +54,8 @@ typedef struct PrefParseState {
     char       *lbend;      /* line buffer end               */
     char       *vb;         /* value buffer (ptr into lb)    */
     PrefType    vtype;      /* PREF_STRING,INT,BOOL          */
-    bool        fdefault;   /* true if (default) pref     */
+    bool        fdefault;   /* true if (default) pref        */
+    bool        fstickydefault; /* true if (sticky) pref     */
 } PrefParseState;
 
 /**

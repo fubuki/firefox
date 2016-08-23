@@ -21,9 +21,7 @@ namespace mozilla {
 void
 DisplayItemClip::SetTo(const nsRect& aRect)
 {
-  mHaveClipRect = true;
-  mClipRect = aRect;
-  mRoundedClipRects.Clear();
+  SetTo(aRect, nullptr);
 }
 
 void
@@ -31,9 +29,13 @@ DisplayItemClip::SetTo(const nsRect& aRect, const nscoord* aRadii)
 {
   mHaveClipRect = true;
   mClipRect = aRect;
-  mRoundedClipRects.SetLength(1);
-  mRoundedClipRects[0].mRect = aRect;
-  memcpy(mRoundedClipRects[0].mRadii, aRadii, sizeof(nscoord)*8);
+  if (aRadii) {
+    mRoundedClipRects.SetLength(1);
+    mRoundedClipRects[0].mRect = aRect;
+    memcpy(mRoundedClipRects[0].mRadii, aRadii, sizeof(nscoord)*8);
+  } else {
+    mRoundedClipRects.Clear();
+  }
 }
 
 void
@@ -150,7 +152,7 @@ DisplayItemClip::FillIntersectionOfRoundedRectClips(gfxContext* aContext,
   }
 }
 
-TemporaryRef<Path>
+already_AddRefed<Path>
 DisplayItemClip::MakeRoundedRectPath(DrawTarget& aDrawTarget,
                                      int32_t A2D,
                                      const RoundedRect &aRoundRect) const
@@ -325,7 +327,7 @@ DisplayItemClip::ApplyNonRoundedIntersection(const nsRect& aRect) const
   nsRect result = aRect.Intersect(mClipRect);
   for (uint32_t i = 0, iEnd = mRoundedClipRects.Length();
        i < iEnd; ++i) {
-    result.Intersect(mRoundedClipRects[i].mRect);
+    result = result.Intersect(mRoundedClipRects[i].mRect);
   }
   return result;
 }
@@ -401,10 +403,8 @@ DisplayItemClip::GetCommonRoundedRectCount(const DisplayItemClip& aOther,
 void
 DisplayItemClip::AppendRoundedRects(nsTArray<RoundedRect>* aArray, uint32_t aCount) const
 {
-  uint32_t count = std::min(mRoundedClipRects.Length(), size_t(aCount));
-  for (uint32_t i = 0; i < count; ++i) {
-    *aArray->AppendElement() = mRoundedClipRects[i];
-  }
+  size_t count = std::min(mRoundedClipRects.Length(), size_t(aCount));
+  aArray->AppendElements(mRoundedClipRects.Elements(), count);
 }
 
 bool
@@ -473,4 +473,4 @@ DisplayItemClip::ToString() const
   return str;
 }
 
-}
+} // namespace mozilla

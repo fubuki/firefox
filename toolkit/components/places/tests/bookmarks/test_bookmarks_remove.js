@@ -55,7 +55,7 @@ add_task(function* remove_roots_fail() {
   }
 });
 
-add_task(function* remove_normal_folder_undes_root_succeeds() {
+add_task(function* remove_normal_folder_under_root_succeeds() {
   let folder = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.rootGuid,
                                                     type: PlacesUtils.bookmarks.TYPE_FOLDER });
   checkBookmarkObject(folder);
@@ -81,7 +81,6 @@ add_task(function* remove_bookmark() {
   Assert.equal(bm2.type, PlacesUtils.bookmarks.TYPE_BOOKMARK);
   Assert.equal(bm2.url.href, "http://example.com/");
   Assert.equal(bm2.title, "a bookmark");
-  Assert.ok(!("keyword" in bm2));
 });
 
 
@@ -89,27 +88,20 @@ add_task(function* remove_bookmark_orphans() {
   let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                  type: PlacesUtils.bookmarks.TYPE_BOOKMARK,
                                                  url: "http://example.com/",
-                                                 title: "a bookmark",
-                                                 keyword: "tEsT"});
+                                                 title: "a bookmark" });
   checkBookmarkObject(bm1);
   PlacesUtils.annotations.setItemAnnotation((yield PlacesUtils.promiseItemId(bm1.guid)),
                                             "testanno", "testvalue", 0, 0);
 
   let bm2 = yield PlacesUtils.bookmarks.remove(bm1.guid);
   checkBookmarkObject(bm2);
-  // Keywords are case-insensitive.
-  Assert.equal(bm2.keyword, "test");
 
-  // Check there are no orphan keywords or annotations.
+  // Check there are no orphan annotations.
   let conn = yield PlacesUtils.promiseDBConnection();
-  let rows = yield conn.execute(`SELECT * FROM moz_keywords`);
+  let rows = yield conn.execute(`SELECT * FROM moz_items_annos`);
   Assert.equal(rows.length, 0);
-  rows = yield conn.execute(`SELECT * FROM moz_items_annos`);
+  rows = yield conn.execute(`SELECT * FROM moz_anno_attributes`);
   Assert.equal(rows.length, 0);
-  // removeItemAnnotations doesn't remove orphan annotations, cause it likely
-  // relies on expiration to do so.
-  //rows = yield conn.execute(`SELECT * FROM moz_anno_attributes`);
-  //Assert.equal(rows.length, 0);
 });
 
 add_task(function* remove_bookmark_empty_title() {
@@ -125,7 +117,6 @@ add_task(function* remove_bookmark_empty_title() {
   Assert.deepEqual(bm1, bm2);
   Assert.equal(bm2.index, 0);
   Assert.ok(!("title" in bm2));
-  Assert.ok(!("keyword" in bm2));
 });
 
 add_task(function* remove_folder() {
@@ -144,7 +135,6 @@ add_task(function* remove_folder() {
   Assert.equal(bm2.type, PlacesUtils.bookmarks.TYPE_FOLDER);
   Assert.equal(bm2.title, "a folder");
   Assert.ok(!("url" in bm2));
-  Assert.ok(!("keyword" in bm2));
 });
 
 add_task(function* test_nested_contents_removed() {
@@ -161,6 +151,7 @@ add_task(function* test_nested_contents_removed() {
   Assert.strictEqual((yield PlacesUtils.bookmarks.fetch(folder2.guid)), null);
   Assert.strictEqual((yield PlacesUtils.bookmarks.fetch(sep.guid)), null);
 });
+
 add_task(function* remove_folder_empty_title() {
   let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
                                                  type: PlacesUtils.bookmarks.TYPE_FOLDER,
@@ -190,7 +181,17 @@ add_task(function* remove_separator() {
   Assert.equal(bm2.type, PlacesUtils.bookmarks.TYPE_SEPARATOR);
   Assert.ok(!("url" in bm2));
   Assert.ok(!("title" in bm2));
-  Assert.ok(!("keyword" in bm2));
+});
+
+add_task(function* test_nested_content_fails_when_not_allowed() {
+  let folder1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
+                                                     type: PlacesUtils.bookmarks.TYPE_FOLDER,
+                                                     title: "a folder" });
+  let folder2 = yield PlacesUtils.bookmarks.insert({ parentGuid: folder1.guid,
+                                                     type: PlacesUtils.bookmarks.TYPE_FOLDER,
+                                                     title: "a folder" });
+  Assert.rejects(PlacesUtils.bookmarks.remove(folder1, {preventRemovalOfNonEmptyFolders: true}),
+                 /Cannot remove a non-empty folder./);
 });
 
 function run_test() {

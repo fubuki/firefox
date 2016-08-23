@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,47 +14,72 @@
 namespace mozilla {
 namespace dom {
 
+class FileSystemCreateDirectoryParams;
 class Promise;
 
-class CreateDirectoryTask MOZ_FINAL
-  : public FileSystemTaskBase
+class CreateDirectoryTaskChild final : public FileSystemTaskChildBase
 {
 public:
-  CreateDirectoryTask(FileSystemBase* aFileSystem,
-                      const nsAString& aPath,
-                      ErrorResult& aRv);
-  CreateDirectoryTask(FileSystemBase* aFileSystem,
-                      const FileSystemCreateDirectoryParams& aParam,
-                      FileSystemRequestParent* aParent);
+  static already_AddRefed<CreateDirectoryTaskChild>
+  Create(FileSystemBase* aFileSystem,
+         nsIFile* aTargetPath,
+         ErrorResult& aRv);
 
   virtual
-  ~CreateDirectoryTask();
+  ~CreateDirectoryTaskChild();
 
   already_AddRefed<Promise>
   GetPromise();
 
   virtual void
-  GetPermissionAccessType(nsCString& aAccess) const MOZ_OVERRIDE;
+  GetPermissionAccessType(nsCString& aAccess) const override;
+
+  virtual void
+  HandlerCallback() override;
 
 protected:
   virtual FileSystemParams
-  GetRequestParams(const nsString& aFileSystem) const MOZ_OVERRIDE;
-
-  virtual FileSystemResponseValue
-  GetSuccessRequestResult() const MOZ_OVERRIDE;
+  GetRequestParams(const nsString& aSerializedDOMPath,
+                   ErrorResult& aRv) const override;
 
   virtual void
-  SetSuccessRequestResult(const FileSystemResponseValue& aValue) MOZ_OVERRIDE;
+  SetSuccessRequestResult(const FileSystemResponseValue& aValue,
+                          ErrorResult& aRv) override;
 
-  virtual nsresult
-  Work() MOZ_OVERRIDE;
-
-  virtual void
-  HandlerCallback() MOZ_OVERRIDE;
 
 private:
-  nsRefPtr<Promise> mPromise;
-  nsString mTargetRealPath;
+  CreateDirectoryTaskChild(FileSystemBase* aFileSystem,
+                           nsIFile* aTargetPath);
+
+  RefPtr<Promise> mPromise;
+  nsCOMPtr<nsIFile> mTargetPath;
+};
+
+class CreateDirectoryTaskParent final : public FileSystemTaskParentBase
+{
+public:
+  static already_AddRefed<CreateDirectoryTaskParent>
+  Create(FileSystemBase* aFileSystem,
+         const FileSystemCreateDirectoryParams& aParam,
+         FileSystemRequestParent* aParent,
+         ErrorResult& aRv);
+
+  virtual void
+  GetPermissionAccessType(nsCString& aAccess) const override;
+
+protected:
+  virtual nsresult
+  IOWork() override;
+
+  virtual FileSystemResponseValue
+  GetSuccessRequestResult(ErrorResult& aRv) const override;
+
+private:
+  CreateDirectoryTaskParent(FileSystemBase* aFileSystem,
+                            const FileSystemCreateDirectoryParams& aParam,
+                            FileSystemRequestParent* aParent);
+
+  nsCOMPtr<nsIFile> mTargetPath;
 };
 
 } // namespace dom

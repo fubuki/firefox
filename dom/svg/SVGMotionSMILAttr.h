@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,7 +20,7 @@ namespace mozilla {
 
 namespace dom {
 class SVGAnimationElement;
-}
+} // namespace dom
 
 /**
  * SVGMotionSMILAttr: Implements the nsISMILAttr interface for SMIL animations
@@ -38,11 +39,11 @@ public:
   virtual nsresult ValueFromString(const nsAString& aStr,
                                    const dom::SVGAnimationElement* aSrcElement,
                                    nsSMILValue& aValue,
-                                   bool& aPreventCachingOfSandwich) const MOZ_OVERRIDE;
-  virtual nsSMILValue GetBaseValue() const MOZ_OVERRIDE;
-  virtual nsresult    SetAnimValue(const nsSMILValue& aValue) MOZ_OVERRIDE;
-  virtual void        ClearAnimValue() MOZ_OVERRIDE;
-  virtual const nsIContent* GetTargetNode() const MOZ_OVERRIDE;
+                                   bool& aPreventCachingOfSandwich) const override;
+  virtual nsSMILValue GetBaseValue() const override;
+  virtual nsresult    SetAnimValue(const nsSMILValue& aValue) override;
+  virtual void        ClearAnimValue() override;
+  virtual const nsIContent* GetTargetNode() const override;
 
 protected:
   // Raw pointers are OK here because this SVGMotionSMILAttr is both

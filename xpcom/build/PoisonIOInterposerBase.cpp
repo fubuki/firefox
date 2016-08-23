@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 ci et: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,8 +38,9 @@ namespace {
 struct DebugFilesAutoLockTraits
 {
   typedef PRLock* type;
-  const static type empty() { return nullptr; }
-  const static void release(type aL) { PR_Unlock(aL); }
+  typedef const PRLock* const_type;
+  static const_type empty() { return nullptr; }
+  static void release(type aL) { PR_Unlock(aL); }
 };
 
 class DebugFilesAutoLock : public Scoped<DebugFilesAutoLockTraits>
@@ -206,7 +207,7 @@ getDebugFileIDs()
 }
 
 
-} // anonymous namespace
+} // namespace
 
 namespace mozilla {
 

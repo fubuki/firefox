@@ -6,6 +6,8 @@
 #ifndef nsCoreUtils_h_
 #define nsCoreUtils_h_
 
+#include "mozilla/EventForwards.h"
+#include "nsIAccessibleEvent.h"
 #include "nsIContent.h"
 #include "nsIDocument.h" // for GetShell()
 #include "nsIPresShell.h"
@@ -28,6 +30,11 @@ class nsCoreUtils
 {
 public:
   /**
+   * Return true if the given node is a label of a control.
+   */
+  static bool IsLabelWithControl(nsIContent *aContent);
+
+  /**
    * Return true if the given node has registered click, mousedown or mouseup
    * event listeners.
    */
@@ -49,7 +56,7 @@ public:
   /**
    * Send mouse event to the given element.
    *
-   * @param aEventType   [in] an event type (see BasicEvents.h for constants)
+   * @param aMessage     [in] an event message (see EventForwards.h)
    * @param aX           [in] x coordinate in dev pixels
    * @param aY           [in] y coordinate in dev pixels
    * @param aContent     [in] the element
@@ -57,14 +64,15 @@ public:
    * @param aPresShell   [in] the presshell for the element
    * @param aRootWidget  [in] the root widget of the element
    */
-  static void DispatchMouseEvent(uint32_t aEventType, int32_t aX, int32_t aY,
+  static void DispatchMouseEvent(mozilla::EventMessage aMessage,
+                                 int32_t aX, int32_t aY,
                                  nsIContent *aContent, nsIFrame *aFrame,
                                  nsIPresShell *aPresShell, nsIWidget *aRootWidget);
 
   /**
    * Send a touch event with a single touch point to the given element.
    *
-   * @param aEventType   [in] an event type (see BasicEvents.h for constants)
+   * @param aMessage     [in] an event message (see EventForwards.h)
    * @param aX           [in] x coordinate in dev pixels
    * @param aY           [in] y coordinate in dev pixels
    * @param aContent     [in] the element
@@ -72,7 +80,8 @@ public:
    * @param aPresShell   [in] the presshell for the element
    * @param aRootWidget  [in] the root widget of the element
    */
-  static void DispatchTouchEvent(uint32_t aEventType, int32_t aX, int32_t aY,
+  static void DispatchTouchEvent(mozilla::EventMessage aMessage,
+                                 int32_t aX, int32_t aY,
                                  nsIContent* aContent, nsIFrame* aFrame,
                                  nsIPresShell* aPresShell, nsIWidget* aRootWidget);
 
@@ -98,17 +107,6 @@ public:
    * Return DOM node for the given DOM point.
    */
   static nsINode *GetDOMNodeFromDOMPoint(nsINode *aNode, uint32_t aOffset);
-
-  /**
-   * Return the nsIContent* to check for ARIA attributes on -- this may not
-   * always be the DOM node for the accessible. Specifically, for doc
-   * accessibles, it is not the document node, but either the root element or
-   * <body> in HTML.
-   *
-   * @param aNode  [in] DOM node for the accessible that may be affected by ARIA
-   * @return        the nsIContent which may have ARIA markup
-   */
-  static nsIContent* GetRoleContent(nsINode *aNode);
 
   /**
    * Is the first passed in node an ancestor of the second?
@@ -223,7 +221,7 @@ public:
    * attribute or wrong value then false is returned.
    */
   static bool GetUIntAttr(nsIContent *aContent, nsIAtom *aAttr,
-                            int32_t *aUInt);
+                          int32_t* aUInt);
 
   /**
    * Returns language for the given node.
@@ -311,6 +309,21 @@ public:
     return aChar == ' ' || aChar == '\n' ||
       aChar == '\r' || aChar == '\t' || aChar == 0xa0;
   }
+
+  /*
+   * Return true if there are any observers of accessible events.
+   */
+  static bool AccEventObserversExist();
+
+  /**
+   * Notify accessible event observers of an event.
+   */
+  static void DispatchAccEvent(RefPtr<nsIAccessibleEvent> aEvent);
+
+  /**
+   * Return a role attribute on XBL bindings of the element.
+   */
+  static void XBLBindingRole(const nsIContent* aEl, nsAString& aRole);
 };
 
 #endif

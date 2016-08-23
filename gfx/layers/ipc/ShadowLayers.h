@@ -11,7 +11,8 @@
 #include <stddef.h>                     // for size_t
 #include <stdint.h>                     // for uint64_t
 #include "gfxTypes.h"
-#include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
+#include "mozilla/Attributes.h"         // for override
+#include "mozilla/gfx/Rect.h"
 #include "mozilla/WidgetUtils.h"        // for ScreenRotation
 #include "mozilla/dom/ScreenOrientation.h"  // for ScreenOrientation
 #include "mozilla/ipc/SharedMemory.h"   // for SharedMemory, etc
@@ -20,42 +21,25 @@
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
- 
-struct nsIntPoint;
-struct nsIntRect;
+#include "nsIWidget.h"
+#include <vector>
 
 namespace mozilla {
 namespace layers {
 
-class ClientTiledLayerBuffer;
-class CanvasClient;
-class CanvasLayerComposite;
-class CanvasSurface;
-class ColorLayerComposite;
-class CompositableChild;
-class ContainerLayerComposite;
-class ContentClient;
-class ContentClientRemote;
 class EditReply;
-class ImageClient;
-class ImageLayerComposite;
+class FixedSizeSmallShmemSectionAllocator;
+class ImageContainer;
 class Layer;
-class OptionalThebesBuffer;
 class PLayerChild;
 class PLayerTransactionChild;
-class PLayerTransactionParent;
 class LayerTransactionChild;
-class RefLayerComposite;
 class ShadowableLayer;
-class ShmemTextureClient;
 class SurfaceDescriptor;
 class TextureClient;
-class PaintedLayerComposite;
 class ThebesBuffer;
 class ThebesBufferData;
-class TiledLayerComposer;
 class Transaction;
-
 
 /**
  * We want to share layer trees across thread contexts and address
@@ -130,26 +114,34 @@ class Transaction;
  * from the content thread. (See CompositableForwarder.h and ImageBridgeChild.h)
  */
 
-class ShadowLayerForwarder : public CompositableForwarder
+class ShadowLayerForwarder final : public CompositableForwarder
+                                 , public ShmemAllocator
+                                 , public LegacySurfaceDescriptorAllocator
 {
-  friend class ContentClientIncremental;
   friend class ClientLayerManager;
 
 public:
   virtual ~ShadowLayerForwarder();
 
+  virtual ShmemAllocator* AsShmemAllocator() override { return this; }
+
+  virtual ShadowLayerForwarder* AsLayerForwarder() override { return this; }
+
+  virtual LegacySurfaceDescriptorAllocator*
+  AsLegacySurfaceDescriptorAllocator() override { return this; }
+
+  FixedSizeSmallShmemSectionAllocator* GetTileLockAllocator();
+
   /**
    * Setup the IPDL actor for aCompositable to be part of layers
    * transactions.
    */
-  void Connect(CompositableClient* aCompositable) MOZ_OVERRIDE;
+  virtual void Connect(CompositableClient* aCompositable,
+                       ImageContainer* aImageContainer) override;
 
   virtual PTextureChild* CreateTexture(const SurfaceDescriptor& aSharedData,
-                                       TextureFlags aFlags) MOZ_OVERRIDE;
-
-  virtual void CreatedIncrementalBuffer(CompositableClient* aCompositable,
-                                        const TextureInfo& aTextureInfo,
-                                        const nsIntRect& aBufferRect) MOZ_OVERRIDE;
+                                       LayersBackend aLayersBackend,
+                                       TextureFlags aFlags) override;
 
   /**
    * Adds an edit in the layers transaction in order to attach
@@ -174,9 +166,9 @@ public:
    * Begin recording a transaction to be forwarded atomically to a
    * LayerManagerComposite.
    */
-  void BeginTransaction(const nsIntRect& aTargetBounds,
+  void BeginTransaction(const gfx::IntRect& aTargetBounds,
                         ScreenRotation aRotation,
-                        mozilla::dom::ScreenOrientation aOrientation);
+                        mozilla::dom::ScreenOrientationInternal aOrientation);
 
   /**
    * The following methods may only be called after BeginTransaction()
@@ -232,23 +224,17 @@ public:
    * See CompositableForwarder::UseTiledLayerBuffer
    */
   virtual void UseTiledLayerBuffer(CompositableClient* aCompositable,
-                                   const SurfaceDescriptorTiles& aTileLayerDescriptor) MOZ_OVERRIDE;
+                                   const SurfaceDescriptorTiles& aTileLayerDescriptor) override;
 
-  /**
-   * Notify the compositor that a compositable will be updated asynchronously
-   * through ImageBridge, using an ID to connect the protocols on the
-   * compositor side.
-   */
-  void AttachAsyncCompositable(PLayerTransactionChild* aLayer, uint64_t aID);
+  virtual bool DestroyInTransaction(PTextureChild* aTexture, bool synchronously) override;
+  virtual bool DestroyInTransaction(PCompositableChild* aCompositable, bool synchronously) override;
 
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
-                                             TextureClient* aTexture) MOZ_OVERRIDE;
+                                             TextureClient* aTexture) override;
 
   virtual void RemoveTextureFromCompositableAsync(AsyncTransactionTracker* aAsyncTransactionTracker,
                                                   CompositableClient* aCompositable,
-                                                  TextureClient* aTexture) MOZ_OVERRIDE;
-
-  virtual void RemoveTexture(TextureClient* aTexture) MOZ_OVERRIDE;
+                                                  TextureClient* aTexture) override;
 
   /**
    * Communicate to the compositor that aRegion in the texture identified by aLayer
@@ -256,43 +242,21 @@ public:
    */
   virtual void UpdateTextureRegion(CompositableClient* aCompositable,
                                    const ThebesBufferData& aThebesBufferData,
-                                   const nsIntRegion& aUpdatedRegion) MOZ_OVERRIDE;
-
-  virtual void UpdateTextureIncremental(CompositableClient* aCompositable,
-                                        TextureIdentifier aTextureId,
-                                        SurfaceDescriptor& aDescriptor,
-                                        const nsIntRegion& aUpdatedRegion,
-                                        const nsIntRect& aBufferRect,
-                                        const nsIntPoint& aBufferRotation) MOZ_OVERRIDE;
+                                   const nsIntRegion& aUpdatedRegion) override;
 
   /**
-   * Communicate the picture rect of an image to the compositor
+   * See CompositableForwarder::UseTextures
    */
-  void UpdatePictureRect(CompositableClient* aCompositable,
-                         const nsIntRect& aRect) MOZ_OVERRIDE;
-
-  /**
-   * See CompositableForwarder::UpdatedTexture
-   */
-  virtual void UpdatedTexture(CompositableClient* aCompositable,
-                              TextureClient* aTexture,
-                              nsIntRegion* aRegion) MOZ_OVERRIDE;
-
-  /**
-   * See CompositableForwarder::UseTexture
-   */
-  virtual void UseTexture(CompositableClient* aCompositable,
-                          TextureClient* aClient) MOZ_OVERRIDE;
+  virtual void UseTextures(CompositableClient* aCompositable,
+                           const nsTArray<TimedTextureClient>& aTextures) override;
   virtual void UseComponentAlphaTextures(CompositableClient* aCompositable,
                                          TextureClient* aClientOnBlack,
-                                         TextureClient* aClientOnWhite) MOZ_OVERRIDE;
+                                         TextureClient* aClientOnWhite) override;
 #ifdef MOZ_WIDGET_GONK
   virtual void UseOverlaySource(CompositableClient* aCompositable,
-                                const OverlaySource& aOverlay) MOZ_OVERRIDE;
+                                const OverlaySource& aOverlay,
+                                const nsIntRect& aPictureRect) override;
 #endif
-  virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
-                               PTextureChild* aTexture,
-                               const FenceHandle& aFence) MOZ_OVERRIDE;
 
   /**
    * End the current transaction and forward it to LayerManagerComposite.
@@ -313,13 +277,21 @@ public:
    */
   void SetShadowManager(PLayerTransactionChild* aShadowManager);
 
+  /**
+   * Layout calls here to cache current plugin widget configuration
+   * data. We ship this across with the rest of the layer updates when
+   * we update. Chrome handles applying these changes.
+   */
+  void StorePluginWidgetConfigurations(const nsTArray<nsIWidget::Configuration>&
+                                       aConfigurations);
+
   void StopReceiveAsyncParentMessge();
 
   void ClearCachedResources();
 
   void Composite();
 
-  virtual void SendPendingAsyncMessges() MOZ_OVERRIDE;
+  virtual void SendPendingAsyncMessges() override;
 
   /**
    * True if this is forwarding to a LayerManagerComposite.
@@ -362,17 +334,22 @@ public:
    *   buffer, and the double-buffer pair is gone.
    */
 
-  // ISurfaceAllocator
+
   virtual bool AllocUnsafeShmem(size_t aSize,
                                 mozilla::ipc::SharedMemory::SharedMemoryType aType,
-                                mozilla::ipc::Shmem* aShmem) MOZ_OVERRIDE;
+                                mozilla::ipc::Shmem* aShmem) override;
   virtual bool AllocShmem(size_t aSize,
                           mozilla::ipc::SharedMemory::SharedMemoryType aType,
-                          mozilla::ipc::Shmem* aShmem) MOZ_OVERRIDE;
-  virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) MOZ_OVERRIDE;
+                          mozilla::ipc::Shmem* aShmem) override;
+  virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) override;
 
-  virtual bool IPCOpen() const MOZ_OVERRIDE;
-  virtual bool IsSameProcess() const MOZ_OVERRIDE;
+  virtual bool IPCOpen() const override;
+
+  virtual bool IsSameProcess() const override;
+
+  virtual MessageLoop* GetMessageLoop() const override { return mMessageLoop; }
+
+  base::ProcessId GetParentPid() const;
 
   /**
    * Construct a shadow of |aLayer| on the "other side", at the
@@ -385,7 +362,23 @@ public:
    */
   void SetIsFirstPaint() { mIsFirstPaint = true; }
 
+  void SetPaintSyncId(int32_t aSyncId) { mPaintSyncId = aSyncId; }
+
   static void PlatformSyncBeforeUpdate();
+
+  virtual bool AllocSurfaceDescriptor(const gfx::IntSize& aSize,
+                                      gfxContentType aContent,
+                                      SurfaceDescriptor* aBuffer) override;
+
+  virtual bool AllocSurfaceDescriptorWithCaps(const gfx::IntSize& aSize,
+                                              gfxContentType aContent,
+                                              uint32_t aCaps,
+                                              SurfaceDescriptor* aBuffer) override;
+
+  virtual void DestroySurfaceDescriptor(SurfaceDescriptor* aSurface) override;
+
+  // Returns true if aSurface wraps a Shmem.
+  static bool IsShmem(SurfaceDescriptor* aSurface);
 
 protected:
   ShadowLayerForwarder();
@@ -403,10 +396,14 @@ protected:
 private:
 
   Transaction* mTxn;
-  std::vector<AsyncChildMessageData> mPendingAsyncMessages;
+  MessageLoop* mMessageLoop;
+  std::vector<CompositableOperation> mPendingAsyncMessages;
   DiagnosticTypes mDiagnosticTypes;
   bool mIsFirstPaint;
   bool mWindowOverlayChanged;
+  int32_t mPaintSyncId;
+  InfallibleTArray<PluginWindowData> mPluginWindowData;
+  FixedSizeSmallShmemSectionAllocator* mSectionAllocator;
 };
 
 class CompositableClient;
@@ -441,6 +438,54 @@ protected:
   ShadowableLayer() : mShadow(nullptr) {}
 
   PLayerChild* mShadow;
+};
+
+/// A simple shmem section allocator that can only allocate small
+/// fixed size elements (only intended to be used to store tile
+/// copy-on-write locks for now).
+class FixedSizeSmallShmemSectionAllocator final : public ShmemSectionAllocator
+{
+public:
+  enum AllocationStatus
+  {
+    STATUS_ALLOCATED,
+    STATUS_FREED
+  };
+
+  struct ShmemSectionHeapHeader
+  {
+    Atomic<uint32_t> mTotalBlocks;
+    Atomic<uint32_t> mAllocatedBlocks;
+  };
+
+  struct ShmemSectionHeapAllocation
+  {
+    Atomic<uint32_t> mStatus;
+    uint32_t mSize;
+  };
+
+  explicit FixedSizeSmallShmemSectionAllocator(ClientIPCAllocator* aShmProvider);
+
+  ~FixedSizeSmallShmemSectionAllocator();
+
+  virtual bool AllocShmemSection(uint32_t aSize, ShmemSection* aShmemSection) override;
+
+  virtual void DeallocShmemSection(ShmemSection& aShmemSection) override;
+
+  virtual void MemoryPressure() override { ShrinkShmemSectionHeap(); }
+
+  // can be called on the compositor process.
+  static void FreeShmemSection(ShmemSection& aShmemSection);
+
+  void ShrinkShmemSectionHeap();
+
+  ShmemAllocator* GetShmAllocator() { return mShmProvider->AsShmemAllocator(); }
+
+  bool IPCOpen() const { return mShmProvider->IPCOpen(); }
+
+protected:
+  std::vector<mozilla::ipc::Shmem> mUsedShmems;
+  ClientIPCAllocator* mShmProvider;
 };
 
 } // namespace layers

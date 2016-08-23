@@ -12,7 +12,7 @@
 #include "ImageContainer.h"
 #include "nsAutoPtr.h"
 #include "mozilla/layers/SharedRGBImage.h"
- 
+
 #include "MPAPI.h"
 
 class nsACString;
@@ -25,10 +25,6 @@ namespace layers {
 class ImageContainer;
 }
 
-namespace dom {
-class TimeRanges;
-}
- 
 class AndroidMediaReader : public MediaDecoderReader
 {
   nsCString mType;
@@ -39,40 +35,22 @@ class AndroidMediaReader : public MediaDecoderReader
   nsIntSize mInitialFrame;
   int64_t mVideoSeekTimeUs;
   int64_t mAudioSeekTimeUs;
-  nsRefPtr<VideoData> mLastVideoFrame;
+  RefPtr<VideoData> mLastVideoFrame;
+  MozPromiseHolder<MediaDecoderReader::SeekPromise> mSeekPromise;
+  MozPromiseRequestHolder<MediaDecoderReader::MediaDataPromise> mSeekRequest;
 public:
   AndroidMediaReader(AbstractMediaDecoder* aDecoder,
                      const nsACString& aContentType);
 
-  virtual nsresult Init(MediaDecoderReader* aCloneDonor);
-  virtual nsresult ResetDecode();
+  nsresult ResetDecode() override;
 
-  virtual bool DecodeAudioData();
-  virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
-                                int64_t aTimeThreshold);
+  bool DecodeAudioData() override;
+  bool DecodeVideoFrame(bool &aKeyframeSkip, int64_t aTimeThreshold) override;
 
-  virtual bool HasAudio()
-  {
-    return mHasAudio;
-  }
+  nsresult ReadMetadata(MediaInfo* aInfo, MetadataTags** aTags) override;
+  RefPtr<SeekPromise> Seek(SeekTarget aTarget, int64_t aEndTime) override;
 
-  virtual bool HasVideo()
-  {
-    return mHasVideo;
-  }
-
-  virtual bool IsMediaSeekable()
-  {
-    // not used
-    return true;
-  }
-
-  virtual nsresult ReadMetadata(MediaInfo* aInfo,
-                                MetadataTags** aTags);
-  virtual nsRefPtr<SeekPromise>
-  Seek(int64_t aTime, int64_t aEndTime) MOZ_OVERRIDE;
-
-  virtual nsRefPtr<ShutdownPromise> Shutdown() MOZ_OVERRIDE;
+  RefPtr<ShutdownPromise> Shutdown() override;
 
   class ImageBufferCallback : public MPAPI::BufferCallback {
     typedef mozilla::layers::Image Image;
@@ -80,14 +58,14 @@ public:
   public:
     ImageBufferCallback(mozilla::layers::ImageContainer *aImageContainer);
     void *operator()(size_t aWidth, size_t aHeight,
-                     MPAPI::ColorFormat aColorFormat) MOZ_OVERRIDE;
+                     MPAPI::ColorFormat aColorFormat) override;
     already_AddRefed<Image> GetImage();
 
   private:
     uint8_t *CreateI420Image(size_t aWidth, size_t aHeight);
 
     mozilla::layers::ImageContainer *mImageContainer;
-    nsRefPtr<Image> mImage;
+    RefPtr<Image> mImage;
   };
 
 };

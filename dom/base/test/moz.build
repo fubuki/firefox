@@ -10,16 +10,12 @@ XPCSHELL_TESTS_MANIFESTS += [
 ]
 
 GeckoCppUnitTests([
-    'TestCSPParser',
     'TestGetURL',
     'TestNativeXMLHttpRequest',
     'TestPlainTextSerializer',
 ])
 
 MOCHITEST_MANIFESTS += [
-    'chrome/mochitest.ini',
-    'csp/mochitest.ini',
-    'mixedcontentblocker/mochitest.ini',
     'mochitest.ini',
     'websocket_hybi/mochitest.ini',
 ]
@@ -34,7 +30,19 @@ if CONFIG['MOZ_CHILD_PERMISSIONS']:
 MOCHITEST_CHROME_MANIFESTS += [
     'chrome.ini',
     'chrome/chrome.ini',
-    'csp/chrome.ini',
 ]
 
-BROWSER_CHROME_MANIFESTS += ['browser.ini']
+BROWSER_CHROME_MANIFESTS += [
+    'browser.ini',
+]
+
+TEST_DIRS += [
+    'gtest',
+]
+
+TEST_HARNESS_FILES.testing.mochitest.tests.dom.base.test.chrome += [
+    'chrome/bug421622-referer.sjs',
+    'chrome/nochrome_bug765993.html',
+    'chrome/nochrome_bug765993.js',
+    'chrome/nochrome_bug765993.js^headers^',
+]

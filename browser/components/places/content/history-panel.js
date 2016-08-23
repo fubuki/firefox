@@ -20,7 +20,7 @@ function HistorySidebarInit()
 
   if (gHistoryGrouping == "site")
     document.getElementById("bysite").setAttribute("checked", "true");
-  else if (gHistoryGrouping == "visited") 
+  else if (gHistoryGrouping == "visited")
     document.getElementById("byvisited").setAttribute("checked", "true");
   else if (gHistoryGrouping == "lastvisited")
     document.getElementById("bylastvisited").setAttribute("checked", "true");
@@ -28,7 +28,7 @@ function HistorySidebarInit()
     document.getElementById("bydayandsite").setAttribute("checked", "true");
   else
     document.getElementById("byday").setAttribute("checked", "true");
-  
+
   searchHistory("");
 }
 
@@ -94,6 +94,5 @@ function searchHistory(aInput)
 }
 
 window.addEventListener("SidebarFocused",
-                        function()
-                          gSearchBox.focus(),
+                        () => gSearchBox.focus(),
                         false);

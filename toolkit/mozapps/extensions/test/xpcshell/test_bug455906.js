@@ -3,14 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const Cr = Components.results;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
+var Cr = Components.results;
 
 const URI_EXTENSION_BLOCKLIST_DIALOG = "chrome://mozapps/content/extensions/blocklist.xul";
 
 Cu.import("resource://testing-common/httpd.js");
+Cu.import("resource://testing-common/MockRegistrar.jsm");
 var gTestserver = new HttpServer();
 gTestserver.start(-1);
 gPort = gTestserver.identity.primaryPort;
@@ -127,18 +128,10 @@ var PluginHost = {
     if (iid.equals(Ci.nsIPluginHost)
      || iid.equals(Ci.nsISupports))
       return this;
-  
+
     throw Components.results.NS_ERROR_NO_INTERFACE;
   }
 }
-
-var PluginHostFactory = {
-  createInstance: function (outer, iid) {
-    if (outer != null)
-      throw Components.results.NS_ERROR_NO_AGGREGATION;
-    return PluginHost.QueryInterface(iid);
-  }
-};
 
 // Don't need the full interface, attempts to call other methods will just
 // throw which is just fine
@@ -168,20 +161,8 @@ var WindowWatcher = {
   }
 }
 
-var WindowWatcherFactory = {
-  createInstance: function createInstance(outer, iid) {
-    if (outer != null)
-      throw Components.results.NS_ERROR_NO_AGGREGATION;
-    return WindowWatcher.QueryInterface(iid);
-  }
-};
-var registrar = Components.manager.QueryInterface(Components.interfaces.nsIComponentRegistrar);
-registrar.registerFactory(Components.ID("{721c3e73-969e-474b-a6dc-059fd288c428}"),
-                          "Fake Plugin Host",
-                          "@mozilla.org/plugin/host;1", PluginHostFactory);
-registrar.registerFactory(Components.ID("{1dfeb90a-2193-45d5-9cb8-864928b2af55}"),
-                          "Fake Window Watcher",
-                          "@mozilla.org/embedcomp/window-watcher;1", WindowWatcherFactory);
+MockRegistrar.register("@mozilla.org/plugin/host;1", PluginHost);
+MockRegistrar.register("@mozilla.org/embedcomp/window-watcher;1", WindowWatcher);
 
 function create_addon(addon) {
   var installrdf = "<?xml version=\"1.0\"?>\n" +
@@ -258,7 +239,7 @@ function run_test() {
 
 // Before every main test this is the state the add-ons are meant to be in
 function check_initial_state(callback) {
-  AddonManager.getAddonsByIDs([a.id for each (a in ADDONS)], function(addons) {
+  AddonManager.getAddonsByIDs(ADDONS.map(a => a.id), function(addons) {
     do_check_eq(check_addon_state(addons[0]), "true,false,false");
     do_check_eq(check_addon_state(addons[1]), "false,false,false");
     do_check_eq(check_addon_state(addons[2]), "false,false,false");
@@ -266,7 +247,7 @@ function check_initial_state(callback) {
     do_check_eq(check_addon_state(addons[4]), "false,false,false");
     do_check_eq(check_addon_state(addons[5]), "false,false,true");
     do_check_eq(check_addon_state(addons[6]), "false,false,true");
-  
+
     do_check_eq(check_plugin_state(PLUGINS[0]), "true,false");
     do_check_eq(check_plugin_state(PLUGINS[1]), "false,false");
     do_check_eq(check_plugin_state(PLUGINS[2]), "false,false");
@@ -282,27 +263,27 @@ function check_initial_state(callback) {
 function check_test_pt1() {
   dump("Checking pt 1\n");
 
-  AddonManager.getAddonsByIDs([a.id for each (a in ADDONS)], callback_soon(function(addons) {
+  AddonManager.getAddonsByIDs(ADDONS.map(a => a.id), callback_soon(function(addons) {
     for (var i = 0; i < ADDONS.length; i++) {
       if (!addons[i])
         do_throw("Addon " + (i + 1) + " did not get installed correctly");
     }
-  
+
     do_check_eq(check_addon_state(addons[0]), "false,false,false");
     do_check_eq(check_addon_state(addons[1]), "false,false,false");
     do_check_eq(check_addon_state(addons[2]), "false,false,false");
-  
+
     // Warn add-ons should be soft disabled automatically
     do_check_eq(check_addon_state(addons[3]), "true,true,false");
     do_check_eq(check_addon_state(addons[4]), "true,true,false");
-  
+
     // Blocked and incompatible should be app disabled only
     do_check_eq(check_addon_state(addons[5]), "false,false,true");
     do_check_eq(check_addon_state(addons[6]), "false,false,true");
-  
+
     // We've overridden the plugin host so we cannot tell what that would have
     // initialised the plugins as
-  
+
     // Put the add-ons into the base state
     addons[0].userDisabled = true;
     addons[4].userDisabled = false;
@@ -354,7 +335,7 @@ function check_test_pt2() {
   restartManager();
   dump("Checking results pt 2\n");
 
-  AddonManager.getAddonsByIDs([a.id for each (a in ADDONS)], callback_soon(function(addons) {
+  AddonManager.getAddonsByIDs(ADDONS.map(a => a.id), callback_soon(function(addons) {
     // Should have disabled this add-on as requested
     do_check_eq(check_addon_state(addons[2]), "true,true,false");
     do_check_eq(check_plugin_state(PLUGINS[2]), "true,false");
@@ -440,7 +421,7 @@ function check_test_pt3() {
   let blocklist = Cc["@mozilla.org/extensions/blocklist;1"].
                   getService(Ci.nsIBlocklistService);
 
-  AddonManager.getAddonsByIDs([a.id for each (a in ADDONS)], function(addons) {
+  AddonManager.getAddonsByIDs(ADDONS.map(a => a.id), function(addons) {
     // All should have gained the blocklist state, user disabled as previously
     do_check_eq(check_addon_state(addons[0]), "true,false,true");
     do_check_eq(check_addon_state(addons[1]), "false,false,true");
@@ -507,7 +488,7 @@ function check_test_pt4() {
   restartManager();
   dump("Checking results pt 4\n");
 
-  AddonManager.getAddonsByIDs([a.id for each (a in ADDONS)], function(addons) {
+  AddonManager.getAddonsByIDs(ADDONS.map(a => a.id), function(addons) {
     // This should have become unblocked
     do_check_eq(check_addon_state(addons[5]), "false,false,false");
     do_check_eq(check_plugin_state(PLUGINS[5]), "false,false");

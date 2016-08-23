@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:set et sw=2 sts=2 cin:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,6 +23,7 @@
 #ifdef XP_MACOSX
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/dom/Event.h"
+#include "nsFocusManager.h"
 #endif
 
 namespace mozilla {
@@ -45,8 +46,18 @@ HTMLObjectElement::HTMLObjectElement(already_AddRefed<mozilla::dom::NodeInfo>& a
 
 HTMLObjectElement::~HTMLObjectElement()
 {
+#ifdef XP_MACOSX
+  OnFocusBlurPlugin(this, false);
+#endif
   UnregisterActivityObserver();
   DestroyImageLoadingContent();
+}
+
+bool
+HTMLObjectElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
+{
+  return HasAttr(kNameSpaceID_None, nsGkAtoms::usemap) ||
+         nsGenericHTMLFormElement::IsInteractiveHTMLContent(aIgnoreTabindex);
 }
 
 bool
@@ -62,7 +73,7 @@ HTMLObjectElement::DoneAddingChildren(bool aHaveNotified)
 
   // If we're already in a document, we need to trigger the load
   // Otherwise, BindToTree takes care of that.
-  if (IsInDoc()) {
+  if (IsInComposedDoc()) {
     StartObjectLoad(aHaveNotified);
   }
 }
@@ -106,20 +117,94 @@ NS_IMPL_NSICONSTRAINTVALIDATION(HTMLObjectElement)
 
 static nsIWidget* GetWidget(Element* aElement)
 {
-  nsIWidget* retval = NULL;
-  nsIFrame* frame = aElement->GetPrimaryFrame();
-  if (frame) {
-    retval = frame->GetNearestWidget();
-  }
-  return retval;
+  return nsContentUtils::WidgetForDocument(aElement->OwnerDoc());
 }
 
-static void OnFocusBlurPlugin(Element* aElement, bool aFocus)
+Element* HTMLObjectElement::sLastFocused = nullptr; // Weak
+
+class PluginFocusSetter : public nsRunnable
 {
-  nsIWidget* widget = GetWidget(aElement);
-  if (widget) {
-    bool value = aFocus;
-    widget->SetPluginFocused(value);
+public:
+  PluginFocusSetter(nsIWidget* aWidget, Element* aElement)
+  : mWidget(aWidget), mElement(aElement)
+  {
+  }
+
+  NS_IMETHOD Run()
+  {
+    if (mElement) {
+      HTMLObjectElement::sLastFocused = mElement;
+      bool value = true;
+      mWidget->SetPluginFocused(value);
+    } else if (!HTMLObjectElement::sLastFocused) {
+      bool value = false;
+      mWidget->SetPluginFocused(value);
+    }
+
+    return NS_OK;
+  }
+
+private:
+  nsCOMPtr<nsIWidget> mWidget;
+  nsCOMPtr<Element> mElement;
+};
+
+void
+HTMLObjectElement::OnFocusBlurPlugin(Element* aElement, bool aFocus)
+{
+  // In general we don't want to call nsIWidget::SetPluginFocused() for any
+  // Element that doesn't have a plugin running.  But if SetPluginFocused(true)
+  // was just called for aElement while it had a plugin running, we want to
+  // make sure nsIWidget::SetPluginFocused(false) gets called for it now, even
+  // if aFocus is true.
+  if (aFocus) {
+    nsCOMPtr<nsIObjectLoadingContent> olc = do_QueryInterface(aElement);
+    bool hasRunningPlugin = false;
+    if (olc) {
+      // nsIObjectLoadingContent::GetHasRunningPlugin() fails when
+      // nsContentUtils::IsCallerChrome() returns false (which it can do even
+      // when we're processing a trusted focus event).  We work around this by
+      // calling nsObjectLoadingContent::HasRunningPlugin() directly.
+      hasRunningPlugin =
+        static_cast<nsObjectLoadingContent*>(olc.get())->HasRunningPlugin();
+    }
+    if (!hasRunningPlugin) {
+      aFocus = false;
+    }
+  }
+
+  if (aFocus || aElement == sLastFocused) {
+    if (!aFocus) {
+      sLastFocused = nullptr;
+    }
+    nsIWidget* widget = GetWidget(aElement);
+    if (widget) {
+      nsContentUtils::AddScriptRunner(
+        new PluginFocusSetter(widget, aFocus ? aElement : nullptr));
+    }
+  }
+}
+
+void
+HTMLObjectElement::HandlePluginCrashed(Element* aElement)
+{
+  OnFocusBlurPlugin(aElement, false);
+}
+
+void
+HTMLObjectElement::HandlePluginInstantiated(Element* aElement)
+{
+  // If aElement is already focused when a plugin is instantiated, we need
+  // to initiate a call to nsIWidget::SetPluginFocused(true).  Otherwise
+  // keyboard input won't work in a click-to-play plugin until aElement
+  // loses focus and regains it.
+  nsIContent* focusedContent = nullptr;
+  nsFocusManager *fm = nsFocusManager::GetFocusManager();
+  if (fm) {
+    focusedContent = fm->GetFocusedContent();
+  }
+  if (SameCOMIdentity(focusedContent, aElement)) {
+    OnFocusBlurPlugin(aElement, true);
   }
 }
 
@@ -127,18 +212,20 @@ void
 HTMLObjectElement::HandleFocusBlurPlugin(Element* aElement,
                                          WidgetEvent* aEvent)
 {
-  if (!aEvent->mFlags.mIsTrusted) {
+  if (!aEvent->IsTrusted()) {
     return;
   }
-  switch (aEvent->message) {
-    case NS_FOCUS_CONTENT: {
+  switch (aEvent->mMessage) {
+    case eFocus: {
       OnFocusBlurPlugin(aElement, true);
       break;
     }
-    case NS_BLUR_CONTENT: {
+    case eBlur: {
       OnFocusBlurPlugin(aElement, false);
       break;
     }
+    default:
+      break;
   }
 }
 
@@ -158,7 +245,7 @@ HTMLObjectElement::GetForm(nsIDOMHTMLFormElement **aForm)
 }
 
 void
-HTMLObjectElement::GetItemValueText(nsAString& aValue)
+HTMLObjectElement::GetItemValueText(DOMString& aValue)
 {
   GetData(aValue);
 }
@@ -203,6 +290,14 @@ void
 HTMLObjectElement::UnbindFromTree(bool aDeep,
                                   bool aNullParent)
 {
+#ifdef XP_MACOSX
+  // When a page is reloaded (when an nsIDocument's content is removed), the
+  // focused element isn't necessarily sent an eBlur event. See
+  // nsFocusManager::ContentRemoved(). This means that a widget may think it
+  // still contains a focused plugin when it doesn't -- which in turn can
+  // disable text input in the browser window. See bug 1137229.
+  OnFocusBlurPlugin(this, false);
+#endif
   nsObjectLoadingContent::UnbindFromTree(aDeep, aNullParent);
   nsGenericHTMLFormElement::UnbindFromTree(aDeep, aNullParent);
 }
@@ -225,7 +320,7 @@ HTMLObjectElement::SetAttr(int32_t aNameSpaceID, nsIAtom *aName,
   // We also don't want to start loading the object when we're not yet in
   // a document, just in case that the caller wants to set additional
   // attributes before inserting the node into the document.
-  if (aNotify && IsInDoc() && mIsDoneAddingChildren &&
+  if (aNotify && IsInComposedDoc() && mIsDoneAddingChildren &&
       aNameSpaceID == kNameSpaceID_None && aName == nsGkAtoms::data) {
     return LoadObject(aNotify, true);
   }
@@ -242,7 +337,7 @@ HTMLObjectElement::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
   NS_ENSURE_SUCCESS(rv, rv);
 
   // See comment in SetAttr
-  if (aNotify && IsInDoc() && mIsDoneAddingChildren &&
+  if (aNotify && IsInComposedDoc() && mIsDoneAddingChildren &&
       aNameSpaceID == kNameSpaceID_None && aAttribute == nsGkAtoms::data) {
     return LoadObject(aNotify, true);
   }
@@ -343,7 +438,7 @@ HTMLObjectElement::SubmitNamesValues(nsFormSubmission *aFormSubmission)
     return NS_OK;
   }
 
-  nsRefPtr<nsNPAPIPluginInstance> pi;
+  RefPtr<nsNPAPIPluginInstance> pi;
   objFrame->GetPluginInstance(getter_AddRefs(pi));
   if (!pi)
     return NS_OK;
@@ -388,7 +483,7 @@ HTMLObjectElement::GetContentDocument(nsIDOMDocument **aContentDocument)
   return NS_OK;
 }
 
-nsIDOMWindow*
+nsPIDOMWindowOuter*
 HTMLObjectElement::GetContentWindow()
 {
   nsIDocument* doc = GetContentDocument();
@@ -454,7 +549,7 @@ HTMLObjectElement::StartObjectLoad(bool aNotify)
 {
   // BindToTree can call us asynchronously, and we may be removed from the tree
   // in the interim
-  if (!IsInDoc() || !OwnerDoc()->IsActive()) {
+  if (!IsInComposedDoc() || !OwnerDoc()->IsActive()) {
     return;
   }
 
@@ -495,10 +590,10 @@ HTMLObjectElement::CopyInnerTo(Element* aDest)
 }
 
 JSObject*
-HTMLObjectElement::WrapNode(JSContext* aCx)
+HTMLObjectElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   JS::Rooted<JSObject*> obj(aCx,
-    HTMLObjectElementBinding::Wrap(aCx, this));
+    HTMLObjectElementBinding::Wrap(aCx, this, aGivenProto));
   if (!obj) {
     return nullptr;
   }

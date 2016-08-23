@@ -13,14 +13,14 @@ namespace mozilla {
 namespace gfx {
 class DrawTarget;
 class Pattern;
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 /**
  * This class should not be instantiated. It's just a container
  * for some helper functions.
  */
-class gfxFontMissingGlyphs MOZ_FINAL
+class gfxFontMissingGlyphs final
 {
     typedef mozilla::gfx::DrawTarget DrawTarget;
     typedef mozilla::gfx::Float Float;

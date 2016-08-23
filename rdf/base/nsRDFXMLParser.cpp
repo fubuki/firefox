@@ -115,16 +115,17 @@ nsRDFXMLParser::ParseString(nsIRDFDataSource* aSink, nsIURI* aBaseURI, const nsA
     rv = NS_NewCStringInputStream(getter_AddRefs(stream), aString);
     if (NS_FAILED(rv)) return rv;
 
-    nsCOMPtr<nsIPrincipal> nullPrincipal =
-      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<nsIPrincipal> nullPrincipal = nsNullPrincipal::Create();
+    NS_ENSURE_TRUE(nullPrincipal, NS_ERROR_FAILURE);
 
+    // The following channel is never openend, so it does not matter what
+    // securityFlags we pass; let's follow the principle of least privilege.
     nsCOMPtr<nsIChannel> channel;
     rv = NS_NewInputStreamChannel(getter_AddRefs(channel),
                                   aBaseURI,
                                   stream,
                                   nullPrincipal,
-                                  nsILoadInfo::SEC_NORMAL,
+                                  nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
                                   nsIContentPolicy::TYPE_OTHER,
                                   NS_LITERAL_CSTRING("text/xml"));
     if (NS_FAILED(rv)) return rv;

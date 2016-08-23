@@ -9,6 +9,7 @@ MOCHITEST_CHROME_MANIFESTS += ['test/chrome.ini']
 XPIDL_SOURCES += [
     'nsIAppShellService.idl',
     'nsIPopupWindowManager.idl',
+    'nsIWindowlessBrowser.idl',
     'nsIWindowMediator.idl',
     'nsIWindowMediatorListener.idl',
     'nsIXULBrowserWindow.idl',
@@ -35,8 +36,5 @@ UNIFIED_SOURCES += [
 LOCAL_INCLUDES += [
     '/dom/base',
 ]
-
-FAIL_ON_WARNINGS = True
-MSVC_ENABLE_PGO = True
 
 FINAL_LIBRARY = 'xul'

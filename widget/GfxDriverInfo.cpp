@@ -28,7 +28,9 @@ GfxDriverInfo::GfxDriverInfo()
     mComparisonOp(DRIVER_COMPARISON_IGNORED),
     mDriverVersion(0),
     mDriverVersionMax(0),
-    mSuggestedVersion(nullptr)
+    mSuggestedVersion(nullptr),
+    mRuleId(nullptr),
+    mGpu2(false)
 {}
 
 GfxDriverInfo::GfxDriverInfo(OperatingSystem os, nsAString& vendor,
@@ -36,8 +38,10 @@ GfxDriverInfo::GfxDriverInfo(OperatingSystem os, nsAString& vendor,
                              int32_t feature, int32_t featureStatus,
                              VersionComparisonOp op,
                              uint64_t driverVersion,
+                             const char *ruleId,
                              const char *suggestedVersion /* = nullptr */,
-                             bool ownDevices /* = false */)
+                             bool ownDevices /* = false */,
+                             bool gpu2 /* = false */)
   : mOperatingSystem(os),
     mOperatingSystemVersion(0),
     mAdapterVendor(vendor),
@@ -48,7 +52,9 @@ GfxDriverInfo::GfxDriverInfo(OperatingSystem os, nsAString& vendor,
     mComparisonOp(op),
     mDriverVersion(driverVersion),
     mDriverVersionMax(0),
-    mSuggestedVersion(suggestedVersion)
+    mSuggestedVersion(suggestedVersion),
+    mRuleId(ruleId),
+    mGpu2(gpu2)
 {}
 
 GfxDriverInfo::GfxDriverInfo(const GfxDriverInfo& aOrig)
@@ -60,7 +66,9 @@ GfxDriverInfo::GfxDriverInfo(const GfxDriverInfo& aOrig)
     mComparisonOp(aOrig.mComparisonOp),
     mDriverVersion(aOrig.mDriverVersion),
     mDriverVersionMax(aOrig.mDriverVersionMax),
-    mSuggestedVersion(aOrig.mSuggestedVersion)
+    mSuggestedVersion(aOrig.mSuggestedVersion),
+    mRuleId(aOrig.mRuleId),
+    mGpu2(aOrig.mGpu2)
 {
   // If we're managing the lifetime of the device family, we have to make a
   // copy of the original's device family.
@@ -154,6 +162,8 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id)
       APPEND_DEVICE(0x2e23); /* IntelG45_2 */
       APPEND_DEVICE(0x2e12); /* IntelQ45_1 */
       APPEND_DEVICE(0x2e13); /* IntelQ45_2 */
+      break;
+    case IntelHDGraphicsToSandyBridge:
       APPEND_DEVICE(0x0042); /* IntelHDGraphics */
       APPEND_DEVICE(0x0046); /* IntelMobileHDGraphics */
       APPEND_DEVICE(0x0102); /* IntelSandyBridge_1 */
@@ -163,7 +173,6 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id)
       APPEND_DEVICE(0x0122); /* IntelSandyBridge_5 */
       APPEND_DEVICE(0x0126); /* IntelSandyBridge_6 */
       APPEND_DEVICE(0x010a); /* IntelSandyBridge_7 */
-      APPEND_DEVICE(0x0080); /* IntelIvyBridge */
       break;
     case IntelHD3000:
       APPEND_DEVICE(0x0126);
@@ -213,6 +222,58 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id)
       break;
     case Nvidia310M:
       APPEND_DEVICE(0x0A70);
+      break;
+    case Nvidia8800GTS:
+      APPEND_DEVICE(0x0193);
+      break;
+    case Bug1137716:
+      APPEND_DEVICE(0x0a29);
+      APPEND_DEVICE(0x0a2b);
+      APPEND_DEVICE(0x0a2d);
+      APPEND_DEVICE(0x0a35);
+      APPEND_DEVICE(0x0a6c);
+      APPEND_DEVICE(0x0a70);
+      APPEND_DEVICE(0x0a72);
+      APPEND_DEVICE(0x0a7a);
+      APPEND_DEVICE(0x0caf);
+      APPEND_DEVICE(0x0dd2);
+      APPEND_DEVICE(0x0dd3);
+      // GF180M ids
+      APPEND_DEVICE(0x0de3);
+      APPEND_DEVICE(0x0de8);
+      APPEND_DEVICE(0x0de9);
+      APPEND_DEVICE(0x0dea);
+      APPEND_DEVICE(0x0deb);
+      APPEND_DEVICE(0x0dec);
+      APPEND_DEVICE(0x0ded);
+      APPEND_DEVICE(0x0dee);
+      APPEND_DEVICE(0x0def);
+      APPEND_DEVICE(0x0df0);
+      APPEND_DEVICE(0x0df1);
+      APPEND_DEVICE(0x0df2);
+      APPEND_DEVICE(0x0df3);
+      APPEND_DEVICE(0x0df4);
+      APPEND_DEVICE(0x0df5);
+      APPEND_DEVICE(0x0df6);
+      APPEND_DEVICE(0x0df7);
+      APPEND_DEVICE(0x1050);
+      APPEND_DEVICE(0x1051);
+      APPEND_DEVICE(0x1052);
+      APPEND_DEVICE(0x1054);
+      APPEND_DEVICE(0x1055);
+      break;
+    case Bug1116812:
+      APPEND_DEVICE(0x2e32);
+      APPEND_DEVICE(0x2a02);
+      break;
+    case Bug1155608:
+      APPEND_DEVICE(0x2e22); /* IntelG45_1 */
+      break;
+    case Bug1207665:
+      APPEND_DEVICE(0xa001); /* Intel Media Accelerator 3150 */
+      APPEND_DEVICE(0xa002);
+      APPEND_DEVICE(0xa011);
+      APPEND_DEVICE(0xa012);
       break;
     case AMDRadeonHD5800:
       APPEND_DEVICE(0x6899);

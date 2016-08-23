@@ -9,7 +9,6 @@ const { WindowTracker } = require('sdk/deprecated/window-utils');
 const { close, open } = require('sdk/window/helpers');
 const { data } = require('sdk/self');
 const { Panel } = require('sdk/panel');
-const { setTimeout } = require("sdk/timers")
 
 const XUL_URL = 'chrome://test/content/new-window.xul'
 
@@ -23,7 +22,7 @@ exports.testChromeSkin = function(assert, done) {
     url: skinURL,
     overrideMimeType: 'text/plain',
     onComplete: function (response) {
-      assert.equal(response.text.trim(), 'test{}', 'chrome.manifest skin folder was registered!');
+      assert.ok(/test\{\}\s*$/.test(response.text), 'chrome.manifest skin folder was registered!');
       done();
     }
   }).get();
@@ -68,27 +67,31 @@ exports.testChromeLocale = function(assert) {
                'locales en-US folder was copied correctly');
 }
 
-exports.testChromeInPanel = function(assert, done) {
+exports.testChromeInPanel = function*(assert) {
   let panel = Panel({
     contentURL: 'chrome://test/content/panel.html',
-    contentScriptWhen: 'start',
+    contentScriptWhen: 'end',
     contentScriptFile: data.url('panel.js')
   });
-  panel.once('show', _ => {
-    assert.pass('panel shown');
-    panel.port.once('echo', _ => {
-      assert.pass('got echo');
-      panel.once('hide', _ => {
-        assert.pass('panel hidden');
-        panel.destroy();
-        assert.pass('panel is destroyed');
-        done();
-      });
-      setTimeout(() => panel.hide());
-    });
+
+  yield new Promise(resolve => panel.port.once('start', resolve));
+  assert.pass('start was emitted');
+
+  yield new Promise(resolve => {
+    panel.once('show', resolve);
+    panel.show();
+  });
+  assert.pass('panel shown');
+
+  yield new Promise(resolve => {
+    panel.port.once('echo', resolve);
     panel.port.emit('echo');
   });
-  panel.show();
+
+  assert.pass('got echo');
+
+  panel.destroy();
+  assert.pass('panel is destroyed');
 }
 
 require('sdk/test/runner').runTestsFromModule(module);

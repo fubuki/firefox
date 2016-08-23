@@ -70,18 +70,16 @@
 #if defined(STATIC_JS_API)
 #  define JS_PUBLIC_API(t)   t
 #  define JS_PUBLIC_DATA(t)  t
+#  define JS_FRIEND_API(t)   t
+#  define JS_FRIEND_DATA(t)  t
 #elif defined(EXPORT_JS_API) || defined(STATIC_EXPORTABLE_JS_API)
 #  define JS_PUBLIC_API(t)   MOZ_EXPORT t
 #  define JS_PUBLIC_DATA(t)  MOZ_EXPORT t
-#else
-#  define JS_PUBLIC_API(t)   MOZ_IMPORT_API t
-#  define JS_PUBLIC_DATA(t)  MOZ_IMPORT_DATA t
-#endif
-
-#if defined(STATIC_JS_API) || defined(EXPORT_JS_API) || defined(STATIC_EXPORTABLE_JS_API)
 #  define JS_FRIEND_API(t)    MOZ_EXPORT t
 #  define JS_FRIEND_DATA(t)   MOZ_EXPORT t
 #else
+#  define JS_PUBLIC_API(t)   MOZ_IMPORT_API t
+#  define JS_PUBLIC_DATA(t)  MOZ_IMPORT_DATA t
 #  define JS_FRIEND_API(t)   MOZ_IMPORT_API t
 #  define JS_FRIEND_DATA(t)  MOZ_IMPORT_DATA t
 #endif
@@ -169,10 +167,10 @@
 **      Macros to get the number of elements and the pointer to one past the
 **      last element of a C array. Use them like this:
 **
-**      char16_t buf[10], *s;
-**      JSString *str;
+**      char16_t buf[10];
+**      JSString* str;
 **      ...
-**      for (s = buf; s != JS_ARRAY_END(buf); ++s) *s = ...;
+**      for (char16_t* s = buf; s != JS_ARRAY_END(buf); ++s) *s = ...;
 **      ...
 **      str = JS_NewStringCopyN(cx, buf, JS_ARRAY_LENGTH(buf));
 **      ...
@@ -198,12 +196,12 @@
 **      Macros to convert between function and data pointers of the same
 **      size. Use them like this:
 **
-**      JSPropertyOp nativeGetter;
-**      JSObject *scriptedGetter;
+**      JSGetterOp nativeGetter;
+**      JSObject* scriptedGetter;
 **      ...
-**      scriptedGetter = JS_FUNC_TO_DATA_PTR(JSObject *, nativeGetter);
+**      scriptedGetter = JS_FUNC_TO_DATA_PTR(JSObject*, nativeGetter);
 **      ...
-**      nativeGetter = JS_DATA_TO_FUNC_PTR(JSPropertyOp, scriptedGetter);
+**      nativeGetter = JS_DATA_TO_FUNC_PTR(JSGetterOp, scriptedGetter);
 **
 ***********************************************************************/
 

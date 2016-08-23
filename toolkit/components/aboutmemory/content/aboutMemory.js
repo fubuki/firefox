@@ -18,10 +18,10 @@
 
 //---------------------------------------------------------------------------
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const CC = Components.Constructor;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
+var CC = Components.Constructor;
 
 const KIND_NONHEAP           = Ci.nsIMemoryReporter.KIND_NONHEAP;
 const KIND_HEAP              = Ci.nsIMemoryReporter.KIND_HEAP;
@@ -34,6 +34,11 @@ const UNITS_PERCENTAGE       = Ci.nsIMemoryReporter.UNITS_PERCENTAGE;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
+ "resource://gre/modules/Downloads.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
+ "resource://gre/modules/FileUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "nsBinaryStream",
                             () => CC("@mozilla.org/binaryinputstream;1",
@@ -46,12 +51,15 @@ XPCOMUtils.defineLazyGetter(this, "nsGzipConverter",
                             () => CC("@mozilla.org/streamconv;1?from=gzip&to=uncompressed",
                                      "nsIStreamConverter"));
 
-let gMgr = Cc["@mozilla.org/memory-reporter-manager;1"]
+var gMgr = Cc["@mozilla.org/memory-reporter-manager;1"]
              .getService(Ci.nsIMemoryReporterManager);
+
+const gPageName = 'about:memory';
+document.title = gPageName;
 
 const gUnnamedProcessStr = "Main Process";
 
-let gIsDiff = false;
+var gIsDiff = false;
 
 //---------------------------------------------------------------------------
 
@@ -74,7 +82,7 @@ function assert(aCond, aMsg)
 {
   if (!aCond) {
     reportAssertionFailure(aMsg)
-    throw(gAssertionFailureMsgPrefix + aMsg);
+    throw new Error(gAssertionFailureMsgPrefix + aMsg);
   }
 }
 
@@ -82,19 +90,19 @@ function assert(aCond, aMsg)
 function assertInput(aCond, aMsg)
 {
   if (!aCond) {
-    throw "Invalid memory report(s): " + aMsg;
+    throw new Error("Invalid memory report(s): " + aMsg);
   }
 }
 
 function handleException(ex)
 {
-  let str = ex.toString();
+  let str = "" + ex;
   if (str.startsWith(gAssertionFailureMsgPrefix)) {
     // Argh, assertion failure within this file!  Give up.
     throw ex;
   } else {
     // File or memory reporter problem.  Print a message.
-    updateMainAndFooter(ex.toString(), HIDE_FOOTER, "badInputWarning");
+    updateMainAndFooter(str, HIDE_FOOTER, "badInputWarning");
   }
 }
 
@@ -122,23 +130,28 @@ function onUnload()
 
 // The <div> holding everything but the header and footer (if they're present).
 // It's what is updated each time the page changes.
-let gMain;
+var gMain;
 
 // The <div> holding the footer.
-let gFooter;
+var gFooter;
 
 // The "verbose" checkbox.
-let gVerbose;
+var gVerbose;
 
 // The "anonymize" checkbox.
-let gAnonymize;
+var gAnonymize;
 
-// Values for the second argument to updateMainAndFooter.
-let HIDE_FOOTER = 0;
-let SHOW_FOOTER = 1;
+// Values for the |aFooterAction| argument to updateTitleMainAndFooter.
+var HIDE_FOOTER = 0;
+var SHOW_FOOTER = 1;
 
-function updateMainAndFooter(aMsg, aFooterAction, aClassName)
+function updateTitleMainAndFooter(aTitleNote, aMsg, aFooterAction, aClassName)
 {
+  document.title = gPageName;
+  if (aTitleNote) {
+    document.title += " (" + aTitleNote + ")";
+  }
+
   // Clear gMain by replacing it with an empty node.
   let tmp = gMain.cloneNode(false);
   gMain.parentNode.replaceChild(tmp, gMain);
@@ -163,9 +176,14 @@ function updateMainAndFooter(aMsg, aFooterAction, aClassName)
   switch (aFooterAction) {
    case HIDE_FOOTER:   gFooter.classList.add('hidden');    break;
    case SHOW_FOOTER:   gFooter.classList.remove('hidden'); break;
-   default: assertInput(false, "bad footer action in updateMainAndFooter");
+   default: assertInput(false, "bad footer action in updateTitleMainAndFooter");
   }
   return msgElement;
+}
+
+function updateMainAndFooter(aMsg, aFooterAction, aClassName)
+{
+  return updateTitleMainAndFooter("", aMsg, aFooterAction, aClassName);
 }
 
 function appendTextNode(aP, aText)
@@ -277,7 +295,6 @@ function onLoad()
   const LdDesc = "Load memory reports from file and show.";
   const DfDesc = "Load memory report data from two files and show the " +
                  "difference.";
-  const RdDesc = "Read memory reports from the clipboard and show.";
 
   const SvDesc = "Save memory reports to file.";
 
@@ -321,8 +338,6 @@ function onLoad()
   appendButton(row1, LdDesc, () => fileInput1.click(), "Load" + kEllipsis);
   appendButton(row1, DfDesc, () => fileInput2.click(),
                "Load and diff" + kEllipsis);
-  appendButton(row1, RdDesc, updateAboutMemoryFromClipboard,
-               "Read from clipboard");
 
   let row2 = appendElement(ops, "div", "opsRow");
 
@@ -507,7 +522,7 @@ function updateAboutMemoryFromReporters()
       }
 
       let displayReportsAndFooter = function() {
-        updateMainAndFooter("", SHOW_FOOTER);
+        updateTitleMainAndFooter("live measurement", "", SHOW_FOOTER);
         aDisplayReports();
       }
 
@@ -613,19 +628,22 @@ function updateAboutMemoryFromJSONString(aStr)
  *
  * @param aFilename
  *        The name of the file being read from.
+ * @param aTitleNote
+ *        A description to put in the page title upon completion.
  * @param aFn
  *        The function to call and pass the read string to upon completion.
  */
-function loadMemoryReportsFromFile(aFilename, aFn)
+function loadMemoryReportsFromFile(aFilename, aTitleNote, aFn)
 {
   updateMainAndFooter("Loading...", HIDE_FOOTER);
 
   try {
     let reader = new FileReader();
-    reader.onerror = () => { throw "FileReader.onerror"; };
-    reader.onabort = () => { throw "FileReader.onabort"; };
+    reader.onerror = () => { throw new Error("FileReader.onerror"); };
+    reader.onabort = () => { throw new Error("FileReader.onabort"); };
     reader.onload = (aEvent) => {
-      updateMainAndFooter("", SHOW_FOOTER);  // Clear "Loading..." from above.
+      // Clear "Loading..." from above.
+      updateTitleMainAndFooter(aTitleNote, "", SHOW_FOOTER);
       aFn(aEvent.target.result);
     };
 
@@ -647,7 +665,7 @@ function loadMemoryReportsFromFile(aFilename, aFn)
       onStopRequest: function(aR, aC, aStatusCode) {
         try {
           if (!Components.isSuccessCode(aStatusCode)) {
-            throw aStatusCode;
+            throw new Components.Exception("Error while reading gzip file", aStatusCode);
           }
           reader.readAsText(new Blob(this.data));
         } catch (ex) {
@@ -657,8 +675,11 @@ function loadMemoryReportsFromFile(aFilename, aFn)
     }, null);
 
     let file = new nsFile(aFilename);
-    let fileChan = Services.io.newChannelFromURI(Services.io.newFileURI(file));
-    fileChan.asyncOpen(converter, null);
+    let fileChan = NetUtil.newChannel({
+                     uri: Services.io.newFileURI(file),
+                     loadUsingSystemPrincipal: true
+                   });
+    fileChan.asyncOpen2(converter);
 
   } catch (ex) {
     handleException(ex);
@@ -675,7 +696,7 @@ function loadMemoryReportsFromFile(aFilename, aFn)
  */
 function updateAboutMemoryFromFile(aFilename)
 {
-  loadMemoryReportsFromFile(aFilename,
+  loadMemoryReportsFromFile(aFilename, /* title note */ aFilename,
                             updateAboutMemoryFromJSONString);
 }
 
@@ -690,8 +711,9 @@ function updateAboutMemoryFromFile(aFilename)
  */
 function updateAboutMemoryFromTwoFiles(aFilename1, aFilename2)
 {
-  loadMemoryReportsFromFile(aFilename1, function(aStr1) {
-    loadMemoryReportsFromFile(aFilename2, function(aStr2) {
+  let titleNote = "diff of " + aFilename1 + " and " + aFilename2;
+  loadMemoryReportsFromFile(aFilename1, titleNote, function(aStr1) {
+    loadMemoryReportsFromFile(aFilename2, titleNote, function(aStr2) {
       try {
         let obj1 = parseAndUnwrapIfCrashDump(aStr1);
         let obj2 = parseAndUnwrapIfCrashDump(aStr2);
@@ -705,40 +727,10 @@ function updateAboutMemoryFromTwoFiles(aFilename1, aFilename2)
   });
 }
 
-/**
- * Like updateAboutMemoryFromFile(), but gets its data from the clipboard
- * instead of a file.
- */
-function updateAboutMemoryFromClipboard()
-{
-  // Get the clipboard's contents.
-  let transferable = Cc["@mozilla.org/widget/transferable;1"]
-                       .createInstance(Ci.nsITransferable);
-  let loadContext = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                          .getInterface(Ci.nsIWebNavigation)
-                          .QueryInterface(Ci.nsILoadContext);
-  transferable.init(loadContext);
-  transferable.addDataFlavor('text/unicode');
-  Services.clipboard.getData(transferable, Ci.nsIClipboard.kGlobalClipboard);
-
-  var cbData = {};
-  try {
-    transferable.getTransferData('text/unicode', cbData,
-                                 /* out dataLen (ignored) */ {});
-    let cbString = cbData.value.QueryInterface(Ci.nsISupportsString).data;
-
-    // Success!  Now use the string to generate about:memory.
-    updateAboutMemoryFromJSONString(cbString);
-
-  } catch (ex) {
-    handleException(ex);
-  }
-}
-
 //---------------------------------------------------------------------------
 
 // Something unlikely to appear in a process name.
-let kProcessPathSep = "^:^:^";
+var kProcessPathSep = "^:^:^";
 
 // Short for "diff report".
 function DReport(aKind, aUnits, aAmount, aDescription, aNMerged, aPresence)
@@ -854,6 +846,10 @@ function makeDReportMap(aJSONReports)
     path = path.replace(
       /moz-nullprincipal:{........-....-....-....-............}/g,
       "moz-nullprincipal:{NNNNNNNN-NNNN-NNNN-NNNN-NNNNNNNNNNNN}");
+
+    // Normalize omni.ja! paths.
+    path = path.replace(/jar:file:\\\\\\(.+)\\omni.ja!/,
+                        "jar:file:\\\\\\...\\omni.ja!");
 
     let processPath = process + kProcessPathSep + path;
     let rOld = dreportMap[processPath];
@@ -1174,7 +1170,7 @@ TreeNode.prototype = {
       case UNITS_COUNT_CUMULATIVE: return formatInt(this._amount);
       case UNITS_PERCENTAGE:       return formatPercentage(this._amount);
       default:
-        assertInput(false, "bad units in TreeNode.toString");
+        throw "Invalid memory report(s): bad units in TreeNode.toString";
     }
   }
 };
@@ -1201,9 +1197,7 @@ TreeNode.compareAmounts = function(aA, aB) {
 };
 
 TreeNode.compareUnsafeNames = function(aA, aB) {
-  return aA._unsafeName < aB._unsafeName ? -1 :
-         aA._unsafeName > aB._unsafeName ?  1 :
-         0;
+  return aA._unsafeName.localeCompare(aB._unsafeName);
 };
 
 
@@ -1397,7 +1391,7 @@ function sortTreeAndInsertAggregateNodes(aTotalBytes, aT)
 // Global variable indicating if we've seen any invalid values for this
 // process;  it holds the unsafePaths of any such reports.  It is reset for
 // each new process.
-let gUnsafePathsWithInvalidValuesForThisProcess = [];
+var gUnsafePathsWithInvalidValuesForThisProcess = [];
 
 function appendWarningElements(aP, aHasKnownHeapAllocated,
                                aHasMozMallocUsableSize)
@@ -1771,7 +1765,7 @@ function appendMrNameSpan(aP, aDescription, aUnsafeName, aIsInvalid, aNMerged,
 // have been closed.  This doesn't seem like a big deal, because the number is
 // limited by the number of entries the user has changed from their original
 // state.
-let gShowSubtreesBySafeTreeId = {};
+var gShowSubtreesBySafeTreeId = {};
 
 function assertClassListContains(e, className) {
   assert(e, "undefined " + className);
@@ -2036,9 +2030,12 @@ function saveReportsToFile()
   } catch(ex) {
     // This will fail on Android, since there is no Save as file picker there.
     // Just save to the default downloads dir if it does.
-    let file = Services.dirsvc.get("DfltDwnld", Ci.nsIFile);
-    file.append(fp.defaultString);
-    fpFinish(file);
+    Downloads.getSystemDownloadsDirectory().then(function(dirPath) {
+      let file = FileUtils.File(dirPath);
+      file.append(fp.defaultString);
+      fpFinish(file);
+    });
+
     return;
   }
   fp.open(fpCallback);

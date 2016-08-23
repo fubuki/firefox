@@ -24,7 +24,7 @@ class DOMRect;
 class Element;
 class Event;
 
-class PopupBoxObject MOZ_FINAL : public BoxObject
+class PopupBoxObject final : public BoxObject
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -37,7 +37,7 @@ public:
   PopupBoxObject();
 
   nsIContent* GetParentObject() const;
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   void ShowPopup(Element* aAnchorElement,
                  Element& aPopupElement,
@@ -74,6 +74,13 @@ public:
                          int32_t aYPos,
                          bool aIsContextMenu,
                          Event* aTriggerEvent);
+
+  void OpenPopupAtScreenRect(const nsAString& aPosition,
+                             int32_t aXPos, int32_t aYPos,
+                             int32_t aWidth, int32_t aHeight,
+                             bool aIsContextMenu,
+                             bool aAttributesOverride,
+                             Event* aTriggerEvent);
 
   void GetPopupState(nsString& aState);
 

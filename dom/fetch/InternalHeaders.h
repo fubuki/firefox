@@ -14,8 +14,6 @@
 #include "nsClassHashtable.h"
 #include "nsWrapperCache.h"
 
-class nsPIDOMWindow;
-
 namespace mozilla {
 
 class ErrorResult;
@@ -23,13 +21,12 @@ class ErrorResult;
 namespace dom {
 
 template<typename T> class MozMap;
-class HeadersOrByteStringSequenceSequenceOrByteStringMozMap;
 
-class InternalHeaders MOZ_FINAL
+class InternalHeaders final
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(InternalHeaders)
 
-private:
+public:
   struct Entry
   {
     Entry(const nsACString& aName, const nsACString& aValue)
@@ -43,6 +40,7 @@ private:
     nsCString mValue;
   };
 
+private:
   HeadersGuardEnum mGuard;
   nsTArray<Entry> mList;
 
@@ -53,12 +51,18 @@ public:
   }
 
   explicit InternalHeaders(const InternalHeaders& aOther)
-    : mGuard(aOther.mGuard)
+    : mGuard(HeadersGuardEnum::None)
   {
     ErrorResult result;
     Fill(aOther, result);
     MOZ_ASSERT(!result.Failed());
+    // Note that it's important to set the guard after Fill(), to make sure
+    // that Fill() doesn't fail if aOther is immutable.
+    mGuard = aOther.mGuard;
   }
+
+  explicit InternalHeaders(const nsTArray<Entry>&& aHeaders,
+                           HeadersGuardEnum aGuard = HeadersGuardEnum::None);
 
   void Append(const nsACString& aName, const nsACString& aValue,
               ErrorResult& aRv);
@@ -68,6 +72,21 @@ public:
               ErrorResult& aRv) const;
   bool Has(const nsACString& aName, ErrorResult& aRv) const;
   void Set(const nsACString& aName, const nsACString& aValue, ErrorResult& aRv);
+
+  uint32_t GetIterableLength() const
+  {
+    return mList.Length();
+  }
+  const NS_ConvertASCIItoUTF16 GetKeyAtIndex(unsigned aIndex) const
+  {
+    MOZ_ASSERT(aIndex < mList.Length());
+    return NS_ConvertASCIItoUTF16(mList[aIndex].mName);
+  }
+  const NS_ConvertASCIItoUTF16 GetValueAtIndex(unsigned aIndex) const
+  {
+    MOZ_ASSERT(aIndex < mList.Length());
+    return NS_ConvertASCIItoUTF16(mList[aIndex].mValue);
+  }
 
   void Clear();
 
@@ -80,16 +99,22 @@ public:
 
   bool HasOnlySimpleHeaders() const;
 
+  bool HasRevalidationHeaders() const;
+
   static already_AddRefed<InternalHeaders>
   BasicHeaders(InternalHeaders* aHeaders);
 
   static already_AddRefed<InternalHeaders>
   CORSHeaders(InternalHeaders* aHeaders);
+
+  void
+  GetEntries(nsTArray<InternalHeaders::Entry>& aEntries) const;
+
+  void
+  GetUnsafeHeaders(nsTArray<nsCString>& aNames) const;
 private:
   virtual ~InternalHeaders();
 
-  static bool IsSimpleHeader(const nsACString& aName,
-                             const nsACString& aValue);
   static bool IsInvalidName(const nsACString& aName, ErrorResult& aRv);
   static bool IsInvalidValue(const nsACString& aValue, ErrorResult& aRv);
   bool IsImmutable(ErrorResult& aRv) const;
@@ -116,6 +141,11 @@ private:
            IsForbiddenRequestNoCorsHeader(aName, aValue) ||
            IsForbiddenResponseHeader(aName);
   }
+
+  static bool IsSimpleHeader(const nsACString& aName,
+                             const nsACString& aValue);
+
+  static bool IsRevalidationHeader(const nsACString& aName);
 };
 
 } // namespace dom

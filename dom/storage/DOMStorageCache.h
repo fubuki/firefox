@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +15,7 @@
 #include "nsHashKeys.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/Atomics.h"
 #include "nsAutoPtr.h"
 
 namespace mozilla {
@@ -32,8 +34,16 @@ public:
   NS_IMETHOD_(MozExternalRefCountType) AddRef(void);
   NS_IMETHOD_(void) Release(void);
 
-  // The scope (origin) in the database usage format (reversed)
-  virtual const nsCString& Scope() const = 0;
+  // The origin of the cache, result is concatenation of OriginNoSuffix() and OriginSuffix(),
+  // see below.
+  virtual const nsCString Origin() const = 0;
+
+  // The origin attributes suffix alone, this is usually passed as an |aOriginSuffix|
+  // argument to various methods
+  virtual const nsCString& OriginSuffix() const = 0;
+
+  // The origin in the database usage format (reversed) and without the suffix
+  virtual const nsCString& OriginNoSuffix() const = 0;
 
   // Whether the cache is already fully loaded
   virtual bool Loaded() = 0;
@@ -69,14 +79,17 @@ class DOMStorageCache : public DOMStorageCacheBridge
 public:
   NS_IMETHOD_(void) Release(void);
 
-  explicit DOMStorageCache(const nsACString* aScope);
+  // Note: We pass aOriginNoSuffix through the ctor here, because 
+  // DOMStorageCacheHashKey's ctor is creating this class and 
+  // accepts reversed-origin-no-suffix as an argument - the hashing key.
+  explicit DOMStorageCache(const nsACString* aOriginNoSuffix);
 
 protected:
   virtual ~DOMStorageCache();
 
 public:
   void Init(DOMStorageManager* aManager, bool aPersistent, nsIPrincipal* aPrincipal,
-            const nsACString& aQuotaScope);
+            const nsACString& aQuotaOriginScope);
 
   // Copies all data from the other storage.
   void CloneFrom(const DOMStorageCache* aThat);
@@ -113,7 +126,9 @@ public:
 
   // DOMStorageCacheBridge
 
-  virtual const nsCString& Scope() const { return mScope; }
+  virtual const nsCString Origin() const;
+  virtual const nsCString& OriginNoSuffix() const { return mOriginNoSuffix; }
+  virtual const nsCString& OriginSuffix() const { return mOriginSuffix; }
   virtual bool Loaded() { return mLoaded; }
   virtual uint32_t LoadedCount();
   virtual bool LoadItem(const nsAString& aKey, const nsString& aValue);
@@ -172,11 +187,11 @@ private:
   // cache) we need to refer our manager since removal of the cache from the hash
   // table is handled in the destructor by call to the manager.
   // Cache could potentially overlive the manager, hence the hard ref.
-  nsRefPtr<DOMStorageManager> mManager;
+  RefPtr<DOMStorageManager> mManager;
 
   // Reference to the usage counter object we check on for eTLD+1 quota limit.
   // Obtained from the manager during initialization (Init method).
-  nsRefPtr<DOMStorageUsage> mUsage;
+  RefPtr<DOMStorageUsage> mUsage;
 
   // Timer that holds this cache alive for a while after it has been preloaded.
   nsCOMPtr<nsITimer> mKeepAliveTimer;
@@ -187,11 +202,15 @@ private:
   // origin only.
   nsCOMPtr<nsIPrincipal> mPrincipal;
 
-  // The scope this cache belongs to in the "DB format", i.e. reversed
-  nsCString mScope;
+  // The origin this cache belongs to in the "DB format", i.e. reversed
+  nsCString mOriginNoSuffix;
 
-  // The eTLD+1 scope used to count quota usage.
-  nsCString mQuotaScope;
+  // The origin attributes suffix
+  nsCString mOriginSuffix;
+
+  // The eTLD+1 scope used to count quota usage.  It is in the reversed format 
+  // and contains the origin attributes suffix.
+  nsCString mQuotaOriginScope;
 
   // Non-private Browsing, Private Browsing and Session Only sets.
   Data mData[kDataSetCount];
@@ -202,8 +221,9 @@ private:
   // Flag that is initially false.  When the cache is about to work with
   // the database (i.e. it is persistent) this flags is set to true after
   // all keys and coresponding values are loaded from the database.
-  // This flag never goes from true back to false.
-  bool mLoaded;
+  // This flag never goes from true back to false.  Since this flag is
+  // critical for mData hashtable synchronization, it's made atomic.
+  Atomic<bool, ReleaseAcquire> mLoaded;
 
   // Result of load from the database.  Valid after mLoaded flag has been set.
   nsresult mLoadResult;
@@ -240,7 +260,7 @@ class DOMStorageUsageBridge
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(DOMStorageUsageBridge)
 
-  virtual const nsCString& Scope() = 0;
+  virtual const nsCString& OriginScope() = 0;
   virtual void LoadUsage(const int64_t aUsage) = 0;
 
 protected:
@@ -251,19 +271,19 @@ protected:
 class DOMStorageUsage : public DOMStorageUsageBridge
 {
 public:
-  explicit DOMStorageUsage(const nsACString& aScope);
+  explicit DOMStorageUsage(const nsACString& aOriginScope);
 
   bool CheckAndSetETLD1UsageDelta(uint32_t aDataSetIndex, int64_t aUsageDelta);
 
 private:
-  virtual const nsCString& Scope() { return mScope; }
+  virtual const nsCString& OriginScope() { return mOriginScope; }
   virtual void LoadUsage(const int64_t aUsage);
 
-  nsCString mScope;
+  nsCString mOriginScope;
   int64_t mUsage[DOMStorageCache::kDataSetCount];
 };
 
-} // ::dom
-} // ::mozilla
+} // namespace dom
+} // namespace mozilla
 
 #endif

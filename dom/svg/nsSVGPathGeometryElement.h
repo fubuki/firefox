@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,8 +9,6 @@
 
 #include "mozilla/gfx/2D.h"
 #include "SVGGraphicsElement.h"
-
-class gfxMatrix;
 
 struct nsSVGMark {
   enum Type {
@@ -31,6 +30,7 @@ typedef mozilla::dom::SVGGraphicsElement nsSVGPathGeometryElementBase;
 class nsSVGPathGeometryElement : public nsSVGPathGeometryElementBase
 {
 protected:
+  typedef mozilla::gfx::CapStyle CapStyle;
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::FillRule FillRule;
   typedef mozilla::gfx::Float Float;
@@ -39,18 +39,19 @@ protected:
   typedef mozilla::gfx::Point Point;
   typedef mozilla::gfx::PathBuilder PathBuilder;
   typedef mozilla::gfx::Rect Rect;
+  typedef mozilla::gfx::StrokeOptions StrokeOptions;
 
 public:
   explicit nsSVGPathGeometryElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
 
   virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) MOZ_OVERRIDE;
+                                const nsAttrValue* aValue, bool aNotify) override;
 
   /**
    * Causes this element to discard any Path object that GetOrBuildPath may
    * have cached.
    */
-  virtual void ClearAnyCachedPath() MOZ_OVERRIDE MOZ_FINAL {
+  virtual void ClearAnyCachedPath() override final {
     mCachedPath = nullptr;
   }
 
@@ -75,9 +76,21 @@ public:
    * GetStrokedBounds on it.  It also helps us avoid rounding error for simple
    * shapes and simple transforms where the Moz2D Path backends can fail to
    * produce the clean integer bounds that content authors expect in some cases.
+   *
+   * If |aToNonScalingStrokeSpace| is non-null then |aBounds|, which is computed
+   * in bounds space, has the property that it's the smallest (axis-aligned)
+   * rectangular bound containing the image of this shape as stroked in
+   * non-scaling-stroke space.  (When all transforms involved are rectilinear
+   * the bounds of the image of |aBounds| in non-scaling-stroke space will be
+   * tight, but if there are non-rectilinear transforms involved then that may
+   * be impossible and this method will return false).
+   *
+   * If |aToNonScalingStrokeSpace| is non-null then |*aToNonScalingStrokeSpace|
+   * must be non-singular.
    */
-  virtual bool GetGeometryBounds(Rect* aBounds, Float aStrokeWidth,
-                                 const Matrix& aTransform) {
+  virtual bool GetGeometryBounds(Rect* aBounds, const StrokeOptions& aStrokeOptions,
+                                 const Matrix& aToBoundsSpace,
+                                 const Matrix* aToNonScalingStrokeSpace = nullptr) {
     return false;
   }
 
@@ -145,7 +158,7 @@ public:
    * this element. May return nullptr if there is no [valid] path. The path
    * that is created may be cached and returned on subsequent calls.
    */
-  virtual mozilla::TemporaryRef<Path> GetOrBuildPath(const DrawTarget& aDrawTarget,
+  virtual already_AddRefed<Path> GetOrBuildPath(const DrawTarget& aDrawTarget,
                                                      FillRule fillRule);
 
   /**
@@ -153,7 +166,7 @@ public:
    * previously cached Path, nor caches the Path that in does return).
    * this element. May return nullptr if there is no [valid] path.
    */
-  virtual mozilla::TemporaryRef<Path> BuildPath(PathBuilder* aBuilder) = 0;
+  virtual already_AddRefed<Path> BuildPath(PathBuilder* aBuilder) = 0;
 
   /**
    * Returns a Path that can be used to measure the length of this elements
@@ -170,7 +183,7 @@ public:
    * run into problems with the inserted lines negatively affecting measuring
    * for content.
    */
-  virtual mozilla::TemporaryRef<Path> GetOrBuildPathForMeasuring();
+  virtual already_AddRefed<Path> GetOrBuildPathForMeasuring();
 
   /**
    * Returns the current computed value of the CSS property 'fill-rule' for
@@ -179,7 +192,7 @@ public:
   FillRule GetFillRule();
 
 protected:
-  mutable mozilla::RefPtr<Path> mCachedPath;
+  mutable RefPtr<Path> mCachedPath;
 };
 
 #endif

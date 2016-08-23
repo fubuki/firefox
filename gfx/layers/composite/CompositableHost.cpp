@@ -11,15 +11,20 @@
 #include "gfxUtils.h"
 #include "ImageHost.h"                  // for ImageHostBuffered, etc
 #include "TiledContentHost.h"           // for TiledContentHost
+#include "mozilla/layers/ImageContainerParent.h"
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
 #include "mozilla/layers/TextureHost.h"  // for TextureHost, etc
-#include "nsAutoPtr.h"                  // for nsRefPtr
+#include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "mozilla/layers/PCompositableParent.h"
+#include "IPDLActor.h"
 
 namespace mozilla {
+
+using namespace gfx;
+
 namespace layers {
 
 class Compositor;
@@ -30,20 +35,25 @@ class Compositor;
  *
  * CompositableParent is owned by the IPDL system. It's deletion is triggered
  * by either the CompositableChild's deletion, or by the IPDL communication
- * goind down.
+ * going down.
  */
-class CompositableParent : public PCompositableParent
+class CompositableParent : public ParentActor<PCompositableParent>
 {
 public:
   CompositableParent(CompositableParentManager* aMgr,
                      const TextureInfo& aTextureInfo,
-                     uint64_t aID = 0)
+                     uint64_t aID = 0,
+                     PImageContainerParent* aImageContainer = nullptr)
   {
     MOZ_COUNT_CTOR(CompositableParent);
     mHost = CompositableHost::Create(aTextureInfo);
     mHost->SetAsyncID(aID);
     if (aID) {
       CompositableMap::Set(aID, this);
+    }
+    if (aImageContainer) {
+      mHost->SetImageContainer(
+          static_cast<ImageContainerParent*>(aImageContainer));
     }
   }
 
@@ -53,7 +63,7 @@ public:
     CompositableMap::Erase(mHost->GetAsyncID());
   }
 
-  virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE
+  virtual void Destroy() override
   {
     if (mHost) {
       mHost->Detach(nullptr, CompositableHost::FORCE_DETACH);
@@ -84,9 +94,10 @@ CompositableHost::~CompositableHost()
 PCompositableParent*
 CompositableHost::CreateIPDLActor(CompositableParentManager* aMgr,
                                   const TextureInfo& aTextureInfo,
-                                  uint64_t aID)
+                                  uint64_t aID,
+                                  PImageContainerParent* aImageContainer)
 {
-  return new CompositableParent(aMgr, aTextureInfo, aID);
+  return new CompositableParent(aMgr, aTextureInfo, aID, aImageContainer);
 }
 
 bool
@@ -104,12 +115,13 @@ CompositableHost::FromIPDLActor(PCompositableParent* aActor)
 }
 
 void
-CompositableHost::UseTextureHost(TextureHost* aTexture)
+CompositableHost::UseTextureHost(const nsTArray<TimedTexture>& aTextures)
 {
-  if (!aTexture) {
-    return;
+  if (GetCompositor()) {
+    for (auto& texture : aTextures) {
+      texture.mTexture->SetCompositor(GetCompositor());
+    }
   }
-  aTexture->SetCompositor(GetCompositor());
 }
 
 void
@@ -117,8 +129,10 @@ CompositableHost::UseComponentAlphaTextures(TextureHost* aTextureOnBlack,
                                             TextureHost* aTextureOnWhite)
 {
   MOZ_ASSERT(aTextureOnBlack && aTextureOnWhite);
-  aTextureOnBlack->SetCompositor(GetCompositor());
-  aTextureOnWhite->SetCompositor(GetCompositor());
+  if (GetCompositor()) {
+    aTextureOnBlack->SetCompositor(GetCompositor());
+    aTextureOnWhite->SetCompositor(GetCompositor());
+  }
 }
 
 void
@@ -128,13 +142,13 @@ CompositableHost::RemoveTextureHost(TextureHost* aTexture)
 void
 CompositableHost::SetCompositor(Compositor* aCompositor)
 {
+  MOZ_ASSERT(aCompositor);
   mCompositor = aCompositor;
 }
 
 bool
 CompositableHost::AddMaskEffect(EffectChain& aEffects,
-                                const gfx::Matrix4x4& aTransform,
-                                bool aIs3D)
+                                const gfx::Matrix4x4& aTransform)
 {
   CompositableTextureSourceRef source;
   RefPtr<TextureHost> host = GetAsTextureHost();
@@ -159,7 +173,6 @@ CompositableHost::AddMaskEffect(EffectChain& aEffects,
   RefPtr<EffectMask> effect = new EffectMask(source,
                                              source->GetSize(),
                                              aTransform);
-  effect->mIs3D = aIs3D;
   aEffects.mSecondaryEffects[EffectTypes::MASK] = effect;
   return true;
 }
@@ -173,7 +186,7 @@ CompositableHost::RemoveMaskEffect()
   }
 }
 
-/* static */ TemporaryRef<CompositableHost>
+/* static */ already_AddRefed<CompositableHost>
 CompositableHost::Create(const TextureInfo& aTextureInfo)
 {
   RefPtr<CompositableHost> result;
@@ -181,20 +194,12 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
   case CompositableType::IMAGE_BRIDGE:
     NS_ERROR("Cannot create an image bridge compositable this way");
     break;
-  case CompositableType::CONTENT_INC:
-    result = new ContentHostIncremental(aTextureInfo);
-    break;
   case CompositableType::CONTENT_TILED:
     result = new TiledContentHost(aTextureInfo);
     break;
   case CompositableType::IMAGE:
     result = new ImageHost(aTextureInfo);
     break;
-#ifdef MOZ_WIDGET_GONK
-  case CompositableType::IMAGE_OVERLAY:
-    result = new ImageHostOverlay(aTextureInfo);
-    break;
-#endif
   case CompositableType::CONTENT_SINGLE:
     result = new ContentHostSingleBuffered(aTextureInfo);
     break;
@@ -204,7 +209,7 @@ CompositableHost::Create(const TextureInfo& aTextureInfo)
   default:
     NS_ERROR("Unknown CompositableType");
   }
-  return result;
+  return result.forget();
 }
 
 void
@@ -217,7 +222,13 @@ CompositableHost::DumpTextureHost(std::stringstream& aStream, TextureHost* aText
   if (!dSurf) {
     return;
   }
-  aStream << gfxUtils::GetAsLZ4Base64Str(dSurf).get();
+  aStream << gfxUtils::GetAsDataURI(dSurf).get();
+}
+
+void
+CompositableHost::ReceivedDestroy(PCompositableParent* aActor)
+{
+  static_cast<CompositableParent*>(aActor)->RecvDestroy();
 }
 
 namespace CompositableMap {

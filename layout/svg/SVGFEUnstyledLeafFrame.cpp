@@ -10,15 +10,13 @@
 #include "nsSVGEffects.h"
 #include "nsSVGFilters.h"
 
-typedef nsFrame SVGFEUnstyledLeafFrameBase;
-
-class SVGFEUnstyledLeafFrame : public SVGFEUnstyledLeafFrameBase
+class SVGFEUnstyledLeafFrame : public nsFrame
 {
   friend nsIFrame*
   NS_NewSVGFEUnstyledLeafFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 protected:
   explicit SVGFEUnstyledLeafFrame(nsStyleContext* aContext)
-    : SVGFEUnstyledLeafFrameBase(aContext)
+    : nsFrame(aContext)
   {
     AddStateBits(NS_FRAME_SVG_LAYOUT | NS_FRAME_IS_NONDISPLAY);
   }
@@ -28,15 +26,15 @@ public:
 
   virtual void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                                 const nsRect&           aDirtyRect,
-                                const nsDisplayListSet& aLists) MOZ_OVERRIDE {}
+                                const nsDisplayListSet& aLists) override {}
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE
+  virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
-    return SVGFEUnstyledLeafFrameBase::IsFrameOfType(aFlags & ~(nsIFrame::eSVG));
+    return nsFrame::IsFrameOfType(aFlags & ~(nsIFrame::eSVG));
   }
 
 #ifdef DEBUG_FRAME_DUMP
-  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE
+  virtual nsresult GetFrameName(nsAString& aResult) const override
   {
     return MakeFrameName(NS_LITERAL_STRING("SVGFEUnstyledLeaf"), aResult);
   }
@@ -47,13 +45,13 @@ public:
    *
    * @see nsGkAtoms::svgFEUnstyledLeafFrame
    */
-  virtual nsIAtom* GetType() const MOZ_OVERRIDE;
+  virtual nsIAtom* GetType() const override;
 
   virtual nsresult AttributeChanged(int32_t  aNameSpaceID,
                                     nsIAtom* aAttribute,
-                                    int32_t  aModType) MOZ_OVERRIDE;
+                                    int32_t  aModType) override;
 
-  virtual bool UpdateOverflow() MOZ_OVERRIDE {
+  virtual bool UpdateOverflow() override {
     // We don't maintain a visual overflow rect
     return false;
   }
@@ -85,6 +83,5 @@ SVGFEUnstyledLeafFrame::AttributeChanged(int32_t  aNameSpaceID,
     nsSVGEffects::InvalidateDirectRenderingObservers(GetParent()->GetParent());
   }
 
-  return SVGFEUnstyledLeafFrameBase::AttributeChanged(aNameSpaceID,
-                                                        aAttribute, aModType);
+  return nsFrame::AttributeChanged(aNameSpaceID, aAttribute, aModType);
 }

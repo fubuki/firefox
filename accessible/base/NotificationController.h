@@ -7,7 +7,10 @@
 #define mozilla_a11y_NotificationController_h_
 
 #include "EventQueue.h"
+#include "EventTree.h"
 
+#include "mozilla/IndexSequence.h"
+#include "mozilla/Tuple.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsRefreshDriver.h"
 
@@ -54,45 +57,45 @@ private:
  *        longer than the document accessible owning the notification controller
  *        that this notification is processed by.
  */
-template<class Class, class Arg>
+template<class Class, class ... Args>
 class TNotification : public Notification
 {
 public:
-  typedef void (Class::*Callback)(Arg*);
+  typedef void (Class::*Callback)(Args* ...);
 
-  TNotification(Class* aInstance, Callback aCallback, Arg* aArg) :
-    mInstance(aInstance), mCallback(aCallback), mArg(aArg) { }
+  TNotification(Class* aInstance, Callback aCallback, Args* ... aArgs) :
+    mInstance(aInstance), mCallback(aCallback), mArgs(aArgs...) { }
   virtual ~TNotification() { mInstance = nullptr; }
 
-  virtual void Process()
-  {
-    (mInstance->*mCallback)(mArg);
-
-    mInstance = nullptr;
-    mCallback = nullptr;
-    mArg = nullptr;
-  }
+  virtual void Process() override
+    { ProcessHelper(typename IndexSequenceFor<Args...>::Type()); }
 
 private:
   TNotification(const TNotification&);
   TNotification& operator = (const TNotification&);
 
+  template <size_t... Indices>
+    void ProcessHelper(IndexSequence<Indices...>)
+  {
+     (mInstance->*mCallback)(Get<Indices>(mArgs)...);
+  }
+
   Class* mInstance;
   Callback mCallback;
-  nsRefPtr<Arg> mArg;
+  Tuple<RefPtr<Args> ...> mArgs;
 };
 
 /**
  * Used to process notifications from core for the document accessible.
  */
-class NotificationController MOZ_FINAL : public EventQueue,
-                                         public nsARefreshObserver
+class NotificationController final : public EventQueue,
+                                     public nsARefreshObserver
 {
 public:
   NotificationController(DocAccessible* aDocument, nsIPresShell* aPresShell);
 
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void);
-  NS_IMETHOD_(MozExternalRefCountType) Release(void);
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;
 
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(NotificationController)
 
@@ -102,13 +105,36 @@ public:
   void Shutdown();
 
   /**
-   * Put an accessible event into the queue to process it later.
+   * Add an accessible event into the queue to process it later.
    */
   void QueueEvent(AccEvent* aEvent)
   {
-    if (PushEvent(aEvent))
+    if (PushEvent(aEvent)) {
       ScheduleProcessing();
+    }
   }
+
+  /**
+   * Creates and adds a name change event into the queue for a container of
+   * the given accessible, if the accessible is a part of name computation of
+   * the container.
+   */
+  void QueueNameChange(Accessible* aChangeTarget)
+  {
+    if (PushNameChange(aChangeTarget)) {
+      ScheduleProcessing();
+    }
+  }
+
+  /**
+   * Returns existing event tree for the given the accessible or creates one if
+   * it doesn't exists yet.
+   */
+  EventTree* QueueMutation(Accessible* aContainer);
+
+#ifdef A11Y_LOG
+  const EventTree& RootEventTree() const { return mEventTree; };
+#endif
 
   /**
    * Schedule binding the child document to the tree of this document.
@@ -120,8 +146,15 @@ public:
    */
   inline void ScheduleTextUpdate(nsIContent* aTextNode)
   {
-    if (mTextHash.PutEntry(aTextNode))
-      ScheduleProcessing();
+    // Make sure we are not called with a node that is not in the DOM tree or
+    // not visible.
+    MOZ_ASSERT(aTextNode->GetParentNode(), "A text node is not in DOM");
+    MOZ_ASSERT(aTextNode->GetPrimaryFrame(), "A text node doesn't have a frame");
+    MOZ_ASSERT(aTextNode->GetPrimaryFrame()->StyleVisibility()->IsVisible(),
+               "A text node is not visible");
+
+    mTextHash.PutEntry(aTextNode);
+    ScheduleProcessing();
   }
 
   /**
@@ -130,6 +163,22 @@ public:
   void ScheduleContentInsertion(Accessible* aContainer,
                                 nsIContent* aStartChildNode,
                                 nsIContent* aEndChildNode);
+
+  /**
+   * Pend an accessible subtree relocation.
+   */
+  void ScheduleRelocation(Accessible* aOwner)
+  {
+    if (!mRelocations.Contains(aOwner) && mRelocations.AppendElement(aOwner)) {
+      ScheduleProcessing();
+    }
+  }
+
+  /**
+   * Start to observe refresh to make notifications and events processing after
+   * layout.
+   */
+  void ScheduleProcessing();
 
   /**
    * Process the generic notification synchronously if there are no pending
@@ -153,7 +202,7 @@ public:
       return;
     }
 
-    nsRefPtr<Notification> notification =
+    RefPtr<Notification> notification =
       new TNotification<Class, Arg>(aInstance, aMethod, aArg);
     if (notification && mNotifications.AppendElement(notification))
       ScheduleProcessing();
@@ -165,13 +214,12 @@ public:
    * @note  The caller must guarantee that the given instance still exists when
    *        the notification is processed.
    */
-  template<class Class, class Arg>
+  template<class Class>
   inline void ScheduleNotification(Class* aInstance,
-                                   typename TNotification<Class, Arg>::Callback aMethod,
-                                   Arg* aArg)
+                                   typename TNotification<Class>::Callback aMethod)
   {
-    nsRefPtr<Notification> notification =
-      new TNotification<Class, Arg>(aInstance, aMethod, aArg);
+    RefPtr<Notification> notification =
+      new TNotification<Class>(aInstance, aMethod);
     if (notification && mNotifications.AppendElement(notification))
       ScheduleProcessing();
   }
@@ -188,12 +236,6 @@ protected:
   NS_DECL_OWNINGTHREAD
 
   /**
-   * Start to observe refresh to make notifications and events processing after
-   * layout.
-   */
-  void ScheduleProcessing();
-
-  /**
    * Return true if the accessible tree state update is pending.
    */
   bool IsUpdatePending();
@@ -203,7 +245,7 @@ private:
   NotificationController& operator = (const NotificationController&);
 
   // nsARefreshObserver
-  virtual void WillRefresh(mozilla::TimeStamp aTime);
+  virtual void WillRefresh(mozilla::TimeStamp aTime) override;
 
 private:
   /**
@@ -226,47 +268,13 @@ private:
   /**
    * Child documents that needs to be bound to the tree.
    */
-  nsTArray<nsRefPtr<DocAccessible> > mHangingChildDocuments;
+  nsTArray<RefPtr<DocAccessible> > mHangingChildDocuments;
 
   /**
-   * Storage for content inserted notification information.
+   * Pending accessible tree update notifications for content insertions.
    */
-  class ContentInsertion
-  {
-  public:
-    ContentInsertion(DocAccessible* aDocument, Accessible* aContainer);
-
-    NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(ContentInsertion)
-    NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(ContentInsertion)
-
-    bool InitChildList(nsIContent* aStartChildNode, nsIContent* aEndChildNode);
-    void Process();
-
-  protected:
-    virtual ~ContentInsertion() { mDocument = nullptr; }
-
-  private:
-    ContentInsertion();
-    ContentInsertion(const ContentInsertion&);
-    ContentInsertion& operator = (const ContentInsertion&);
-
-    // The document used to process content insertion, matched to document of
-    // the notification controller that this notification belongs to, therefore
-    // it's ok to keep it as weak ref.
-    DocAccessible* mDocument;
-
-    // The container accessible that content insertion occurs within.
-    nsRefPtr<Accessible> mContainer;
-
-    // Array of inserted contents.
-    nsTArray<nsCOMPtr<nsIContent> > mInsertedContent;
-  };
-
-  /**
-   * A pending accessible tree update notifications for content insertions.
-   * Don't make this an nsAutoTArray; we use SwapElements() on it.
-   */
-  nsTArray<nsRefPtr<ContentInsertion> > mContentInsertions;
+  nsClassHashtable<nsRefPtrHashKey<Accessible>,
+                   nsTArray<nsCOMPtr<nsIContent>>> mContentInsertions;
 
   template<class T>
   class nsCOMPtrHashKey : public PLDHashEntryHdr
@@ -293,21 +301,25 @@ private:
   };
 
   /**
-   * A pending accessible tree update notifications for rendered text changes.
+   * Pending accessible tree update notifications for rendered text changes.
    */
   nsTHashtable<nsCOMPtrHashKey<nsIContent> > mTextHash;
 
   /**
-   * Update the accessible tree for pending rendered text change notifications.
-   */
-  static PLDHashOperator TextEnumerator(nsCOMPtrHashKey<nsIContent>* aEntry,
-                                        void* aUserArg);
-
-  /**
-   * Other notifications like DOM events. Don't make this an nsAutoTArray; we
+   * Other notifications like DOM events. Don't make this an AutoTArray; we
    * use SwapElements() on it.
    */
-  nsTArray<nsRefPtr<Notification> > mNotifications;
+  nsTArray<RefPtr<Notification> > mNotifications;
+
+  /**
+   * Holds all scheduled relocations.
+   */
+  nsTArray<RefPtr<Accessible> > mRelocations;
+
+  /**
+   * Holds all mutation events.
+   */
+  EventTree mEventTree;
 };
 
 } // namespace a11y

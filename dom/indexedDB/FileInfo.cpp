@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,7 +24,7 @@ using namespace mozilla::dom::quota;
 namespace {
 
 template <typename IdType>
-class FileInfoImpl MOZ_FINAL
+class FileInfoImpl final
   : public FileInfo
 {
   IdType mFileId;
@@ -43,16 +43,16 @@ private:
   { }
 
   virtual int64_t
-  Id() const MOZ_OVERRIDE
+  Id() const override
   {
     return int64_t(mFileId);
   }
 };
 
-class CleanupFileRunnable MOZ_FINAL
+class CleanupFileRunnable final
   : public nsRunnable
 {
-  nsRefPtr<FileManager> mFileManager;
+  RefPtr<FileManager> mFileManager;
   int64_t mFileId;
 
 public:
@@ -76,7 +76,7 @@ private:
   NS_DECL_NSIRUNNABLE
 };
 
-} // anonymous namespace
+} // namespace
 
 FileInfo::FileInfo(FileManager* aFileManager)
   : mFileManager(aFileManager)
@@ -130,10 +130,12 @@ FileInfo::GetReferences(int32_t* aRefCnt,
 
 void
 FileInfo::UpdateReferences(ThreadSafeAutoRefCnt& aRefCount,
-                           int32_t aDelta)
+                           int32_t aDelta,
+                           CustomCleanupCallback* aCustomCleanupCallback)
 {
   // XXX This can go away once DOM objects no longer hold FileInfo objects...
-  //     Looking at you, IDBMutableFile...
+  //     Looking at you, BlobImplBase...
+  //     BlobImplBase is being addressed in bug 1068975.
   if (IndexedDatabaseManager::IsClosed()) {
     MOZ_ASSERT(&aRefCount == &mRefCnt);
     MOZ_ASSERT(aDelta == 1 || aDelta == -1);
@@ -168,7 +170,14 @@ FileInfo::UpdateReferences(ThreadSafeAutoRefCnt& aRefCount,
   }
 
   if (needsCleanup) {
-    Cleanup();
+    if (aCustomCleanupCallback) {
+      nsresult rv = aCustomCleanupCallback->Cleanup(mFileManager, Id());
+      if (NS_FAILED(rv)) {
+        NS_WARNING("Custom cleanup failed!");
+      }
+    } else {
+      Cleanup();
+    }
   }
 
   delete this;
@@ -204,10 +213,10 @@ FileInfo::Cleanup()
 
   // IndexedDatabaseManager is main-thread only.
   if (!NS_IsMainThread()) {
-    nsRefPtr<CleanupFileRunnable> cleaner =
+    RefPtr<CleanupFileRunnable> cleaner =
       new CleanupFileRunnable(mFileManager, id);
 
-    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToMainThread(cleaner)));
+    MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(cleaner));
     return;
   }
 
@@ -226,7 +235,7 @@ CleanupFileRunnable::DoCleanup(FileManager* aFileManager, int64_t aFileId)
     return;
   }
 
-  nsRefPtr<IndexedDatabaseManager> mgr = IndexedDatabaseManager::Get();
+  RefPtr<IndexedDatabaseManager> mgr = IndexedDatabaseManager::Get();
   MOZ_ASSERT(mgr);
 
   if (NS_FAILED(mgr->AsyncDeleteFile(aFileManager, aFileId))) {

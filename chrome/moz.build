@@ -24,23 +24,17 @@ UNIFIED_SOURCES += [
     'nsChromeRegistryContent.cpp',
 ]
 
-MSVC_ENABLE_PGO = True
-
 include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
 
-GENERATED_INCLUDES += [
-    '/xpcom',
-]
-
 LOCAL_INCLUDES += [
-    '/netwerk/base/src',
+    '!/xpcom',
+    '/dom/base',
+    '/netwerk/base',
     '/netwerk/protocol/res',
     '/xpcom/components'
 ]
 
-if CONFIG['MOZ_ENABLE_GTK']:
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     CXXFLAGS += CONFIG['TK_CFLAGS']
-
-FAIL_ON_WARNINGS = True

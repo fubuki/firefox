@@ -29,14 +29,7 @@
 #include "mozilla/Likely.h"
 #include "mozilla/MacroArgs.h"
 #include "mozilla/MacroForEach.h"
-
-namespace mozilla {
-template <typename T>
-struct HasDangerousPublicDestructor
-{
-  static const bool value = false;
-};
-}
+#include "mozilla/TypeTraits.h"
 
 #if defined(__clang__)
    // bug 1028428 shows that at least in FreeBSD 10.0 with Clang 3.4 and libc++ 3.4,
@@ -45,14 +38,13 @@ struct HasDangerousPublicDestructor
    // seem to handle the fallback just fine.
 #  define MOZ_CAN_USE_IS_DESTRUCTIBLE_FALLBACK
 #elif defined(__GNUC__)
-   // GCC 4.7 is has buggy std::is_destructible
-#  if MOZ_USING_LIBSTDCXX && MOZ_GCC_VERSION_AT_LEAST(4, 8, 0)
+   // GCC 4.7 has buggy std::is_destructible.
+#  if MOZ_USING_LIBSTDCXX
 #    define MOZ_HAVE_STD_IS_DESTRUCTIBLE
-   // Some GCC versions have an ICE when using destructors in decltype().
-   // Works for me on GCC 4.8.2 on Fedora 20 x86-64.
-#  elif MOZ_GCC_VERSION_AT_LEAST(4, 8, 2)
-#    define MOZ_CAN_USE_IS_DESTRUCTIBLE_FALLBACK
 #  endif
+   // Some GCC versions have an ICE when using destructors in decltype().
+   // Works on GCC 4.8 at least.
+#  define MOZ_CAN_USE_IS_DESTRUCTIBLE_FALLBACK
 #endif
 
 #ifdef MOZ_HAVE_STD_IS_DESTRUCTIBLE
@@ -62,9 +54,7 @@ struct HasDangerousPublicDestructor
   namespace mozilla {
     struct IsDestructibleFallbackImpl
     {
-      template<typename T> static T&& Declval();
-
-      template<typename T, typename = decltype(Declval<T>().~T())>
+      template<typename T, typename = decltype(DeclVal<T>().~T())>
       static TrueType Test(int);
 
       template<typename>
@@ -82,22 +72,15 @@ struct HasDangerousPublicDestructor
       : IsDestructibleFallbackImpl::Selector<T>::type
     {
     };
-  }
+  } // namespace mozilla
 #  define MOZ_IS_DESTRUCTIBLE(X) (mozilla::IsDestructibleFallback<X>::value)
 #endif
 
 #ifdef MOZ_IS_DESTRUCTIBLE
 #define MOZ_ASSERT_TYPE_OK_FOR_REFCOUNTING(X) \
-  static_assert(!MOZ_IS_DESTRUCTIBLE(X) || \
-                mozilla::HasDangerousPublicDestructor<X>::value, \
+  static_assert(!MOZ_IS_DESTRUCTIBLE(X), \
                 "Reference-counted class " #X " should not have a public destructor. " \
-                "Try to make this class's destructor non-public. If that is really " \
-                "not possible, you can whitelist this class by providing a " \
-                "HasDangerousPublicDestructor specialization for it."); \
-  static_assert(!mozilla::HasDangerousPublicDestructor<X>::value || \
-                MOZ_IS_DESTRUCTIBLE(X), \
-                "Class " #X " has no public destructor. That's good! So please " \
-                "remove the HasDangerousPublicDestructor specialization for it.");
+                "Make this class's destructor non-public");
 #else
 #define MOZ_ASSERT_TYPE_OK_FOR_REFCOUNTING(X)
 #endif
@@ -144,7 +127,7 @@ private:
 
 // Macros for reference-count and constructor logging
 
-#ifdef NS_BUILD_REFCNT_LOGGING
+#if defined(NS_BUILD_REFCNT_LOGGING)
 
 #define NS_LOG_ADDREF(_p, _rc, _type, _size) \
   NS_LogAddRef((_p), (_rc), (_type), (uint32_t) (_size))
@@ -156,14 +139,6 @@ private:
 #define MOZ_ASSERT_CLASSNAME(_type)                         \
   static_assert(mozilla::IsClass<_type>::value,             \
                 "Token '" #_type "' is not a class type.")
-// Older versions of gcc can't instantiate local classes in templates.
-// GCC 4.7 doesn't have this problem.
-#if MOZ_IS_GCC
-# if !MOZ_GCC_VERSION_AT_LEAST(4, 7, 0)
-#  undef MOZ_ASSERT_CLASSNAME
-#  define MOZ_ASSERT_CLASSNAME(_type)
-# endif
-#endif
 
 // Note that the following constructor/destructor logging macros are redundant
 // for refcounted objects that log via the NS_LOG_ADDREF/NS_LOG_RELEASE macros.
@@ -181,6 +156,11 @@ do {                                                              \
   NS_LogCtor((void*)this, #_type, sizeof(*this) - sizeof(_base)); \
 } while (0)
 
+#define MOZ_LOG_CTOR(_ptr, _name, _size) \
+do {                                     \
+  NS_LogCtor((void*)_ptr, _name, _size); \
+} while (0)
+
 #define MOZ_COUNT_DTOR(_type)                                 \
 do {                                                          \
   MOZ_ASSERT_CLASSNAME(_type);                                \
@@ -192,6 +172,11 @@ do {                                                              \
   MOZ_ASSERT_CLASSNAME(_type);                                    \
   MOZ_ASSERT_CLASSNAME(_base);                                    \
   NS_LogDtor((void*)this, #_type, sizeof(*this) - sizeof(_base)); \
+} while (0)
+
+#define MOZ_LOG_DTOR(_ptr, _name, _size) \
+do {                                     \
+  NS_LogDtor((void*)_ptr, _name, _size); \
 } while (0)
 
 /* nsCOMPtr.h allows these macros to be defined by clients
@@ -211,8 +196,10 @@ do {                                                              \
 #define NS_LOG_RELEASE(_p, _rc, _type)
 #define MOZ_COUNT_CTOR(_type)
 #define MOZ_COUNT_CTOR_INHERITED(_type, _base)
+#define MOZ_LOG_CTOR(_ptr, _name, _size)
 #define MOZ_COUNT_DTOR(_type)
 #define MOZ_COUNT_DTOR_INHERITED(_type, _base)
+#define MOZ_LOG_DTOR(_ptr, _name, _size)
 
 #endif /* NS_BUILD_REFCNT_LOGGING */
 
@@ -372,7 +359,7 @@ private:
   // but could break pre-existing code that assumes sequential consistency.
   Atomic<nsrefcnt> mValue;
 };
-}
+} // namespace mozilla
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -385,9 +372,9 @@ private:
 #define NS_DECL_ISUPPORTS                                                     \
 public:                                                                       \
   NS_IMETHOD QueryInterface(REFNSIID aIID,                                    \
-                            void** aInstancePtr) MOZ_OVERRIDE;                \
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) MOZ_OVERRIDE;             \
-  NS_IMETHOD_(MozExternalRefCountType) Release(void) MOZ_OVERRIDE;            \
+                            void** aInstancePtr) override;                    \
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;                 \
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;                \
 protected:                                                                    \
   nsAutoRefCnt mRefCnt;                                                       \
   NS_DECL_OWNINGTHREAD                                                        \
@@ -396,9 +383,9 @@ public:
 #define NS_DECL_THREADSAFE_ISUPPORTS                                          \
 public:                                                                       \
   NS_IMETHOD QueryInterface(REFNSIID aIID,                                    \
-                            void** aInstancePtr) MOZ_OVERRIDE;                \
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) MOZ_OVERRIDE;             \
-  NS_IMETHOD_(MozExternalRefCountType) Release(void) MOZ_OVERRIDE;            \
+                            void** aInstancePtr) override;                    \
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;                 \
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;                \
 protected:                                                                    \
   ::mozilla::ThreadSafeAutoRefCnt mRefCnt;                                    \
   NS_DECL_OWNINGTHREAD                                                        \
@@ -407,9 +394,9 @@ public:
 #define NS_DECL_CYCLE_COLLECTING_ISUPPORTS                                    \
 public:                                                                       \
   NS_IMETHOD QueryInterface(REFNSIID aIID,                                    \
-                            void** aInstancePtr) MOZ_OVERRIDE;                \
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) MOZ_OVERRIDE;             \
-  NS_IMETHOD_(MozExternalRefCountType) Release(void) MOZ_OVERRIDE;            \
+                            void** aInstancePtr) override;                    \
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;                 \
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;                \
   NS_IMETHOD_(void) DeleteCycleCollectable(void);                             \
 protected:                                                                    \
   nsCycleCollectingAutoRefCnt mRefCnt;                                        \
@@ -497,18 +484,11 @@ public:
 ///////////////////////////////////////////////////////////////////////////////
 
 /**
- * Previously used to initialize the reference count, but no longer needed.
- *
- * DEPRECATED.
- */
-#define NS_INIT_ISUPPORTS() ((void)0)
-
-/**
  * Use this macro to declare and implement the AddRef & Release methods for a
  * given non-XPCOM <i>_class</i>.
  *
  * @param _class The name of the class implementing the method
- * @param optional MOZ_OVERRIDE Mark the AddRef & Release methods as overrides.
+ * @param optional override Mark the AddRef & Release methods as overrides.
  */
 #define NS_INLINE_DECL_REFCOUNTING(_class, ...)                               \
 public:                                                                       \
@@ -538,24 +518,16 @@ protected:                                                                    \
   NS_DECL_OWNINGTHREAD                                                        \
 public:
 
-/**
- * Use this macro to declare and implement the AddRef & Release methods for a
- * given non-XPCOM <i>_class</i> in a threadsafe manner.
- *
- * DOES NOT DO REFCOUNT STABILIZATION!
- *
- * @param _class The name of the class implementing the method
- */
-#define NS_INLINE_DECL_THREADSAFE_REFCOUNTING(_class, ...)                    \
+#define NS_INLINE_DECL_THREADSAFE_REFCOUNTING_META(_class, _decl, ...)        \
 public:                                                                       \
-  NS_METHOD_(MozExternalRefCountType) AddRef(void) __VA_ARGS__ {              \
+  _decl(MozExternalRefCountType) AddRef(void) __VA_ARGS__ {                   \
     MOZ_ASSERT_TYPE_OK_FOR_REFCOUNTING(_class)                                \
     MOZ_ASSERT(int32_t(mRefCnt) >= 0, "illegal refcnt");                      \
     nsrefcnt count = ++mRefCnt;                                               \
     NS_LOG_ADDREF(this, count, #_class, sizeof(*this));                       \
     return (nsrefcnt) count;                                                  \
   }                                                                           \
-  NS_METHOD_(MozExternalRefCountType) Release(void) __VA_ARGS__ {             \
+  _decl(MozExternalRefCountType) Release(void) __VA_ARGS__ {                  \
     MOZ_ASSERT(int32_t(mRefCnt) > 0, "dup release");                          \
     nsrefcnt count = --mRefCnt;                                               \
     NS_LOG_RELEASE(this, count, #_class);                                     \
@@ -568,6 +540,24 @@ public:                                                                       \
 protected:                                                                    \
   ::mozilla::ThreadSafeAutoRefCnt mRefCnt;                                    \
 public:
+
+/**
+ * Use this macro to declare and implement the AddRef & Release methods for a
+ * given non-XPCOM <i>_class</i> in a threadsafe manner.
+ *
+ * DOES NOT DO REFCOUNT STABILIZATION!
+ *
+ * @param _class The name of the class implementing the method
+ */
+#define NS_INLINE_DECL_THREADSAFE_REFCOUNTING(_class, ...)                    \
+NS_INLINE_DECL_THREADSAFE_REFCOUNTING_META(_class, NS_METHOD_, __VA_ARGS__)
+
+/**
+ * Like NS_INLINE_DECL_THREADSAFE_REFCOUNTING with AddRef & Release declared
+ * virtual.
+ */
+#define NS_INLINE_DECL_THREADSAFE_VIRTUAL_REFCOUNTING(_class, ...)            \
+NS_INLINE_DECL_THREADSAFE_REFCOUNTING_META(_class, NS_IMETHOD_, __VA_ARGS__)
 
 /**
  * Use this macro to implement the AddRef method for a given <i>_class</i>
@@ -964,9 +954,9 @@ NS_IMETHODIMP _class::QueryInterface(REFNSIID aIID, void** aInstancePtr)      \
 #define NS_DECL_ISUPPORTS_INHERITED                                           \
 public:                                                                       \
   NS_IMETHOD QueryInterface(REFNSIID aIID,                                    \
-                            void** aInstancePtr) MOZ_OVERRIDE;                \
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) MOZ_OVERRIDE;             \
-  NS_IMETHOD_(MozExternalRefCountType) Release(void) MOZ_OVERRIDE;            \
+                            void** aInstancePtr) override;                \
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;             \
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;            \
 
 /**
  * These macros can be used in conjunction with NS_DECL_ISUPPORTS_INHERITED
@@ -1018,11 +1008,6 @@ NS_IMETHODIMP_(MozExternalRefCountType) Class::Release(void)                  \
     MOZ_FOR_EACH(NS_INTERFACE_TABLE_ENTRY, (aClass,), (__VA_ARGS__))          \
   NS_INTERFACE_TABLE_END
 
-#define NS_IMPL_QUERY_INTERFACE_INHERITED0(aClass, aSuper)                    \
-  NS_INTERFACE_TABLE_HEAD(aClass)                                             \
-  NS_INTERFACE_TABLE_INHERITED0(aClass)                                       \
-  NS_INTERFACE_TABLE_TAIL_INHERITING(aSuper)
-
 #define NS_IMPL_QUERY_INTERFACE_INHERITED(aClass, aSuper, ...)                \
   NS_INTERFACE_TABLE_HEAD(aClass)                                             \
   NS_INTERFACE_TABLE_INHERITED(aClass, __VA_ARGS__)                           \
@@ -1047,7 +1032,8 @@ NS_IMETHODIMP_(MozExternalRefCountType) Class::Release(void)                  \
   NS_IMPL_QUERY_INTERFACE(aClass, __VA_ARGS__)
 
 #define NS_IMPL_ISUPPORTS_INHERITED0(aClass, aSuper)                          \
-    NS_IMPL_QUERY_INTERFACE_INHERITED0(aClass, aSuper)                        \
+    NS_INTERFACE_TABLE_HEAD(aClass)                                           \
+    NS_INTERFACE_TABLE_TAIL_INHERITING(aSuper)                                \
     NS_IMPL_ADDREF_INHERITED(aClass, aSuper)                                  \
     NS_IMPL_RELEASE_INHERITED(aClass, aSuper)                                 \
 
@@ -1088,7 +1074,7 @@ _class::GetInterfaces(uint32_t* _count, nsIID*** _array)                      \
 }                                                                             \
                                                                               \
 NS_IMETHODIMP                                                                 \
-_class::GetHelperForLanguage(uint32_t _language, nsISupports** _retval)       \
+_class::GetScriptableHelper(nsIXPCScriptable** _retval)                       \
 {                                                                             \
   *_retval = nullptr;                                                         \
   return NS_OK;                                                               \
@@ -1112,13 +1098,6 @@ NS_IMETHODIMP                                                                 \
 _class::GetClassID(nsCID** _classID)                                          \
 {                                                                             \
   *_classID = nullptr;                                                        \
-  return NS_OK;                                                               \
-}                                                                             \
-                                                                              \
-NS_IMETHODIMP                                                                 \
-_class::GetImplementationLanguage(uint32_t* _language)                        \
-{                                                                             \
-  *_language = nsIProgrammingLanguage::CPLUSPLUS;                             \
   return NS_OK;                                                               \
 }                                                                             \
                                                                               \

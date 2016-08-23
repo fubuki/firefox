@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim:expandtab:shiftwidth=4:tabstop=4:
+/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim:expandtab:shiftwidth=2:tabstop=2:
  */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -15,7 +15,6 @@
 
 #include "nsIComponentManager.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMWindow.h"
 #include "nsIWindowMediator.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/Services.h"
@@ -150,29 +149,15 @@ ApplicationAccessible::NativeState()
   return 0;
 }
 
-void
-ApplicationAccessible::InvalidateChildren()
-{
-  // Do nothing because application children are kept updated by AppendChild()
-  // and RemoveChild() method calls.
-}
-
 KeyBinding
 ApplicationAccessible::AccessKey() const
 {
   return KeyBinding();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Accessible protected methods
-
 void
-ApplicationAccessible::CacheChildren()
+ApplicationAccessible::Init()
 {
-  // CacheChildren is called only once for application accessible when its
-  // children are requested because empty InvalidateChldren() prevents its
-  // repeated calls.
-
   // Basically children are kept updated by Append/RemoveChild method calls.
   // However if there are open windows before accessibility was started
   // then we need to make sure root accessibles for open windows are created so
@@ -193,12 +178,10 @@ ApplicationAccessible::CacheChildren()
   while (hasMore) {
     nsCOMPtr<nsISupports> window;
     windowEnumerator->GetNext(getter_AddRefs(window));
-    nsCOMPtr<nsIDOMWindow> DOMWindow = do_QueryInterface(window);
+    nsCOMPtr<nsPIDOMWindowOuter> DOMWindow = do_QueryInterface(window);
     if (DOMWindow) {
-      nsCOMPtr<nsIDOMDocument> DOMDocument;
-      DOMWindow->GetDocument(getter_AddRefs(DOMDocument));
-      if (DOMDocument) {
-        nsCOMPtr<nsIDocument> docNode(do_QueryInterface(DOMDocument));
+      nsCOMPtr<nsIDocument> docNode = DOMWindow->GetDoc();
+      if (docNode) {
         GetAccService()->GetDocAccessible(docNode); // ensure creation
       }
     }

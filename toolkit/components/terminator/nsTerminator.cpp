@@ -33,6 +33,12 @@
 #include "nsExceptionHandler.h"
 #endif
 
+#if defined(XP_WIN)
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
@@ -52,9 +58,6 @@
 // Additional number of milliseconds to wait until we decide to exit
 // forcefully.
 #define ADDITIONAL_WAIT_BEFORE_CRASH_MS 3000
-
-// One second, in ticks.
-#define TICK_DURATION 1000
 
 namespace mozilla {
 
@@ -141,7 +144,11 @@ RunWatchdog(void* arg)
     // we have lost at most one second, which is much
     // more reasonable.
     //
-    PR_Sleep(TICK_DURATION);
+#if defined(XP_WIN)
+    Sleep(1000 /* ms */);
+#else
+    usleep(1000000 /* usec */);
+#endif
 
     if (gHeartbeat++ < timeToLive) {
       continue;
@@ -222,8 +229,8 @@ void RunWriter(void* arg)
   tmpFilePath.AppendLiteral(".tmp");
 
   // Cleanup any file leftover from a previous run
-  unused << PR_Delete(tmpFilePath.get());
-  unused << PR_Delete(destinationPath.get());
+  Unused << PR_Delete(tmpFilePath.get());
+  Unused << PR_Delete(destinationPath.get());
 
   while (true) {
     //
@@ -316,7 +323,7 @@ static ShutdownStep sShutdownSteps[] = {
   ShutdownStep("xpcom-shutdown"),
 };
 
-} // anonymous namespace
+} // namespace
 
 NS_IMPL_ISUPPORTS(nsTerminator, nsIObserver)
 
@@ -351,7 +358,12 @@ nsTerminator::Start()
 {
   MOZ_ASSERT(!mInitialized);
   StartWatchdog();
+#if !defined(DEBUG)
+  // Only allow nsTerminator to write on non-debug builds so we don't get leak warnings on
+  // shutdown for intentional leaks (see bug 1242084). This will be enabled again by bug
+  // 1255484 when 1255478 lands.
   StartWriter();
+#endif // !defined(DEBUG)
   mInitialized = true;
 }
 
@@ -378,7 +390,8 @@ nsTerminator::StartWatchdog()
   }
 
   UniquePtr<Options> options(new Options());
-  options->crashAfterTicks = crashAfterMS / TICK_DURATION;
+  const PRIntervalTime ticksDuration = PR_MillisecondsToInterval(1000);
+  options->crashAfterTicks = crashAfterMS / ticksDuration;
 
   DebugOnly<PRThread*> watchdogThread = CreateSystemThread(RunWatchdog,
                                                 options.release());
@@ -391,8 +404,7 @@ nsTerminator::StartWatchdog()
 void
 nsTerminator::StartWriter()
 {
-
-  if (!Telemetry::CanRecord()) {
+  if (!Telemetry::CanRecordExtended()) {
     return;
   }
   nsCOMPtr<nsIFile> profLD;
@@ -440,7 +452,12 @@ nsTerminator::Observe(nsISupports *, const char *aTopic, const char16_t *)
   }
 
   UpdateHeartbeat(aTopic);
+#if !defined(DEBUG)
+  // Only allow nsTerminator to write on non-debug builds so we don't get leak warnings on
+  // shutdown for intentional leaks (see bug 1242084). This will be enabled again by bug
+  // 1255484 when 1255478 lands.
   UpdateTelemetry();
+#endif // !defined(DEBUG)
   UpdateCrashReport(aTopic);
 
   // Perform a little cleanup
@@ -476,7 +493,7 @@ nsTerminator::UpdateHeartbeat(const char* aTopic)
 void
 nsTerminator::UpdateTelemetry()
 {
-  if (!Telemetry::CanRecord() || !gWriteReady) {
+  if (!Telemetry::CanRecordExtended() || !gWriteReady) {
     return;
   }
 
@@ -530,7 +547,7 @@ nsTerminator::UpdateCrashReport(const char* aTopic)
   // In case of crash, we wish to know where in shutdown we are
   nsAutoCString report(aTopic);
 
-  unused << CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ShutdownProgress"),
+  Unused << CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("ShutdownProgress"),
                                                report);
 #endif // defined(MOZ_CRASH_REPORTER)
 }

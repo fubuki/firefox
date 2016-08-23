@@ -10,14 +10,17 @@
 #include "jsfun.h"
 
 #include "jit/JitAllocPolicy.h"
+#include "jit/JitFrames.h"
 #include "jit/Registers.h"
 #include "vm/ScopeObject.h"
 
 namespace js {
 namespace jit {
 
+class TrackedOptimizations;
+
 inline unsigned
-StartArgSlot(JSScript *script)
+StartArgSlot(JSScript* script)
 {
     // Reserved slots:
     // Slot 0: Scope chain.
@@ -31,7 +34,7 @@ StartArgSlot(JSScript *script)
 }
 
 inline unsigned
-CountArgSlots(JSScript *script, JSFunction *fun)
+CountArgSlots(JSScript* script, JSFunction* fun)
 {
     // Slot x + 0: This value.
     // Slot x + 1: Argument 1.
@@ -51,31 +54,31 @@ CountArgSlots(JSScript *script, JSFunction *fun)
 // inlinings done during compilation.
 class InlineScriptTree {
     // InlineScriptTree for the caller
-    InlineScriptTree *caller_;
+    InlineScriptTree* caller_;
 
     // PC in the caller corresponding to this script.
-    jsbytecode *callerPc_;
+    jsbytecode* callerPc_;
 
     // Script for this entry.
-    JSScript *script_;
+    JSScript* script_;
 
     // Child entries (linked together by nextCallee pointer)
-    InlineScriptTree *children_;
-    InlineScriptTree *nextCallee_;
+    InlineScriptTree* children_;
+    InlineScriptTree* nextCallee_;
 
   public:
-    InlineScriptTree(InlineScriptTree *caller, jsbytecode *callerPc, JSScript *script)
+    InlineScriptTree(InlineScriptTree* caller, jsbytecode* callerPc, JSScript* script)
       : caller_(caller), callerPc_(callerPc), script_(script),
         children_(nullptr), nextCallee_(nullptr)
     {}
 
-    static InlineScriptTree *New(TempAllocator *allocator, InlineScriptTree *caller,
-                                 jsbytecode *callerPc, JSScript *script);
+    static InlineScriptTree* New(TempAllocator* allocator, InlineScriptTree* caller,
+                                 jsbytecode* callerPc, JSScript* script);
 
-    InlineScriptTree *addCallee(TempAllocator *allocator, jsbytecode *callerPc,
-                                JSScript *calleeScript);
+    InlineScriptTree* addCallee(TempAllocator* allocator, jsbytecode* callerPc,
+                                JSScript* calleeScript);
 
-    InlineScriptTree *caller() const {
+    InlineScriptTree* caller() const {
         return caller_;
     }
 
@@ -85,24 +88,24 @@ class InlineScriptTree {
     bool hasCaller() const {
         return caller_ != nullptr;
     }
-    InlineScriptTree *outermostCaller() {
+    InlineScriptTree* outermostCaller() {
         if (isOutermostCaller())
             return this;
         return caller_->outermostCaller();
     }
 
-    jsbytecode *callerPc() const {
+    jsbytecode* callerPc() const {
         return callerPc_;
     }
 
-    JSScript *script() const {
+    JSScript* script() const {
         return script_;
     }
 
     bool hasChildren() const {
         return children_ != nullptr;
     }
-    InlineScriptTree *firstChild() const {
+    InlineScriptTree* firstChild() const {
         MOZ_ASSERT(hasChildren());
         return children_;
     }
@@ -110,7 +113,7 @@ class InlineScriptTree {
     bool hasNextCallee() const {
         return nextCallee_ != nullptr;
     }
-    InlineScriptTree *nextCallee() const {
+    InlineScriptTree* nextCallee() const {
         MOZ_ASSERT(hasNextCallee());
         return nextCallee_;
     }
@@ -125,46 +128,80 @@ class InlineScriptTree {
 class BytecodeSite : public TempObject
 {
     // InlineScriptTree identifying innermost active function at site.
-    InlineScriptTree *tree_;
+    InlineScriptTree* tree_;
 
     // Bytecode address within innermost active function.
-    jsbytecode *pc_;
+    jsbytecode* pc_;
+
+    // Optimization information at the pc.
+    TrackedOptimizations* optimizations_;
 
   public:
     BytecodeSite()
-      : tree_(nullptr), pc_(nullptr)
+      : tree_(nullptr), pc_(nullptr), optimizations_(nullptr)
     {}
 
-    BytecodeSite(InlineScriptTree *tree, jsbytecode *pc)
-      : tree_(tree), pc_(pc)
+    BytecodeSite(InlineScriptTree* tree, jsbytecode* pc)
+      : tree_(tree), pc_(pc), optimizations_(nullptr)
     {
         MOZ_ASSERT(tree_ != nullptr);
         MOZ_ASSERT(pc_ != nullptr);
     }
 
-    InlineScriptTree *tree() const {
+    InlineScriptTree* tree() const {
         return tree_;
     }
 
-    jsbytecode *pc() const {
+    jsbytecode* pc() const {
         return pc_;
     }
 
-    JSScript *script() const {
+    JSScript* script() const {
         return tree_ ? tree_->script() : nullptr;
+    }
+
+    bool hasOptimizations() const {
+        return !!optimizations_;
+    }
+
+    TrackedOptimizations* optimizations() const {
+        MOZ_ASSERT(hasOptimizations());
+        return optimizations_;
+    }
+
+    void setOptimizations(TrackedOptimizations* optimizations) {
+        optimizations_ = optimizations;
     }
 };
 
+enum AnalysisMode {
+    /* JavaScript execution, not analysis. */
+    Analysis_None,
+
+    /*
+     * MIR analysis performed when invoking 'new' on a script, to determine
+     * definite properties. Used by the optimizing JIT.
+     */
+    Analysis_DefiniteProperties,
+
+    /*
+     * MIR analysis performed when executing a script which uses its arguments,
+     * when it is not known whether a lazy arguments value can be used.
+     */
+    Analysis_ArgumentsUsage
+};
 
 // Contains information about the compilation source for IR being generated.
 class CompileInfo
 {
   public:
-    CompileInfo(JSScript *script, JSFunction *fun, jsbytecode *osrPc, bool constructing,
-                ExecutionMode executionMode, bool scriptNeedsArgsObj,
-                InlineScriptTree *inlineScriptTree)
+    CompileInfo(JSScript* script, JSFunction* fun, jsbytecode* osrPc, bool constructing,
+                AnalysisMode analysisMode, bool scriptNeedsArgsObj,
+                InlineScriptTree* inlineScriptTree)
       : script_(script), fun_(fun), osrPc_(osrPc), constructing_(constructing),
-        executionMode_(executionMode), scriptNeedsArgsObj_(scriptNeedsArgsObj),
+        analysisMode_(analysisMode), scriptNeedsArgsObj_(scriptNeedsArgsObj),
+        hadOverflowBailout_(script->hadOverflowBailout()),
+        mayReadFrameArgsDirectly_(script->mayReadFrameArgsDirectly()),
         inlineScriptTree_(inlineScriptTree)
     {
         MOZ_ASSERT_IF(osrPc, JSOp(*osrPc) == JSOP_LOOPENTRY);
@@ -178,7 +215,7 @@ class CompileInfo
             MOZ_ASSERT(fun_->isTenured());
         }
 
-        osrStaticScope_ = osrPc ? script->getStaticScope(osrPc) : nullptr;
+        osrStaticScope_ = osrPc ? script->getStaticBlockScope(osrPc) : nullptr;
 
         nimplicit_ = StartArgSlot(script)                   /* scope chain and argument obj */
                    + (fun ? 1 : 0);                         /* this */
@@ -186,14 +223,14 @@ class CompileInfo
         nbodyfixed_ = script->nbodyfixed();
         nlocals_ = script->nfixed();
         fixedLexicalBegin_ = script->fixedLexicalBegin();
-        nstack_ = script->nslots() - script->nfixed();
+        nstack_ = Max<unsigned>(script->nslots() - script->nfixed(), MinJITStackSize);
         nslots_ = nimplicit_ + nargs_ + nlocals_ + nstack_;
     }
 
-    CompileInfo(unsigned nlocals, ExecutionMode executionMode)
+    explicit CompileInfo(unsigned nlocals)
       : script_(nullptr), fun_(nullptr), osrPc_(nullptr), osrStaticScope_(nullptr),
-        constructing_(false), executionMode_(executionMode), scriptNeedsArgsObj_(false),
-        inlineScriptTree_(nullptr)
+        constructing_(false), analysisMode_(Analysis_None), scriptNeedsArgsObj_(false),
+        mayReadFrameArgsDirectly_(false), inlineScriptTree_(nullptr)
     {
         nimplicit_ = 0;
         nargs_ = 0;
@@ -204,74 +241,77 @@ class CompileInfo
         fixedLexicalBegin_ = nlocals;
     }
 
-    JSScript *script() const {
+    JSScript* script() const {
         return script_;
     }
     bool compilingAsmJS() const {
         return script() == nullptr;
     }
-    JSFunction *funMaybeLazy() const {
+    JSFunction* funMaybeLazy() const {
         return fun_;
+    }
+    ModuleObject* module() const {
+        return script_->module();
     }
     bool constructing() const {
         return constructing_;
     }
-    jsbytecode *osrPc() {
+    jsbytecode* osrPc() const {
         return osrPc_;
     }
-    NestedScopeObject *osrStaticScope() const {
+    NestedStaticScope* osrStaticScope() const {
         return osrStaticScope_;
     }
-    InlineScriptTree *inlineScriptTree() const {
+    InlineScriptTree* inlineScriptTree() const {
         return inlineScriptTree_;
     }
 
-    bool hasOsrAt(jsbytecode *pc) {
+    bool hasOsrAt(jsbytecode* pc) const {
         MOZ_ASSERT(JSOp(*pc) == JSOP_LOOPENTRY);
         return pc == osrPc();
     }
 
-    jsbytecode *startPC() const {
+    jsbytecode* startPC() const {
         return script_->code();
     }
-    jsbytecode *limitPC() const {
+    jsbytecode* limitPC() const {
         return script_->codeEnd();
     }
 
-    const char *filename() const {
+    const char* filename() const {
         return script_->filename();
     }
 
     unsigned lineno() const {
         return script_->lineno();
     }
-    unsigned lineno(jsbytecode *pc) const {
+    unsigned lineno(jsbytecode* pc) const {
         return PCToLineNumber(script_, pc);
     }
 
     // Script accessors based on PC.
 
-    JSAtom *getAtom(jsbytecode *pc) const {
+    JSAtom* getAtom(jsbytecode* pc) const {
         return script_->getAtom(GET_UINT32_INDEX(pc));
     }
 
-    PropertyName *getName(jsbytecode *pc) const {
+    PropertyName* getName(jsbytecode* pc) const {
         return script_->getName(GET_UINT32_INDEX(pc));
     }
 
-    inline RegExpObject *getRegExp(jsbytecode *pc) const;
+    inline RegExpObject* getRegExp(jsbytecode* pc) const;
 
-    JSObject *getObject(jsbytecode *pc) const {
+    JSObject* getObject(jsbytecode* pc) const {
         return script_->getObject(GET_UINT32_INDEX(pc));
     }
 
-    inline JSFunction *getFunction(jsbytecode *pc) const;
+    inline JSFunction* getFunction(jsbytecode* pc) const;
 
-    const Value &getConst(jsbytecode *pc) const {
+    const Value& getConst(jsbytecode* pc) const {
         return script_->getConst(GET_UINT32_INDEX(pc));
     }
 
-    jssrcnote *getNote(GSNCache &gsn, jsbytecode *pc) const {
+    jssrcnote* getNote(GSNCache& gsn, jsbytecode* pc) const {
         return GetSrcNote(gsn, script(), pc);
     }
 
@@ -367,7 +407,7 @@ class CompileInfo
         return nimplicit() + nargs() + nlocals();
     }
 
-    bool isSlotAliased(uint32_t index, NestedScopeObject *staticScope) const {
+    bool isSlotAliased(uint32_t index, NestedStaticScope* staticScope) const {
         MOZ_ASSERT(index >= startArgSlot());
 
         if (funMaybeLazy() && index == thisSlot())
@@ -391,12 +431,12 @@ class CompileInfo
 
             // Otherwise, it might be part of a block scope.
             for (; staticScope; staticScope = staticScope->enclosingNestedScope()) {
-                if (!staticScope->is<StaticBlockObject>())
+                if (!staticScope->is<StaticBlockScope>())
                     continue;
-                StaticBlockObject &blockObj = staticScope->as<StaticBlockObject>();
-                if (blockObj.localOffset() < local) {
-                    if (local - blockObj.localOffset() < blockObj.numVariables())
-                        return blockObj.isAliased(local - blockObj.localOffset());
+                StaticBlockScope& blockScope = staticScope->as<StaticBlockScope>();
+                if (blockScope.localOffset() < local) {
+                    if (local - blockScope.localOffset() < blockScope.numVariables())
+                        return blockScope.isAliased(local - blockScope.localOffset());
                     return false;
                 }
             }
@@ -426,15 +466,15 @@ class CompileInfo
         return scriptNeedsArgsObj_;
     }
     bool argsObjAliasesFormals() const {
-        return scriptNeedsArgsObj_ && !script()->strict();
+        return scriptNeedsArgsObj_ && script()->hasMappedArgsObj();
     }
 
-    ExecutionMode executionMode() const {
-        return executionMode_;
+    AnalysisMode analysisMode() const {
+        return analysisMode_;
     }
 
-    bool executionModeIsAnalysis() const {
-        return executionMode_ == DefinitePropertiesAnalysis || executionMode_ == ArgumentsUsageAnalysis;
+    bool isAnalysis() const {
+        return analysisMode_ != Analysis_None;
     }
 
     // Returns true if a slot can be observed out-side the current frame while
@@ -457,6 +497,9 @@ class CompileInfo
 
         // The |this| value must always be observable.
         if (slot == thisSlot())
+            return true;
+
+        if (funMaybeLazy()->needsCallObject() && slot == scopeChainSlot())
             return true;
 
         // If the function may need an arguments object, then make sure to
@@ -489,7 +532,7 @@ class CompileInfo
     // definition can be optimized away as long as we can compute its values.
     bool isRecoverableOperand(uint32_t slot) const {
         // If this script is not a function, then none of the slots are
-        // obserbavle.  If it this |slot| is not observable, thus we can always
+        // observable.  If it this |slot| is not observable, thus we can always
         // recover it.
         if (!funMaybeLazy())
             return true;
@@ -507,6 +550,15 @@ class CompileInfo
         return true;
     }
 
+    // Check previous bailout states to prevent doing the same bailout in the
+    // next compilation.
+    bool hadOverflowBailout() const {
+        return hadOverflowBailout_;
+    }
+    bool mayReadFrameArgsDirectly() const {
+        return mayReadFrameArgsDirectly_;
+    }
+
   private:
     unsigned nimplicit_;
     unsigned nargs_;
@@ -515,19 +567,25 @@ class CompileInfo
     unsigned nstack_;
     unsigned nslots_;
     unsigned fixedLexicalBegin_;
-    JSScript *script_;
-    JSFunction *fun_;
-    jsbytecode *osrPc_;
-    NestedScopeObject *osrStaticScope_;
+    JSScript* script_;
+    JSFunction* fun_;
+    jsbytecode* osrPc_;
+    NestedStaticScope* osrStaticScope_;
     bool constructing_;
-    ExecutionMode executionMode_;
+    AnalysisMode analysisMode_;
 
     // Whether a script needs an arguments object is unstable over compilation
     // since the arguments optimization could be marked as failed on the main
     // thread, so cache a value here and use it throughout for consistency.
     bool scriptNeedsArgsObj_;
 
-    InlineScriptTree *inlineScriptTree_;
+    // Record the state of previous bailouts in order to prevent compiling the
+    // same function identically the next time.
+    bool hadOverflowBailout_;
+
+    bool mayReadFrameArgsDirectly_;
+
+    InlineScriptTree* inlineScriptTree_;
 };
 
 } // namespace jit

@@ -7,13 +7,13 @@
 #ifndef MP4_STREAM_H_
 #define MP4_STREAM_H_
 
-#include "mp4_demuxer/mp4_demuxer.h"
+#include "mp4_demuxer/Stream.h"
 
 #include "MediaResource.h"
 
-#include "mozilla/fallible.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/Monitor.h"
+#include "mozilla/UniquePtrExtensions.h"
 
 namespace mozilla {
 
@@ -24,11 +24,11 @@ public:
   explicit MP4Stream(MediaResource* aResource);
   virtual ~MP4Stream();
   bool BlockingReadIntoCache(int64_t aOffset, size_t aCount, Monitor* aToUnlock);
-  virtual bool ReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
-                      size_t* aBytesRead) MOZ_OVERRIDE;
-  virtual bool CachedReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
-                            size_t* aBytesRead) MOZ_OVERRIDE;
-  virtual bool Length(int64_t* aSize) MOZ_OVERRIDE;
+  bool ReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
+              size_t* aBytesRead) override;
+  bool CachedReadAt(int64_t aOffset, void* aBuffer, size_t aCount,
+                    size_t* aBytesRead) override;
+  bool Length(int64_t* aSize) override;
 
   struct ReadRecord {
     ReadRecord(int64_t aOffset, size_t aCount) : mOffset(aOffset), mCount(aCount) {}
@@ -50,13 +50,13 @@ public:
 
   void Pin()
   {
-    mResource->Pin();
+    mResource.GetResource()->Pin();
     ++mPinCount;
   }
 
   void Unpin()
   {
-    mResource->Unpin();
+    mResource.GetResource()->Unpin();
     MOZ_ASSERT(mPinCount);
     --mPinCount;
     if (mPinCount == 0) {
@@ -65,7 +65,7 @@ public:
   }
 
 private:
-  nsRefPtr<MediaResource> mResource;
+  MediaResourceIndex mResource;
   Maybe<ReadRecord> mFailedRead;
   uint32_t mPinCount;
 
@@ -75,9 +75,15 @@ private:
     int64_t mOffset;
     size_t mCount;
 
+    CacheBlock(CacheBlock&& aOther)
+      : mOffset(aOther.mOffset)
+      , mCount(aOther.mCount)
+      , mBuffer(Move(aOther.mBuffer))
+    {}
+
     bool Init()
     {
-      mBuffer = new ((fallible_t())) char[mCount];
+      mBuffer = MakeUniqueFallible<char[]>(mCount);
       return !!mBuffer;
     }
 
@@ -88,11 +94,14 @@ private:
     }
 
   private:
-    nsAutoArrayPtr<char> mBuffer;
+    CacheBlock(const CacheBlock&) = delete;
+    CacheBlock& operator=(const CacheBlock&) = delete;
+
+    UniquePtr<char[]> mBuffer;
   };
   nsTArray<CacheBlock> mCache;
 };
 
-}
+} // namespace mozilla
 
 #endif

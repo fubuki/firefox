@@ -22,10 +22,10 @@ namespace ipc {
 
 class ProcessChild : public ChildProcess {
 protected:
-  typedef base::ProcessHandle ProcessHandle;
+  typedef base::ProcessId ProcessId;
 
 public:
-  explicit ProcessChild(ProcessHandle parentHandle);
+  explicit ProcessChild(ProcessId aParentPid);
   virtual ~ProcessChild();
 
   virtual bool Init() = 0;
@@ -36,20 +36,26 @@ public:
     return gProcessChild->mUILoop;
   }
 
+    /**
+   * Exit *now*.  Do not shut down XPCOM, do not pass Go, do not run
+   * static destructors, do not collect $200.
+   */
+  static void QuickExit();
+
 protected:
   static ProcessChild* current() {
     return gProcessChild;
   }
 
-  ProcessHandle ParentHandle() {
-    return mParentHandle;
+  ProcessId ParentPid() {
+    return mParentPid;
   }
 
 private:
   static ProcessChild* gProcessChild;
 
   MessageLoop* mUILoop;
-  ProcessHandle mParentHandle;
+  ProcessId mParentPid;
 
   DISALLOW_EVIL_CONSTRUCTORS(ProcessChild);
 };

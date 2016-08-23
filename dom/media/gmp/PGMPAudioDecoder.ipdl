@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-include protocol PGMP;
+include protocol PGMPContent;
 include GMPTypes;
 
 using GMPCodecSpecificInfo from "gmp-audio-codec.h";
@@ -16,20 +16,21 @@ namespace gmp {
 
 async protocol PGMPAudioDecoder
 {
-  manager PGMP;
+  manager PGMPContent;
 child:
-  InitDecode(GMPAudioCodecData aCodecSettings);
-  Decode(GMPAudioEncodedSampleData aInput);
-  Reset();
-  Drain();
-  DecodingComplete();
+  async InitDecode(GMPAudioCodecData aCodecSettings);
+  async Decode(GMPAudioEncodedSampleData aInput);
+  async Reset();
+  async Drain();
+  async DecodingComplete();
 parent:
-  __delete__();
-  Decoded(GMPAudioDecodedSampleData aDecoded);
-  InputDataExhausted();
-  DrainComplete();
-  ResetComplete();
-  Error(GMPErr aErr);
+  async __delete__();
+  async Decoded(GMPAudioDecodedSampleData aDecoded);
+  async InputDataExhausted();
+  async DrainComplete();
+  async ResetComplete();
+  async Error(GMPErr aErr);
+  async Shutdown();
 };
 
 } // namespace gmp

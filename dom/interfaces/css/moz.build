@@ -6,13 +6,14 @@
 
 XPIDL_SOURCES += [
     'nsIDOMCounter.idl',
-    'nsIDOMCSSCharsetRule.idl',
     'nsIDOMCSSConditionRule.idl',
     'nsIDOMCSSCounterStyleRule.idl',
     'nsIDOMCSSFontFaceRule.idl',
     'nsIDOMCSSFontFeatureValuesRule.idl',
     'nsIDOMCSSGroupingRule.idl',
     'nsIDOMCSSImportRule.idl',
+    'nsIDOMCSSKeyframeRule.idl',
+    'nsIDOMCSSKeyframesRule.idl',
     'nsIDOMCSSMediaRule.idl',
     'nsIDOMCSSMozDocumentRule.idl',
     'nsIDOMCSSPageRule.idl',
@@ -27,8 +28,6 @@ XPIDL_SOURCES += [
     'nsIDOMCSSValue.idl',
     'nsIDOMCSSValueList.idl',
     'nsIDOMElementCSSInlineStyle.idl',
-    'nsIDOMMozCSSKeyframeRule.idl',
-    'nsIDOMMozCSSKeyframesRule.idl',
     'nsIDOMRect.idl',
 ]
 

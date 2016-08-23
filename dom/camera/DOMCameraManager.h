@@ -19,20 +19,20 @@
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Attributes.h"
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
   class ErrorResult;
   class nsDOMCameraControl;
   namespace dom {
     struct CameraConfiguration;
-  }
-}
+  } // namespace dom
+} // namespace mozilla
 
 typedef nsTArray<nsWeakPtr> CameraControls;
 typedef nsClassHashtable<nsUint64HashKey, CameraControls> WindowTable;
 
-class nsDOMCameraManager MOZ_FINAL
+class nsDOMCameraManager final
   : public nsIObserver
   , public nsSupportsWeakReference
   , public nsWrapperCache
@@ -50,9 +50,9 @@ public:
   // Great Renaming proposed in bug 983177.
   static bool HasSupport(JSContext* aCx, JSObject* aGlobal);
 
-  static bool CheckPermission(nsPIDOMWindow* aWindow);
+  static bool CheckPermission(nsPIDOMWindowInner* aWindow);
   static already_AddRefed<nsDOMCameraManager>
-    CreateInstance(nsPIDOMWindow* aWindow);
+    CreateInstance(nsPIDOMWindowInner* aWindow);
   static bool IsWindowStillActive(uint64_t aWindowId);
 
   void Register(mozilla::nsDOMCameraControl* aDOMCameraControl);
@@ -73,8 +73,8 @@ public:
             mozilla::ErrorResult& aRv);
   void GetListOfCameras(nsTArray<nsString>& aList, mozilla::ErrorResult& aRv);
 
-  nsPIDOMWindow* GetParentObject() const { return mWindow; }
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  nsPIDOMWindowInner* GetParentObject() const { return mWindow; }
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 #ifdef MOZ_WIDGET_GONK
   static void PreinitCameraHardware();
@@ -87,14 +87,14 @@ protected:
 
 private:
   nsDOMCameraManager() = delete;
-  explicit nsDOMCameraManager(nsPIDOMWindow* aWindow);
+  explicit nsDOMCameraManager(nsPIDOMWindowInner* aWindow);
   nsDOMCameraManager(const nsDOMCameraManager&) = delete;
   nsDOMCameraManager& operator=(const nsDOMCameraManager&) = delete;
 
 protected:
   uint64_t mWindowId;
   uint32_t mPermission;
-  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
   /**
    * 'sActiveWindows' is only ever accessed while in the Main Thread,
    * so it is not otherwise protected.

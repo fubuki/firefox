@@ -9,30 +9,18 @@
 
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/ImageCaptureBinding.h"
-#include "prlog.h"
-
-class nsIDOMBlob;
+#include "mozilla/Logging.h"
 
 namespace mozilla {
 
-#ifdef PR_LOGGING
-
 #ifndef IC_LOG
-PRLogModuleInfo* GetICLog();
-#define IC_LOG(...) PR_LOG(GetICLog(), PR_LOG_DEBUG, (__VA_ARGS__))
+LogModule* GetICLog();
+#define IC_LOG(...) MOZ_LOG(GetICLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 #endif
-
-#else
-
-#ifndef IC_LOG
-#define IC_LOG(...)
-#endif
-
-#endif // PR_LOGGING
 
 namespace dom {
 
-class File;
+class Blob;
 class VideoStreamTrack;
 
 /**
@@ -49,7 +37,7 @@ class VideoStreamTrack;
  *  to the MediaStreamGraph way.
  */
 
-class ImageCapture MOZ_FINAL : public DOMEventTargetHelper
+class ImageCapture final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -65,22 +53,23 @@ public:
   VideoStreamTrack* GetVideoStreamTrack() const;
 
   // nsWrapperCache member
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
   {
-    return ImageCaptureBinding::Wrap(aCx, this);
+    return ImageCaptureBinding::Wrap(aCx, this, aGivenProto);
   }
 
   // ImageCapture class members
-  nsPIDOMWindow* GetParentObject() { return GetOwner(); }
+  nsPIDOMWindowInner* GetParentObject() { return GetOwner(); }
 
   static already_AddRefed<ImageCapture> Constructor(const GlobalObject& aGlobal,
                                                     VideoStreamTrack& aTrack,
                                                     ErrorResult& aRv);
 
-  ImageCapture(VideoStreamTrack* aVideoStreamTrack, nsPIDOMWindow* aOwnerWindow);
+  ImageCapture(VideoStreamTrack* aVideoStreamTrack,
+               nsPIDOMWindowInner* aOwnerWindow);
 
   // Post a Blob event to script.
-  nsresult PostBlobEvent(File* aBlob);
+  nsresult PostBlobEvent(Blob* aBlob);
 
   // Post an error event to script.
   // aErrorCode should be one of error codes defined in ImageCaptureError.h.
@@ -96,7 +85,7 @@ protected:
   // should return NS_ERROR_NOT_IMPLEMENTED.
   nsresult TakePhotoByMediaEngine();
 
-  nsRefPtr<VideoStreamTrack> mVideoStreamTrack;
+  RefPtr<VideoStreamTrack> mVideoStreamTrack;
 };
 
 } // namespace dom

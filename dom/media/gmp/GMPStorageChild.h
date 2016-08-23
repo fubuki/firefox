@@ -30,11 +30,11 @@ public:
                 GMPRecordClient* aClient);
 
   // GMPRecord.
-  virtual GMPErr Open() MOZ_OVERRIDE;
-  virtual GMPErr Read() MOZ_OVERRIDE;
-  virtual GMPErr Write(const uint8_t* aData,
-                       uint32_t aDataSize) MOZ_OVERRIDE;
-  virtual GMPErr Close() MOZ_OVERRIDE;
+  GMPErr Open() override;
+  GMPErr Read() override;
+  GMPErr Write(const uint8_t* aData,
+               uint32_t aDataSize) override;
+  GMPErr Close() override;
 
   const nsCString& Name() const { return mName; }
 
@@ -81,16 +81,16 @@ protected:
   ~GMPStorageChild() {}
 
   // PGMPStorageChild
-  virtual bool RecvOpenComplete(const nsCString& aRecordName,
-                                const GMPErr& aStatus) MOZ_OVERRIDE;
-  virtual bool RecvReadComplete(const nsCString& aRecordName,
-                                const GMPErr& aStatus,
-                                const InfallibleTArray<uint8_t>& aBytes) MOZ_OVERRIDE;
-  virtual bool RecvWriteComplete(const nsCString& aRecordName,
-                                 const GMPErr& aStatus) MOZ_OVERRIDE;
-  virtual bool RecvRecordNames(const InfallibleTArray<nsCString>& aRecordNames,
-                               const GMPErr& aStatus) MOZ_OVERRIDE;
-  virtual bool RecvShutdown() MOZ_OVERRIDE;
+  bool RecvOpenComplete(const nsCString& aRecordName,
+                        const GMPErr& aStatus) override;
+  bool RecvReadComplete(const nsCString& aRecordName,
+                        const GMPErr& aStatus,
+                        InfallibleTArray<uint8_t>&& aBytes) override;
+  bool RecvWriteComplete(const nsCString& aRecordName,
+                         const GMPErr& aStatus) override;
+  bool RecvRecordNames(InfallibleTArray<nsCString>&& aRecordNames,
+                       const GMPErr& aStatus) override;
+  bool RecvShutdown() override;
 
 private:
   Monitor mMonitor;

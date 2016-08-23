@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,11 +15,18 @@
 class nsIPrincipal;
 
 namespace mozilla {
+
+namespace ipc {
+
+class PrincipalInfo;
+
+} // namespace ipc
+
 namespace dom {
 
 namespace quota {
 class Client;
-}
+} // namespace quota
 
 namespace asmjscache {
 
@@ -125,9 +132,6 @@ CloseEntryForWrite(size_t aSize,
                    uint8_t* aMemory,
                    intptr_t aHandle);
 
-bool
-GetBuildId(JS::BuildIdCharVector* aBuildId);
-
 // Called from QuotaManager.cpp:
 
 quota::Client*
@@ -137,7 +141,7 @@ CreateClient();
 
 PAsmJSCacheEntryParent*
 AllocEntryParent(OpenMode aOpenMode, WriteParams aWriteParams,
-                 nsIPrincipal* aPrincipal);
+                 const mozilla::ipc::PrincipalInfo& aPrincipalInfo);
 
 void
 DeallocEntryParent(PAsmJSCacheEntryParent* aActor);

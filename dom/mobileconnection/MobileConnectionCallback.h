@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
 * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,13 +26,13 @@ namespace mobileconnection {
  * - non-OOP mode: MobileConnectionService
  * The reference should be released after Notify*Success/Error is called.
  */
-class MobileConnectionCallback MOZ_FINAL : public nsIMobileConnectionCallback
+class MobileConnectionCallback final : public nsIMobileConnectionCallback
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIMOBILECONNECTIONCALLBACK
 
-  MobileConnectionCallback(nsPIDOMWindow* aWindow, DOMRequest* aRequest);
+  MobileConnectionCallback(nsPIDOMWindowInner* aWindow, DOMRequest* aRequest);
 
 private:
   ~MobileConnectionCallback() {}
@@ -41,8 +43,8 @@ private:
   nsresult
   NotifySuccessWithString(const nsAString& aResult);
 
-  nsCOMPtr<nsPIDOMWindow> mWindow;
-  nsRefPtr<DOMRequest> mRequest;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
+  RefPtr<DOMRequest> mRequest;
 };
 
 } // namespace mobileconnection

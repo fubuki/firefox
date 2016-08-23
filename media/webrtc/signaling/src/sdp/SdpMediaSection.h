@@ -12,8 +12,7 @@
 #include "signaling/src/sdp/SdpAttributeList.h"
 #include <string>
 #include <vector>
-
-#include "signaling/src/sdp/SdpEnum.h"
+#include <sstream>
 
 namespace mozilla
 {
@@ -26,6 +25,8 @@ class SdpMediaSection
 {
 public:
   enum MediaType { kAudio, kVideo, kText, kApplication, kMessage };
+  // don't add to enum to avoid warnings about unhandled enum values
+  static const size_t kMediaTypes = static_cast<size_t>(kMessage) + 1;
 
   enum Protocol {
     kRtpAvp,            // RTP/AVP [RFC4566]
@@ -81,6 +82,8 @@ public:
   virtual uint32_t GetBandwidth(const std::string& type) const = 0;
   virtual const std::vector<std::string>& GetFormats() const = 0;
 
+  std::vector<std::string> GetFormatsForSimulcastVersion(
+      size_t simulcastVersion, bool send, bool recv) const;
   virtual const SdpAttributeList& GetAttributeList() const = 0;
   virtual SdpAttributeList& GetAttributeList() = 0;
 
@@ -90,6 +93,7 @@ public:
 
   virtual void AddCodec(const std::string& pt, const std::string& name,
                         uint32_t clockrate, uint16_t channels) = 0;
+  virtual void ClearCodecs() = 0;
 
   virtual void AddDataChannel(const std::string& pt, const std::string& name,
                               uint16_t streams) = 0;
@@ -99,6 +103,73 @@ public:
   {
     return mLevel;
   }
+
+  inline bool
+  IsReceiving() const
+  {
+    return GetDirectionAttribute().mValue & sdp::kRecv;
+  }
+
+  inline bool
+  IsSending() const
+  {
+    return GetDirectionAttribute().mValue & sdp::kSend;
+  }
+
+  inline void
+  SetReceiving(bool receiving)
+  {
+    auto direction = GetDirectionAttribute().mValue;
+    if (direction & sdp::kSend) {
+      SetDirection(receiving ?
+                   SdpDirectionAttribute::kSendrecv :
+                   SdpDirectionAttribute::kSendonly);
+    } else {
+      SetDirection(receiving ?
+                   SdpDirectionAttribute::kRecvonly :
+                   SdpDirectionAttribute::kInactive);
+    }
+  }
+
+  inline void
+  SetSending(bool sending)
+  {
+    auto direction = GetDirectionAttribute().mValue;
+    if (direction & sdp::kRecv) {
+      SetDirection(sending ?
+                   SdpDirectionAttribute::kSendrecv :
+                   SdpDirectionAttribute::kRecvonly);
+    } else {
+      SetDirection(sending ?
+                   SdpDirectionAttribute::kSendonly :
+                   SdpDirectionAttribute::kInactive);
+    }
+  }
+
+  inline void SetDirection(SdpDirectionAttribute::Direction direction)
+  {
+    GetAttributeList().SetAttribute(new SdpDirectionAttribute(direction));
+  }
+
+  const SdpFmtpAttributeList::Parameters* FindFmtp(const std::string& pt) const;
+  void SetFmtp(const SdpFmtpAttributeList::Fmtp& fmtp);
+  const SdpRtpmapAttributeList::Rtpmap* FindRtpmap(const std::string& pt) const;
+  const SdpSctpmapAttributeList::Sctpmap* FindSctpmap(
+      const std::string& pt) const;
+  bool HasRtcpFb(const std::string& pt,
+                 SdpRtcpFbAttributeList::Type type,
+                 const std::string& subType) const;
+  SdpRtcpFbAttributeList GetRtcpFbs() const;
+  void SetRtcpFbs(const SdpRtcpFbAttributeList& rtcpfbs);
+  bool HasFormat(const std::string& format) const
+  {
+    return std::find(GetFormats().begin(), GetFormats().end(), format) !=
+        GetFormats().end();
+  }
+  void SetSsrcs(const std::vector<uint32_t>& ssrcs,
+                const std::string& cname);
+  void AddMsid(const std::string& id, const std::string& appdata);
+  const SdpRidAttributeList::Rid* FindRid(const std::string& id) const;
 
 private:
   size_t mLevel;
@@ -238,6 +309,11 @@ public:
   SetAddress(const std::string& address)
   {
     mAddr = address;
+    if (mAddr.find(':') != std::string::npos) {
+      mAddrType = sdp::kIPv6;
+    } else {
+      mAddrType = sdp::kIPv4;
+    }
   }
   uint8_t
   GetTtl() const

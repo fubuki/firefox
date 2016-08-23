@@ -5,7 +5,6 @@
 #include "mozilla/unused.h"
 #include "mp4_demuxer/SinfParser.h"
 #include "mp4_demuxer/AtomType.h"
-#include "mp4_demuxer/mp4_demuxer.h"
 #include "mp4_demuxer/Box.h"
 
 namespace mp4_demuxer {
@@ -40,7 +39,7 @@ SinfParser::ParseSchm(Box& aBox)
     return;
   }
 
-  mozilla::unused << reader->ReadU32(); // flags -- ignore
+  mozilla::Unused << reader->ReadU32(); // flags -- ignore
   mSinf.mDefaultEncryptionType = reader->ReadU32();
 
   reader->DiscardRemaining();
@@ -65,7 +64,7 @@ SinfParser::ParseTenc(Box& aBox)
     return;
   }
 
-  mozilla::unused << reader->ReadU32(); // flags -- ignore
+  mozilla::Unused << reader->ReadU32(); // flags -- ignore
 
   uint32_t isEncrypted = reader->ReadU24();
   mSinf.mDefaultIVSize = reader->ReadU8();

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,39 +8,57 @@
 #define mozilla_dom_FileSystemRequestParent_h
 
 #include "mozilla/dom/PFileSystemRequestParent.h"
-#include "mozilla/dom/ContentChild.h"
-#include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/FileSystemBase.h"
 
 namespace mozilla {
 namespace dom {
 
-class FileSystemBase;
+class FileSystemParams;
+class FileSystemTaskParentBase;
 
-class FileSystemRequestParent MOZ_FINAL
-  : public PFileSystemRequestParent
+class FileSystemRequestParent final : public PFileSystemRequestParent
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FileSystemRequestParent)
+
 public:
   FileSystemRequestParent();
 
-  bool
-  IsRunning()
+  const nsCString&
+  PermissionName() const
   {
-    return state() == PFileSystemRequest::__Start;
+    return mPermissionName;
+  }
+
+  FileSystemBase::ePermissionCheckType
+  PermissionCheckType() const
+  {
+    return mFileSystem ? mFileSystem->PermissionCheckType()
+                       : FileSystemBase::eNotSet;
   }
 
   bool
-  Dispatch(ContentParent* aParent, const FileSystemParams& aParams);
+  Initialize(const FileSystemParams& aParams);
+
+  void
+  Start();
+
+  bool Destroyed() const
+  {
+    return mDestroyed;
+  }
 
   virtual void
-  ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
+  ActorDestroy(ActorDestroyReason why) override;
 
 private:
-  // Private destructor, to discourage deletion outside of Release():
-  virtual
   ~FileSystemRequestParent();
 
-  nsRefPtr<FileSystemBase> mFileSystem;
+  RefPtr<FileSystemBase> mFileSystem;
+  RefPtr<FileSystemTaskParentBase> mTask;
+
+  nsCString mPermissionName;
+
+  bool mDestroyed;
 };
 
 } // namespace dom

@@ -15,17 +15,15 @@
 namespace mozilla {
 namespace dom {
 
-class GlobalObject;
-
-class MobileNetworkInfo MOZ_FINAL : public nsIMobileNetworkInfo
-                                  , public nsWrapperCache
+class MobileNetworkInfo final : public nsIMobileNetworkInfo
+                              , public nsWrapperCache
 {
 public:
   NS_DECL_NSIMOBILENETWORKINFO
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MobileNetworkInfo)
 
-  explicit MobileNetworkInfo(nsPIDOMWindow* aWindow);
+  explicit MobileNetworkInfo(nsPIDOMWindowInner* aWindow);
 
   MobileNetworkInfo(const nsAString& aShortName, const nsAString& aLongName,
                     const nsAString& aMcc, const nsAString& aMnc,
@@ -34,14 +32,14 @@ public:
   void
   Update(nsIMobileNetworkInfo* aInfo);
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const
   {
     return mWindow;
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // WebIDL interface
   Nullable<MobileNetworkState>
@@ -63,7 +61,7 @@ private:
   ~MobileNetworkInfo() {}
 
 private:
-  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
   nsString mShortName;
   nsString mLongName;
   nsString mMcc;

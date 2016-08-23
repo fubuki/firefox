@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -5,11 +7,11 @@
 #ifndef mozilla_dom_TCPSocketParent_h
 #define mozilla_dom_TCPSocketParent_h
 
+#include "mozilla/dom/TCPSocketBinding.h"
 #include "mozilla/net/PTCPSocketParent.h"
-#include "nsITCPSocketParent.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsCOMPtr.h"
-#include "nsIDOMTCPSocket.h"
+#include "nsISocketFilter.h"
 #include "js/TypeDecls.h"
 #include "mozilla/net/OfflineObserver.h"
 
@@ -19,13 +21,13 @@
 namespace mozilla {
 namespace dom {
 
-class PBrowserParent;
+class TCPSocket;
 
-class TCPSocketParentBase : public nsITCPSocketParent
+class TCPSocketParentBase : public nsISupports
                           , public mozilla::net::DisconnectableParent
 {
 public:
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(TCPSocketParentBase)
+  NS_DECL_CYCLE_COLLECTION_CLASS(TCPSocketParentBase)
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
   void AddIPDLReference();
@@ -35,10 +37,8 @@ protected:
   TCPSocketParentBase();
   virtual ~TCPSocketParentBase();
 
-  JS::Heap<JSObject*> mIntermediaryObj;
-  nsCOMPtr<nsITCPSocketIntermediary> mIntermediary;
-  nsCOMPtr<nsIDOMTCPSocket> mSocket;
-  nsRefPtr<mozilla::net::OfflineObserver> mObserver;
+  RefPtr<TCPSocket> mSocket;
+  RefPtr<mozilla::net::OfflineObserver> mObserver;
   bool mIPCOpen;
 };
 
@@ -46,26 +46,47 @@ class TCPSocketParent : public mozilla::net::PTCPSocketParent
                       , public TCPSocketParentBase
 {
 public:
-  NS_DECL_NSITCPSOCKETPARENT
-  NS_IMETHOD_(MozExternalRefCountType) Release() MOZ_OVERRIDE;
+  NS_IMETHOD_(MozExternalRefCountType) Release() override;
 
   TCPSocketParent() {}
 
   virtual bool RecvOpen(const nsString& aHost, const uint16_t& aPort,
-                        const bool& useSSL, const nsString& aBinaryType) MOZ_OVERRIDE;
+                        const bool& useSSL, const bool& aUseArrayBuffers) override;
 
-  virtual bool RecvStartTLS() MOZ_OVERRIDE;
-  virtual bool RecvSuspend() MOZ_OVERRIDE;
-  virtual bool RecvResume() MOZ_OVERRIDE;
-  virtual bool RecvClose() MOZ_OVERRIDE;
+  virtual bool RecvOpenBind(const nsCString& aRemoteHost,
+                            const uint16_t& aRemotePort,
+                            const nsCString& aLocalAddr,
+                            const uint16_t& aLocalPort,
+                            const bool&     aUseSSL,
+                            const bool& aUseArrayBuffers,
+                            const nsCString& aFilter) override;
+
+  virtual bool RecvStartTLS() override;
+  virtual bool RecvSuspend() override;
+  virtual bool RecvResume() override;
+  virtual bool RecvClose() override;
   virtual bool RecvData(const SendableData& aData,
-                        const uint32_t& aTrackingNumber) MOZ_OVERRIDE;
-  virtual bool RecvRequestDelete() MOZ_OVERRIDE;
-  virtual nsresult OfflineNotification(nsISupports *) MOZ_OVERRIDE;
-  virtual uint32_t GetAppId() MOZ_OVERRIDE;
+                        const uint32_t& aTrackingNumber) override;
+  virtual bool RecvRequestDelete() override;
+  virtual nsresult OfflineNotification(nsISupports *) override;
+  virtual uint32_t GetAppId() override;
+  bool GetInIsolatedMozBrowser();
+
+  void FireErrorEvent(const nsAString& aName, const nsAString& aType, TCPReadyState aReadyState);
+  void FireEvent(const nsAString& aType, TCPReadyState aReadyState);
+  void FireArrayBufferDataEvent(nsTArray<uint8_t>& aBuffer, TCPReadyState aReadyState);
+  void FireStringDataEvent(const nsACString& aData, TCPReadyState aReadyState);
+
+  void SetSocket(TCPSocket *socket);
+  nsresult GetHost(nsAString& aHost);
+  nsresult GetPort(uint16_t* aPort);
 
 private:
-  virtual void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
+  virtual void ActorDestroy(ActorDestroyReason why) override;
+  void SendEvent(const nsAString& aType, CallbackData aData, TCPReadyState aReadyState);
+  nsresult SetFilter(const nsCString& aFilter);
+
+  nsCOMPtr<nsISocketFilter> mFilter;
 };
 
 } // namespace dom

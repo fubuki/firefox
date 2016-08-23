@@ -32,9 +32,10 @@ function doTest() {
     "This iframe should NOT contain itself as an entry");
 
   // Check that there are no iframes added as entries
-  for (var i = 0 ; i < window.performance.getEntries().length ; i++) {
-    var entry = window.performance.getEntries()[i];
-    if (entry.initiatorType === "subdocument") {
+  var resources = window.performance.getEntriesByType("resource");
+  for (var i = 0 ; i < resources.length; i++) {
+    var entry = resources[i];
+    if (entry.initiatorType === "iframe") {
       ok(false, "unexpected iframe " + entry.name);
     }
   }

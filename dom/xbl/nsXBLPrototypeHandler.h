@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,8 +30,8 @@ namespace mozilla {
 namespace dom {
 class AutoJSAPI;
 class EventTarget;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #define NS_HANDLER_TYPE_XBL_JS              (1 << 0)
 #define NS_HANDLER_TYPE_XBL_COMMAND         (1 << 1)
@@ -89,28 +90,23 @@ public:
 
   ~nsXBLPrototypeHandler();
 
+  bool EventTypeEquals(nsIAtom* aEventType) const
+  {
+    return mEventName == aEventType;
+  }
+
   // if aCharCode is not zero, it is used instead of the charCode of aKeyEvent.
   bool KeyEventMatched(nsIDOMKeyEvent* aKeyEvent,
                        uint32_t aCharCode,
                        const IgnoreModifierState& aIgnoreModifierState);
-  inline bool KeyEventMatched(nsIAtom* aEventType,
-                              nsIDOMKeyEvent* aEvent,
-                              uint32_t aCharCode,
-                              const IgnoreModifierState& aIgnoreModifierState)
-  {
-    if (aEventType != mEventName)
-      return false;
-
-    return KeyEventMatched(aEvent, aCharCode, aIgnoreModifierState);
-  }
 
   bool MouseEventMatched(nsIDOMMouseEvent* aMouseEvent);
   inline bool MouseEventMatched(nsIAtom* aEventType,
                                   nsIDOMMouseEvent* aEvent)
   {
-    if (aEventType != mEventName)
+    if (!EventTypeEquals(aEventType)) {
       return false;
-
+    }
     return MouseEventMatched(aEvent);
   }
 
@@ -132,8 +128,7 @@ public:
   nsXBLEventHandler* GetEventHandler()
   {
     if (!mHandler) {
-      NS_NewXBLEventHandler(this, mEventName, getter_AddRefs(mHandler));
-      // XXX Need to signal out of memory?
+      mHandler = NS_NewXBLEventHandler(this, mEventName);
     }
 
     return mHandler;
@@ -241,7 +236,7 @@ protected:
   // Prototype handlers are chained. We own the next handler in the chain.
   nsXBLPrototypeHandler* mNextHandler;
   nsCOMPtr<nsIAtom> mEventName; // The type of the event, e.g., "keypress"
-  nsRefPtr<nsXBLEventHandler> mHandler;
+  RefPtr<nsXBLEventHandler> mHandler;
   nsXBLPrototypeBinding* mPrototypeBinding; // the binding owns us
 };
 

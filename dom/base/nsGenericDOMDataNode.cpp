@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -32,8 +33,8 @@
 #include "nsCCUncollectableMarker.h"
 #include "mozAutoDocUpdate.h"
 
-#include "pldhash.h"
-#include "prprf.h"
+#include "PLDHashTable.h"
+#include "mozilla/Snprintf.h"
 #include "nsWrapperCacheInlines.h"
 
 using namespace mozilla;
@@ -42,30 +43,28 @@ using namespace mozilla::dom;
 nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
   : nsIContent(aNodeInfo)
 {
-  NS_ABORT_IF_FALSE(mNodeInfo->NodeType() == nsIDOMNode::TEXT_NODE ||
-                    mNodeInfo->NodeType() == nsIDOMNode::CDATA_SECTION_NODE ||
-                    mNodeInfo->NodeType() == nsIDOMNode::COMMENT_NODE ||
-                    mNodeInfo->NodeType() ==
-                      nsIDOMNode::PROCESSING_INSTRUCTION_NODE ||
-                    mNodeInfo->NodeType() == nsIDOMNode::DOCUMENT_TYPE_NODE,
-                    "Bad NodeType in aNodeInfo");
+  MOZ_ASSERT(mNodeInfo->NodeType() == nsIDOMNode::TEXT_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::CDATA_SECTION_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::COMMENT_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::PROCESSING_INSTRUCTION_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::DOCUMENT_TYPE_NODE,
+             "Bad NodeType in aNodeInfo");
 }
 
 nsGenericDOMDataNode::nsGenericDOMDataNode(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
   : nsIContent(aNodeInfo)
 {
-  NS_ABORT_IF_FALSE(mNodeInfo->NodeType() == nsIDOMNode::TEXT_NODE ||
-                    mNodeInfo->NodeType() == nsIDOMNode::CDATA_SECTION_NODE ||
-                    mNodeInfo->NodeType() == nsIDOMNode::COMMENT_NODE ||
-                    mNodeInfo->NodeType() ==
-                      nsIDOMNode::PROCESSING_INSTRUCTION_NODE ||
-                    mNodeInfo->NodeType() == nsIDOMNode::DOCUMENT_TYPE_NODE,
-                    "Bad NodeType in aNodeInfo");
+  MOZ_ASSERT(mNodeInfo->NodeType() == nsIDOMNode::TEXT_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::CDATA_SECTION_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::COMMENT_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::PROCESSING_INSTRUCTION_NODE ||
+             mNodeInfo->NodeType() == nsIDOMNode::DOCUMENT_TYPE_NODE,
+             "Bad NodeType in aNodeInfo");
 }
 
 nsGenericDOMDataNode::~nsGenericDOMDataNode()
 {
-  NS_PRECONDITION(!IsInDoc(),
+  NS_PRECONDITION(!IsInUncomposedDoc(),
                   "Please remove this from the document properly");
   if (GetParent()) {
     NS_RELEASE(mParent);
@@ -91,8 +90,8 @@ NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_THIS_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGenericDOMDataNode)
   if (MOZ_UNLIKELY(cb.WantDebugInfo())) {
     char name[40];
-    PR_snprintf(name, sizeof(name), "nsGenericDOMDataNode (len=%d)",
-                tmp->mText.GetLength());
+    snprintf_literal(name, "nsGenericDOMDataNode (len=%d)",
+                     tmp->mText.GetLength());
     cb.DescribeRefCountedNode(tmp->mRefCnt.get(), name);
   } else {
     NS_IMPL_CYCLE_COLLECTION_DESCRIBE(nsGenericDOMDataNode, tmp->mRefCnt.get())
@@ -114,6 +113,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGenericDOMDataNode)
   nsINode::Unlink(tmp);
+
+  // Clear flag here because unlinking slots will clear the
+  // containing shadow root pointer.
+  tmp->UnsetFlags(NODE_IS_IN_SHADOW_TREE);
 
   nsDataSlots *slots = tmp->GetExistingDataSlots();
   if (slots) {
@@ -200,7 +203,7 @@ nsGenericDOMDataNode::SubstringData(uint32_t aStart, uint32_t aCount,
 {
   ErrorResult rv;
   SubstringData(aStart, aCount, aReturn, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -340,7 +343,6 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
     // Allocate new buffer
     int32_t newLength = textLength - aCount + aLength;
     char16_t* to = new char16_t[newLength];
-    NS_ENSURE_TRUE(to, NS_ERROR_OUT_OF_MEMORY);
 
     // Copy over appropriate data
     if (aOffset) {
@@ -369,7 +371,10 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
   }
 
   if (dirAffectsAncestor) {
-    TextNodeChangedDirection(this, oldDir, aNotify);
+    // dirAffectsAncestor being true implies that we have a text node, see
+    // above.
+    MOZ_ASSERT(NodeType() == nsIDOMNode::TEXT_NODE);
+    TextNodeChangedDirection(static_cast<nsTextNode*>(this), oldDir, aNotify);
   }
 
   // Notify observers
@@ -384,13 +389,13 @@ nsGenericDOMDataNode::SetTextInternal(uint32_t aOffset, uint32_t aCount,
     nsNodeUtils::CharacterDataChanged(this, &info);
 
     if (haveMutationListeners) {
-      InternalMutationEvent mutation(true, NS_MUTATION_CHARACTERDATAMODIFIED);
+      InternalMutationEvent mutation(true, eLegacyCharacterDataModified);
 
       mutation.mPrevAttrValue = oldValue;
       if (aLength > 0) {
         nsAutoString val;
         mText.AppendTo(val);
-        mutation.mNewAttrValue = do_GetAtom(val);
+        mutation.mNewAttrValue = NS_Atomize(val);
       }
 
       mozAutoSubtreeModified subtree(OwnerDoc(), this);
@@ -424,7 +429,7 @@ nsGenericDOMDataNode::ToCString(nsAString& aBuf, int32_t aOffset,
         aBuf.AppendLiteral("&gt;");
       } else if ((ch < ' ') || (ch >= 127)) {
         char buf[10];
-        PR_snprintf(buf, sizeof(buf), "\\u%04x", ch);
+        snprintf_literal(buf, "\\u%04x", ch);
         AppendASCIItoUTF16(buf, aBuf);
       } else {
         aBuf.Append(ch);
@@ -444,7 +449,7 @@ nsGenericDOMDataNode::ToCString(nsAString& aBuf, int32_t aOffset,
         aBuf.AppendLiteral("&gt;");
       } else if ((ch < ' ') || (ch >= 127)) {
         char buf[10];
-        PR_snprintf(buf, sizeof(buf), "\\u%04x", ch);
+        snprintf_literal(buf, "\\u%04x", ch);
         AppendASCIItoUTF16(buf, aBuf);
       } else {
         aBuf.Append(ch);
@@ -465,7 +470,7 @@ nsGenericDOMDataNode::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                   "Must have the same owner document");
   NS_PRECONDITION(!aParent || aDocument == aParent->GetUncomposedDoc(),
                   "aDocument must be current doc of aParent");
-  NS_PRECONDITION(!GetUncomposedDoc() && !IsInDoc(),
+  NS_PRECONDITION(!GetUncomposedDoc() && !IsInUncomposedDoc(),
                   "Already have a document.  Unbind first!");
   // Note that as we recurse into the kids, they'll have a non-null parent.  So
   // only assert if our parent is _changing_ while we have a parent.
@@ -511,6 +516,8 @@ nsGenericDOMDataNode::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     }
   }
 
+  bool hadParent = !!GetParentNode();
+
   // Set parent
   if (aParent) {
     if (!GetParent()) {
@@ -545,6 +552,9 @@ nsGenericDOMDataNode::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   }
 
   nsNodeUtils::ParentChainChanged(this);
+  if (!hadParent && IsRootOfNativeAnonymousSubtree()) {
+    nsNodeUtils::NativeAnonymousChildListChange(this, false);
+  }
 
   UpdateEditableState(false);
 
@@ -564,10 +574,12 @@ nsGenericDOMDataNode::UnbindFromTree(bool aDeep, bool aNullParent)
              NS_REFRAME_IF_WHITESPACE);
 
   nsIDocument* document =
-    HasFlag(NODE_FORCE_XBL_BINDINGS) || IsInShadowTree() ?
-      OwnerDoc() : GetUncomposedDoc();
+    HasFlag(NODE_FORCE_XBL_BINDINGS) ? OwnerDoc() : GetComposedDoc();
 
   if (aNullParent) {
+    if (this->IsRootOfNativeAnonymousSubtree()) {
+      nsNodeUtils::NativeAnonymousChildListChange(this, true);
+    }
     if (GetParent()) {
       NS_RELEASE(mParent);
     } else {
@@ -694,7 +706,10 @@ ShadowRoot *
 nsGenericDOMDataNode::GetContainingShadow() const
 {
   nsDataSlots *slots = GetExistingDataSlots();
-  return slots ? slots->mContainingShadow : nullptr;
+  if (!slots) {
+    return nullptr;
+  }
+  return slots->mContainingShadow;
 }
 
 void
@@ -779,14 +794,6 @@ nsGenericDOMDataNode::IsNodeOfType(uint32_t aFlags) const
 void
 nsGenericDOMDataNode::SaveSubtreeState()
 {
-}
-
-void
-nsGenericDOMDataNode::DestroyContent()
-{
-  // XXX We really should let cycle collection do this, but that currently still
-  //     leaks (see https://bugzilla.mozilla.org/show_bug.cgi?id=406684).
-  ReleaseWrapper(this);
 }
 
 #ifdef DEBUG
@@ -1074,9 +1081,10 @@ nsGenericDOMDataNode::AppendTextTo(nsAString& aResult)
 }
 
 bool
-nsGenericDOMDataNode::AppendTextTo(nsAString& aResult, const mozilla::fallible_t&)
+nsGenericDOMDataNode::AppendTextTo(nsAString& aResult,
+                                   const mozilla::fallible_t& aFallible)
 {
-  return mText.AppendTo(aResult, mozilla::fallible_t());
+  return mText.AppendTo(aResult, aFallible);
 }
 
 already_AddRefed<nsIAtom>
@@ -1084,7 +1092,7 @@ nsGenericDOMDataNode::GetCurrentValueAtom()
 {
   nsAutoString val;
   GetData(val);
-  return NS_NewAtom(val);
+  return NS_Atomize(val);
 }
 
 NS_IMETHODIMP

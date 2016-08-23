@@ -9,6 +9,7 @@
 #include "PluginHangUIParent.h"
 
 #include "mozilla/Telemetry.h"
+#include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/plugins/PluginModuleParent.h"
 
 #include "nsContentUtils.h"
@@ -64,7 +65,7 @@ private:
   uint32_t mResponseTimeMs;
   uint32_t mTimeoutMs;
 };
-} // anonymous namespace
+} // namespace
 
 namespace mozilla {
 namespace plugins {
@@ -353,7 +354,10 @@ PluginHangUIParent::RecvUserResponse(const unsigned int& aResponse)
   int responseCode;
   if (aResponse & HANGUI_USER_RESPONSE_STOP) {
     // User clicked Stop
-    mModule->TerminateChildProcess(mMainThreadMessageLoop);
+    mModule->TerminateChildProcess(mMainThreadMessageLoop,
+                                   mozilla::ipc::kInvalidProcessId,
+                                   NS_LITERAL_CSTRING("ModalHangUI"),
+                                   EmptyString());
     responseCode = 1;
   } else if(aResponse & HANGUI_USER_RESPONSE_CONTINUE) {
     mModule->OnHangUIContinue();
@@ -382,7 +386,7 @@ PluginHangUIParent::GetHangUIOwnerWindowHandle(NativeWindowHandle& windowHandle)
                                                         &rv));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIDOMWindow> navWin;
+  nsCOMPtr<mozIDOMWindowProxy> navWin;
   rv = winMediator->GetMostRecentWindow(MOZ_UTF16("navigator:browser"),
                                         getter_AddRefs(navWin));
   NS_ENSURE_SUCCESS(rv, rv);
@@ -390,7 +394,8 @@ PluginHangUIParent::GetHangUIOwnerWindowHandle(NativeWindowHandle& windowHandle)
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIWidget> widget = WidgetUtils::DOMWindowToWidget(navWin);
+  nsPIDOMWindowOuter* win = nsPIDOMWindowOuter::From(navWin);
+  nsCOMPtr<nsIWidget> widget = WidgetUtils::DOMWindowToWidget(win);
   if (!widget) {
     return NS_ERROR_FAILURE;
   }

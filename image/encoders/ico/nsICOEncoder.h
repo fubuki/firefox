@@ -2,17 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#ifndef mozilla_image_encoders_ico_nsICOEncoder_h
+#define mozilla_image_encoders_ico_nsICOEncoder_h
+
 #include "mozilla/Attributes.h"
 #include "mozilla/ReentrantMonitor.h"
 
 #include "imgIEncoder.h"
 
-#include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "ICOFileHeaders.h"
-
-class nsBMPEncoder;
-class nsPNGEncoder;
 
 #define NS_ICOENCODER_CID \
 { /*92AE3AB2-8968-41B1-8709-B6123BCEAF21 */          \
@@ -25,7 +24,7 @@ class nsPNGEncoder;
 // Provides ICO encoding functionality. Use InitFromData() to do the
 // encoding. See that function definition for encoding options.
 
-class nsICOEncoder MOZ_FINAL : public imgIEncoder
+class nsICOEncoder final : public imgIEncoder
 {
   typedef mozilla::ReentrantMonitor ReentrantMonitor;
 public:
@@ -96,3 +95,5 @@ protected:
   nsCOMPtr<nsIEventTarget> mCallbackTarget;
   uint32_t mNotifyThreshold;
 };
+
+#endif // mozilla_image_encoders_ico_nsICOEncoder_h

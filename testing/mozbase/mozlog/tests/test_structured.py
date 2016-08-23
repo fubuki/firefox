@@ -6,11 +6,12 @@ import os
 import StringIO
 import sys
 import unittest
+import signal
 import xml.etree.ElementTree as ET
 
 import mozfile
 
-from mozlog.structured import (
+from mozlog import (
     commandline,
     reader,
     structuredlog,
@@ -117,9 +118,10 @@ class TestStructuredLog(BaseStructuredTest):
         self.assert_log_equals({"action": "test_start",
                                 "test":"test1"})
 
-        self.logger.test_start(("test1", "==", "test1-ref"))
+        self.logger.test_start(("test1", "==", "test1-ref"), path="path/to/test")
         self.assert_log_equals({"action": "test_start",
-                                "test":("test1", "==", "test1-ref")})
+                                "test":("test1", "==", "test1-ref"),
+                                "path": "path/to/test"})
         self.logger.suite_end()
 
     def test_start_inprogress(self):
@@ -290,6 +292,17 @@ class TestStructuredLog(BaseStructuredTest):
         self.assert_log_equals({"action": "process_output",
                                 "process": "1234",
                                 "data": "test output"})
+
+    def test_process_start(self):
+        self.logger.process_start(1234)
+        self.assert_log_equals({"action": "process_start",
+                                "process": "1234"})
+
+    def test_process_exit(self):
+        self.logger.process_exit(1234, 0)
+        self.assert_log_equals({"action": "process_exit",
+                                "process": "1234",
+                                "exitcode": 0})
 
     def test_log(self):
         for level in ["critical", "error", "warning", "info", "debug"]:
@@ -538,6 +551,40 @@ class FormatterTest(unittest.TestCase):
         self.output_file.seek(self.position)
         return [line.rstrip() for line in self.output_file.readlines()]
 
+
+class TestHTMLFormatter(FormatterTest):
+
+    def get_formatter(self):
+        return formatters.HTMLFormatter()
+
+    def test_base64_string(self):
+        self.logger.suite_start([])
+        self.logger.test_start("string_test")
+        self.logger.test_end("string_test", "FAIL",
+                             extra={"data": "foobar"})
+        self.logger.suite_end()
+        self.assertIn("data:text/html;charset=utf-8;base64,Zm9vYmFy",
+                      ''.join(self.loglines))
+
+    def test_base64_unicode(self):
+        self.logger.suite_start([])
+        self.logger.test_start("unicode_test")
+        self.logger.test_end("unicode_test", "FAIL",
+                             extra={"data": unichr(0x02A9)})
+        self.logger.suite_end()
+        self.assertIn("data:text/html;charset=utf-8;base64,yqk=",
+                      ''.join(self.loglines))
+
+    def test_base64_other(self):
+        self.logger.suite_start([])
+        self.logger.test_start("int_test")
+        self.logger.test_end("int_test", "FAIL",
+                             extra={"data": {"foo": "bar"}})
+        self.logger.suite_end()
+        self.assertIn("data:text/html;charset=utf-8;base64,eydmb28nOiAnYmFyJ30=",
+                      ''.join(self.loglines))
+
+
 class TestTBPLFormatter(FormatterTest):
 
     def get_formatter(self):
@@ -588,6 +635,16 @@ class TestTBPLFormatter(FormatterTest):
             self.assertNotEqual("", line, "No blank line should be present in: %s" %
                                 self.loglines)
 
+    def test_process_exit(self):
+        self.logger.process_exit(1234, 0)
+        self.assertIn('TEST-INFO | 1234: exit 0', self.loglines)
+
+    @unittest.skipUnless(os.name == 'posix', 'posix only')
+    def test_process_exit_with_sig(self):
+        # subprocess return code is negative when process
+        # has been killed by signal on posix.
+        self.logger.process_exit(1234, -signal.SIGTERM)
+        self.assertIn,('TEST-INFO | 1234: killed by SIGTERM', self.loglines)
 
 class TestMachFormatter(FormatterTest):
 
@@ -654,6 +711,25 @@ class TestMachFormatter(FormatterTest):
         self.assertIn("OK", self.loglines)
         self.assertIn("Expected results: 5", self.loglines)
         self.assertIn("Unexpected results: 0", self.loglines)
+
+    def test_process_start(self):
+        self.logger.process_start(1234)
+        self.assertIn("Started process `1234`", self.loglines[0])
+
+    def test_process_start_with_command(self):
+        self.logger.process_start(1234, command='test cmd')
+        self.assertIn("Started process `1234` (test cmd)", self.loglines[0])
+
+    def test_process_exit(self):
+        self.logger.process_exit(1234, 0)
+        self.assertIn('1234: exit 0', self.loglines[0])
+
+    @unittest.skipUnless(os.name == 'posix', 'posix only')
+    def test_process_exit_with_sig(self):
+        # subprocess return code is negative when process
+        # has been killed by signal on posix.
+        self.logger.process_exit(1234, -signal.SIGTERM)
+        self.assertIn('1234: killed by SIGTERM', self.loglines[0])
 
 
 class TestXUnitFormatter(FormatterTest):
@@ -732,6 +808,22 @@ class TestCommandline(unittest.TestCase):
         logger = commandline.setup_logging("test_optparse", args, {})
         self.assertEqual(len(logger.handlers), 1)
         self.assertIsInstance(logger.handlers[0], handlers.StreamHandler)
+
+    def test_limit_formatters(self):
+        parser = argparse.ArgumentParser()
+        commandline.add_logging_group(parser, include_formatters=['raw'])
+        other_formatters = [fmt for fmt in commandline.log_formatters
+                            if fmt != 'raw']
+        # check that every formatter except raw is not present
+        for fmt in other_formatters:
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["--log-%s=-" % fmt])
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["--log-%s-level=error" % fmt])
+        # raw is still ok
+        args = parser.parse_args(["--log-raw=-"])
+        logger = commandline.setup_logging("test_setup_logging2", args, {})
+        self.assertEqual(len(logger.handlers), 1)
 
     def test_setup_logging_optparse_unicode(self):
         parser = optparse.OptionParser()

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -205,9 +206,9 @@ private:
                              const char16_t *aTextLimit,
                              uint8_t *aBreakState);
 
-  nsAutoTArray<char16_t,100> mCurrentWord;
+  AutoTArray<char16_t,100> mCurrentWord;
   // All the items that contribute to mCurrentWord
-  nsAutoTArray<TextItem,2>    mTextItems;
+  AutoTArray<TextItem,2>    mTextItems;
   nsIAtom*                    mCurrentWordLanguage;
   bool                        mCurrentWordContainsMixedLang;
   bool                        mCurrentWordContainsComplexChar;

@@ -25,7 +25,7 @@
 using namespace mozilla::dom;
 using mozilla::ErrorResult;
 
-class Voicemail::Listener MOZ_FINAL : public nsIVoicemailListener
+class Voicemail::Listener final : public nsIVoicemailListener
 {
   Voicemail* mVoicemail;
 
@@ -64,7 +64,7 @@ NS_IMPL_ADDREF_INHERITED(Voicemail, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(Voicemail, DOMEventTargetHelper)
 
 /* static */ already_AddRefed<Voicemail>
-Voicemail::Create(nsPIDOMWindow* aWindow,
+Voicemail::Create(nsPIDOMWindowInner* aWindow,
                   ErrorResult& aRv)
 {
   nsCOMPtr<nsIVoicemailService> service =
@@ -74,15 +74,11 @@ Voicemail::Create(nsPIDOMWindow* aWindow,
     return nullptr;
   }
 
-  nsPIDOMWindow* innerWindow = aWindow->IsInnerWindow() ?
-    aWindow :
-    aWindow->GetCurrentInnerWindow();
-
-  nsRefPtr<Voicemail> voicemail = new Voicemail(innerWindow, service);
+  RefPtr<Voicemail> voicemail = new Voicemail(aWindow, service);
   return voicemail.forget();
 }
 
-Voicemail::Voicemail(nsPIDOMWindow* aWindow,
+Voicemail::Voicemail(nsPIDOMWindowInner* aWindow,
                      nsIVoicemailService* aService)
   : DOMEventTargetHelper(aWindow)
   , mService(aService)
@@ -117,9 +113,9 @@ Voicemail::Shutdown()
 }
 
 JSObject*
-Voicemail::WrapObject(JSContext* aCx)
+Voicemail::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozVoicemailBinding::Wrap(aCx, this);
+  return MozVoicemailBinding::Wrap(aCx, this, aGivenProto);
 }
 
 already_AddRefed<nsIVoicemailProvider>
@@ -155,7 +151,7 @@ Voicemail::GetOrCreateStatus(uint32_t aServiceId,
   MOZ_ASSERT(aServiceId < mStatuses.Length());
   MOZ_ASSERT(aProvider);
 
-  nsRefPtr<VoicemailStatus> res = mStatuses[aServiceId];
+  RefPtr<VoicemailStatus> res = mStatuses[aServiceId];
   if (!res) {
     mStatuses[aServiceId] = res = new VoicemailStatus(GetOwner(), aProvider);
   }
@@ -240,7 +236,7 @@ Voicemail::NotifyStatusChanged(nsIVoicemailProvider* aProvider)
   init.mCancelable = false;
   init.mStatus = GetOrCreateStatus(serviceId, aProvider);
 
-  nsRefPtr<MozVoicemailEvent> event =
+  RefPtr<MozVoicemailEvent> event =
     MozVoicemailEvent::Constructor(this, NS_LITERAL_STRING("statuschanged"), init);
   return DispatchTrustedEvent(event);
 }
@@ -250,7 +246,7 @@ NS_CreateVoicemailService()
 {
   nsCOMPtr<nsIVoicemailService> service;
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     service = new mozilla::dom::voicemail::VoicemailIPCService();
   } else {
 #if defined(MOZ_B2G_RIL)

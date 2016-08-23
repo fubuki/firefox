@@ -10,8 +10,8 @@
 #ifndef nsMenuItemIconX_h_
 #define nsMenuItemIconX_h_
 
+#include "mozilla/RefPtr.h"
 #include "nsCOMPtr.h"
-#include "nsAutoPtr.h"
 #include "imgINotificationObserver.h"
 
 class nsIURI;
@@ -55,7 +55,7 @@ protected:
   nsresult OnFrameComplete(imgIRequest* aRequest);
 
   nsCOMPtr<nsIContent>      mContent;
-  nsRefPtr<imgRequestProxy> mIconRequest;
+  RefPtr<imgRequestProxy> mIconRequest;
   nsMenuObjectX*            mMenuObject; // [weak]
   nsIntRect                 mImageRegionRect;
   bool                      mLoadedIcon;

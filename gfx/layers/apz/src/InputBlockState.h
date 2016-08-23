@@ -7,9 +7,14 @@
 #ifndef mozilla_layers_InputBlockState_h
 #define mozilla_layers_InputBlockState_h
 
-#include "nsTArray.h"                       // for nsTArray
 #include "InputData.h"                      // for MultiTouchInput
-#include "nsAutoPtr.h"
+#include "mozilla/RefPtr.h"                 // for RefPtr
+#include "mozilla/gfx/Matrix.h"             // for Matrix4x4
+#include "mozilla/layers/APZUtils.h"        // for TouchBehaviorFlags
+#include "mozilla/layers/AsyncDragMetrics.h"
+#include "mozilla/TimeStamp.h"              // for TimeStamp
+#include "nsTArray.h"                       // for nsTArray
+#include "TouchCounter.h"
 
 namespace mozilla {
 namespace layers {
@@ -19,33 +24,72 @@ class OverscrollHandoffChain;
 class CancelableBlockState;
 class TouchBlockState;
 class WheelBlockState;
+class DragBlockState;
+class PanGestureBlockState;
 
 /**
  * A base class that stores state common to various input blocks.
  * Currently, it just stores the overscroll handoff chain.
+ * Note that the InputBlockState constructor acquires the tree lock, so callers
+ * from inside AsyncPanZoomController should ensure that the APZC lock is not
+ * held.
  */
 class InputBlockState
 {
 public:
   static const uint64_t NO_BLOCK_ID = 0;
 
-  explicit InputBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
+  enum class TargetConfirmationState {
+    eUnconfirmed,
+    eTimedOut,
+    eTimedOutAndMainThreadResponded,
+    eConfirmed
+  };
+
+  explicit InputBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                            bool aTargetConfirmed);
   virtual ~InputBlockState()
   {}
 
-  bool SetConfirmedTargetApzc(const nsRefPtr<AsyncPanZoomController>& aTargetApzc);
-  const nsRefPtr<AsyncPanZoomController>& GetTargetApzc() const;
-  const nsRefPtr<const OverscrollHandoffChain>& GetOverscrollHandoffChain() const;
+  virtual bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                                      TargetConfirmationState aState);
+  const RefPtr<AsyncPanZoomController>& GetTargetApzc() const;
+  const RefPtr<const OverscrollHandoffChain>& GetOverscrollHandoffChain() const;
   uint64_t GetBlockId() const;
 
   bool IsTargetConfirmed() const;
+  bool HasReceivedRealConfirmedTarget() const;
+
+  void SetScrolledApzc(AsyncPanZoomController* aApzc);
+  AsyncPanZoomController* GetScrolledApzc() const;
+  bool IsDownchainOfScrolledApzc(AsyncPanZoomController* aApzc) const;
+
+protected:
+  virtual void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc);
 
 private:
-  nsRefPtr<AsyncPanZoomController> mTargetApzc;
-  nsRefPtr<const OverscrollHandoffChain> mOverscrollHandoffChain;
-  bool mTargetConfirmed;
+  // Checks whether |aA| is an ancestor of |aB| (or the same as |aB|) in
+  // |mOverscrollHandoffChain|.
+  bool IsDownchainOf(AsyncPanZoomController* aA, AsyncPanZoomController* aB) const;
+
+private:
+  RefPtr<AsyncPanZoomController> mTargetApzc;
+  TargetConfirmationState mTargetConfirmed;
   const uint64_t mBlockId;
+
+  // The APZC that was actually scrolled by events in this input block.
+  // This is used in configurations where a single input block is only
+  // allowed to scroll a single APZC (configurations where gfxPrefs::
+  // APZAllowImmediateHandoff() is false).
+  // Set the first time an input event in this block scrolls an APZC.
+  RefPtr<AsyncPanZoomController> mScrolledApzc;
+protected:
+  RefPtr<const OverscrollHandoffChain> mOverscrollHandoffChain;
+
+  // Used to transform events from global screen space to |mTargetApzc|'s
+  // screen space. It's cached at the beginning of the input block so that
+  // all events in the block are in the same coordinate space.
+  ScreenToParentLayerMatrix4x4 mTransformToApzc;
 };
 
 /**
@@ -63,13 +107,19 @@ private:
 class CancelableBlockState : public InputBlockState
 {
 public:
-  CancelableBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
+  CancelableBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                        bool aTargetConfirmed);
 
   virtual TouchBlockState *AsTouchBlock() {
     return nullptr;
   }
   virtual WheelBlockState *AsWheelBlock() {
+    return nullptr;
+  }
+  virtual DragBlockState *AsDragBlock() {
+    return nullptr;
+  }
+  virtual PanGestureBlockState *AsPanGestureBlock() {
     return nullptr;
   }
 
@@ -79,7 +129,21 @@ public:
    * @return false if this block has already received a response from
    *         web content, true if not.
    */
-  bool SetContentResponse(bool aPreventDefault);
+  virtual bool SetContentResponse(bool aPreventDefault);
+
+  /**
+   * This should be called when this block is starting to wait for the
+   * necessary content response notifications. It is used to gather data
+   * on how long the content response notifications take.
+   */
+  void StartContentResponseTimer();
+
+  /**
+   * This should be called when a content response notification has been
+   * delivered to this block. If all the notifications have arrived, this
+   * will report the total time take to telemetry.
+   */
+  void RecordContentResponseTime();
 
   /**
    * Record that content didn't respond in time.
@@ -88,9 +152,33 @@ public:
   bool TimeoutContentResponse();
 
   /**
+   * Checks if the content response timer has already expired.
+   */
+  bool IsContentResponseTimerExpired() const;
+
+  /**
    * @return true iff web content cancelled this block of events.
    */
   bool IsDefaultPrevented() const;
+
+  /**
+   * Process the given event using this input block's target apzc.
+   * This input block must not have pending events, and its apzc must not be
+   * nullptr.
+   */
+  void DispatchImmediate(const InputData& aEvent) const;
+
+  /**
+   * Dispatch the event to the target APZC. Mostly this is a hook for
+   * subclasses to do any per-event processing they need to.
+   */
+  virtual void DispatchEvent(const InputData& aEvent) const;
+
+  /**
+   * @return true iff this block has received all the information it could
+   *         have gotten from the content thread.
+   */
+  virtual bool HasReceivedAllContentNotifications() const;
 
   /**
    * @return true iff this block has received all the information needed
@@ -109,9 +197,10 @@ public:
   virtual void DropEvents() = 0;
 
   /**
-   * Process all events given an apzc, leaving ths block depleted.
+   * Process all events using this input block's target apzc, leaving this
+   * block depleted. This input block's apzc must not be nullptr.
    */
-  virtual void HandleEvents(const nsRefPtr<AsyncPanZoomController>& aTarget) = 0;
+  virtual void HandleEvents() = 0;
 
   /**
    * Return true if this input block must stay active if it would otherwise
@@ -125,6 +214,7 @@ public:
   virtual const char* Type() = 0;
 
 private:
+  TimeStamp mContentResponseTimer;
   bool mPreventDefault;
   bool mContentResponded;
   bool mContentResponseTimerExpired;
@@ -136,24 +226,160 @@ private:
 class WheelBlockState : public CancelableBlockState
 {
 public:
-  WheelBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
-                  bool aTargetConfirmed);
+  WheelBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                  bool aTargetConfirmed,
+                  const ScrollWheelInput& aEvent);
 
-  bool IsReadyForHandling() const MOZ_OVERRIDE;
-  bool HasEvents() const MOZ_OVERRIDE;
-  void DropEvents() MOZ_OVERRIDE;
-  void HandleEvents(const nsRefPtr<AsyncPanZoomController>& aTarget) MOZ_OVERRIDE;
-  bool MustStayActive() MOZ_OVERRIDE;
-  const char* Type() MOZ_OVERRIDE;
+  bool SetContentResponse(bool aPreventDefault) override;
+  bool HasEvents() const override;
+  void DropEvents() override;
+  void HandleEvents() override;
+  bool MustStayActive() override;
+  const char* Type() override;
+  bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                              TargetConfirmationState aState) override;
 
   void AddEvent(const ScrollWheelInput& aEvent);
 
-  WheelBlockState *AsWheelBlock() MOZ_OVERRIDE {
+  WheelBlockState *AsWheelBlock() override {
     return this;
   }
 
+  /**
+   * Determine whether this wheel block is accepting new events.
+   */
+  bool ShouldAcceptNewEvent() const;
+
+  /**
+   * Call to check whether a wheel event will cause the current transaction to
+   * timeout.
+   */
+  bool MaybeTimeout(const ScrollWheelInput& aEvent);
+
+  /**
+   * Called from APZCTM when a mouse move or drag+drop event occurs, before
+   * the event has been processed.
+   */
+  void OnMouseMove(const ScreenIntPoint& aPoint);
+
+  /**
+   * Returns whether or not the block is participating in a wheel transaction.
+   * This means that the block is the most recent input block to be created,
+   * and no events have occurred that would require scrolling a different
+   * frame.
+   *
+   * @return True if in a transaction, false otherwise.
+   */
+  bool InTransaction() const;
+
+  /**
+   * Mark the block as no longer participating in a wheel transaction. This
+   * will force future wheel events to begin a new input block.
+   */
+  void EndTransaction();
+
+  /**
+   * @return Whether or not overscrolling is prevented for this wheel block.
+   */
+  bool AllowScrollHandoff() const;
+
+  /**
+   * Called to check and possibly end the transaction due to a timeout.
+   *
+   * @return True if the transaction ended, false otherwise.
+   */
+  bool MaybeTimeout(const TimeStamp& aTimeStamp);
+
+  /**
+   * Update the wheel transaction state for a new event.
+   */
+  void Update(ScrollWheelInput& aEvent);
+
+protected:
+  void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc) override;
+
 private:
   nsTArray<ScrollWheelInput> mEvents;
+  TimeStamp mLastEventTime;
+  TimeStamp mLastMouseMove;
+  uint32_t mScrollSeriesCounter;
+  bool mTransactionEnded;
+};
+
+/**
+ * A block of mouse events that are part of a drag
+ */
+class DragBlockState : public CancelableBlockState
+{
+public:
+  DragBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                 bool aTargetConfirmed,
+                 const MouseInput& aEvent);
+
+  bool HasEvents() const override;
+  void DropEvents() override;
+  void HandleEvents() override;
+  bool MustStayActive() override;
+  const char* Type() override;
+
+  bool HasReceivedMouseUp();
+  void MarkMouseUpReceived();
+
+  void AddEvent(const MouseInput& aEvent);
+
+  DragBlockState *AsDragBlock() override {
+    return this;
+  }
+
+  void SetDragMetrics(const AsyncDragMetrics& aDragMetrics);
+
+  void DispatchEvent(const InputData& aEvent) const override;
+private:
+  nsTArray<MouseInput> mEvents;
+  AsyncDragMetrics mDragMetrics;
+  bool mReceivedMouseUp;
+};
+
+/**
+ * A single block of pan gesture events.
+ */
+class PanGestureBlockState : public CancelableBlockState
+{
+public:
+  PanGestureBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                       bool aTargetConfirmed,
+                       const PanGestureInput& aEvent);
+
+  bool SetContentResponse(bool aPreventDefault) override;
+  bool HasReceivedAllContentNotifications() const override;
+  bool IsReadyForHandling() const override;
+  bool HasEvents() const override;
+  void DropEvents() override;
+  void HandleEvents() override;
+  bool MustStayActive() override;
+  const char* Type() override;
+  bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                              TargetConfirmationState aState) override;
+
+  void AddEvent(const PanGestureInput& aEvent);
+
+  PanGestureBlockState *AsPanGestureBlock() override {
+    return this;
+  }
+
+  /**
+   * @return Whether or not overscrolling is prevented for this block.
+   */
+  bool AllowScrollHandoff() const;
+
+  bool WasInterrupted() const { return mInterrupted; }
+
+  void SetNeedsToWaitForContentResponse(bool aWaitForContentResponse);
+
+private:
+  nsTArray<PanGestureInput> mEvents;
+  bool mInterrupted;
+  bool mWaitingForContentResponse;
 };
 
 /**
@@ -182,12 +408,10 @@ private:
 class TouchBlockState : public CancelableBlockState
 {
 public:
-  typedef uint32_t TouchBehaviorFlags;
+  explicit TouchBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                           bool aTargetConfirmed, TouchCounter& aTouchCounter);
 
-  explicit TouchBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
-                           bool aTargetConfirmed);
-
-  TouchBlockState *AsTouchBlock() MOZ_OVERRIDE {
+  TouchBlockState *AsTouchBlock() override {
     return this;
   }
 
@@ -197,34 +421,43 @@ public:
    */
   bool SetAllowedTouchBehaviors(const nsTArray<TouchBehaviorFlags>& aBehaviors);
   /**
-   * Copy the allowed touch behavior flags from another block.
-   * @return false if this block already has these flags set, true if not.
+   * If the allowed touch behaviors have been set, populate them into
+   * |aOutBehaviors| and return true. Else, return false.
    */
-  bool CopyAllowedTouchBehaviorsFrom(const TouchBlockState& aOther);
+  bool GetAllowedTouchBehaviors(nsTArray<TouchBehaviorFlags>& aOutBehaviors) const;
+
+  /**
+   * Copy various properties from another block.
+   */
+  void CopyPropertiesFrom(const TouchBlockState& aOther);
+
+  /*
+   * @return true iff this block has received all the information it could
+   *         have gotten from the content thread.
+   */
+  bool HasReceivedAllContentNotifications() const override;
 
   /**
    * @return true iff this block has received all the information needed
    *         to properly dispatch the events in the block.
    */
-  bool IsReadyForHandling() const MOZ_OVERRIDE;
+  bool IsReadyForHandling() const override;
 
   /**
    * Sets a flag that indicates this input block occurred while the APZ was
-   * in a state of fast motion. This affects gestures that may be produced
+   * in a state of fast flinging. This affects gestures that may be produced
    * from input events in this block.
    */
-  void SetDuringFastMotion();
+  void SetDuringFastFling();
   /**
-   * @return true iff SetDuringFastMotion was called on this block.
+   * @return true iff SetDuringFastFling was called on this block.
    */
-  bool IsDuringFastMotion() const;
+  bool IsDuringFastFling() const;
   /**
    * Set the single-tap-occurred flag that indicates that this touch block
    * triggered a single tap event.
-   * @return true if the flag was set. This may not happen if, for example,
-   *         SetDuringFastMotion was previously called.
    */
-  bool SetSingleTapOccurred();
+  void SetSingleTapOccurred();
   /**
    * @return true iff the single-tap-occurred flag is set on this block.
    */
@@ -253,25 +486,40 @@ public:
   bool TouchActionAllowsPanningY() const;
   bool TouchActionAllowsPanningXY() const;
 
-  bool HasEvents() const MOZ_OVERRIDE;
-  void DropEvents() MOZ_OVERRIDE;
-  void HandleEvents(const nsRefPtr<AsyncPanZoomController>& aTarget) MOZ_OVERRIDE;
-  bool MustStayActive() MOZ_OVERRIDE;
-  const char* Type() MOZ_OVERRIDE;
-
-private:
   /**
-   * @return the first event in the queue. The event is removed from the queue
-   *         before it is returned.
+   * Notifies the input block of an incoming touch event so that the block can
+   * update its internal slop state. "Slop" refers to the area around the
+   * initial touchstart where we drop touchmove events so that content doesn't
+   * see them. The |aApzcCanConsumeEvents| parameter is factored into how large
+   * the slop area is - if this is true the slop area is larger.
+   * @return true iff the provided event is a touchmove in the slop area and
+   *         so should not be sent to content.
    */
-  MultiTouchInput RemoveFirstEvent();
+  bool UpdateSlopState(const MultiTouchInput& aInput,
+                       bool aApzcCanConsumeEvents);
+
+  /**
+   * Returns the number of touch points currently active.
+   */
+  uint32_t GetActiveTouchCount() const;
+
+  bool HasEvents() const override;
+  void DropEvents() override;
+  void HandleEvents() override;
+  void DispatchEvent(const InputData& aEvent) const override;
+  bool MustStayActive() override;
+  const char* Type() override;
 
 private:
   nsTArray<TouchBehaviorFlags> mAllowedTouchBehaviors;
   bool mAllowedTouchBehaviorSet;
-  bool mDuringFastMotion;
+  bool mDuringFastFling;
   bool mSingleTapOccurred;
+  bool mInSlop;
+  ScreenIntPoint mSlopOrigin;
   nsTArray<MultiTouchInput> mEvents;
+  // A reference to the InputQueue's touch counter
+  TouchCounter& mTouchCounter;
 };
 
 } // namespace layers

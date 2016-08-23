@@ -1,16 +1,18 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et ft=cpp : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ContentProcessManager.h"
 #include "ContentParent.h"
+#include "mozilla/dom/TabParent.h"
 
 #include "mozilla/StaticPtr.h"
 #include "mozilla/ClearOnShutdown.h"
 
 #include "nsPrintfCString.h"
+#include "nsIScriptSecurityManager.h"
 
 // XXX need another bug to move this to a common header.
 #ifdef DISABLE_ASSERTS_FOR_FUZZING
@@ -31,7 +33,7 @@ ContentProcessManager::sSingleton;
 /* static */ ContentProcessManager*
 ContentProcessManager::GetSingleton()
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
 
   if (!sSingleton) {
     sSingleton = new ContentProcessManager();
@@ -148,10 +150,9 @@ ContentProcessManager::AllocateTabId(const TabId& aOpenerTabId,
 
   struct RemoteFrameInfo info;
 
-  const IPCTabAppBrowserContext& appBrowser = aContext.appBrowserContext();
   // If it's a PopupIPCTabContext, it's the case that a TabChild want to
   // open a new tab. aOpenerTabId has to be it's parent frame's opener id.
-  if (appBrowser.type() == IPCTabAppBrowserContext::TPopupIPCTabContext) {
+  if (aContext.type() == IPCTabContext::TPopupIPCTabContext) {
     auto remoteFrameIter = iter->second.mRemoteFrames.find(aOpenerTabId);
     if (remoteFrameIter == iter->second.mRemoteFrames.end()) {
       ASSERT_UNLESS_FUZZING("Failed to find parent frame's opener id.");
@@ -160,7 +161,7 @@ ContentProcessManager::AllocateTabId(const TabId& aOpenerTabId,
 
     info.mOpenerTabId = remoteFrameIter->second.mOpenerTabId;
 
-    const PopupIPCTabContext &ipcContext = appBrowser.get_PopupIPCTabContext();
+    const PopupIPCTabContext &ipcContext = aContext.get_PopupIPCTabContext();
     MOZ_ASSERT(ipcContext.opener().type() == PBrowserOrId::TTabId);
 
     remoteFrameIter = iter->second.mRemoteFrames.find(ipcContext.opener().get_TabId());
@@ -274,6 +275,97 @@ ContentProcessManager::GetRemoteFrameOpenerTabId(const ContentParentId& aChildCp
   *aOpenerTabId = remoteFrameIter->second.mOpenerTabId;
 
   return true;
+}
+
+already_AddRefed<TabParent>
+ContentProcessManager::GetTabParentByProcessAndTabId(const ContentParentId& aChildCpId,
+                                                     const TabId& aChildTabId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  auto iter = mContentParentMap.find(aChildCpId);
+  if (NS_WARN_IF(iter == mContentParentMap.end())) {
+    ASSERT_UNLESS_FUZZING();
+    return nullptr;
+  }
+
+  const ManagedContainer<PBrowserParent>& browsers = iter->second.mCp->ManagedPBrowserParent();
+  for (auto iter = browsers.ConstIter(); !iter.Done(); iter.Next()) {
+    RefPtr<TabParent> tab = TabParent::GetFrom(iter.Get()->GetKey());
+    if (tab->GetTabId() == aChildTabId) {
+      return tab.forget();
+    }
+  }
+
+  return nullptr;
+}
+
+already_AddRefed<TabParent>
+ContentProcessManager::GetTopLevelTabParentByProcessAndTabId(const ContentParentId& aChildCpId,
+                                                             const TabId& aChildTabId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // Used to keep the current ContentParentId and the current TabId
+  // in the iteration(do-while loop below)
+  ContentParentId currentCpId;
+  TabId currentTabId;
+
+  // To get the ContentParentId and the TabParentId on upper level
+  ContentParentId parentCpId = aChildCpId;
+  TabId openerTabId = aChildTabId;
+
+  // Stop this loop when the upper ContentParentId of
+  // the current ContentParentId is chrome(ContentParentId = 0).
+  do {
+    // Update the current ContentParentId and TabId in iteration
+    currentCpId = parentCpId;
+    currentTabId = openerTabId;
+
+    // Get the ContentParentId and TabId on upper level
+    if (!GetParentProcessId(currentCpId, &parentCpId) ||
+        !GetRemoteFrameOpenerTabId(currentCpId, currentTabId, &openerTabId)) {
+      return nullptr;
+    }
+  } while (parentCpId);
+
+  // Get the top level TabParent by the current ContentParentId and TabId
+  return GetTabParentByProcessAndTabId(currentCpId, currentTabId);
+}
+
+nsTArray<TabId>
+ContentProcessManager::GetTabParentsByProcessId(const ContentParentId& aChildCpId)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsTArray<TabId> tabIdList;
+  auto iter = mContentParentMap.find(aChildCpId);
+  if (NS_WARN_IF(iter == mContentParentMap.end())) {
+    ASSERT_UNLESS_FUZZING();
+    return Move(tabIdList);
+  }
+
+  for (auto remoteFrameIter = iter->second.mRemoteFrames.begin();
+      remoteFrameIter != iter->second.mRemoteFrames.end();
+      ++remoteFrameIter) {
+    tabIdList.AppendElement(remoteFrameIter->first);
+  }
+
+  return Move(tabIdList);
+}
+
+uint32_t
+ContentProcessManager::GetAppIdByProcessAndTabId(const ContentParentId& aChildCpId,
+                                                 const TabId& aChildTabId)
+{
+  uint32_t appId = nsIScriptSecurityManager::NO_APP_ID;
+  if (aChildCpId && aChildTabId) {
+    TabContext tabContext;
+    if (GetTabContextByProcessAndTabId(aChildCpId, aChildTabId, &tabContext)) {
+      appId = tabContext.OwnOrContainingAppId();
+    }
+  }
+  return appId;
 }
 
 } // namespace dom

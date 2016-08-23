@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -56,7 +57,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(CellBroadcastMessage)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-CellBroadcastMessage::CellBroadcastMessage(nsPIDOMWindow* aWindow,
+CellBroadcastMessage::CellBroadcastMessage(nsPIDOMWindowInner* aWindow,
                                            uint32_t aServiceId,
                                            uint32_t aGsmGeographicalScope,
                                            uint16_t aMessageCode,
@@ -102,15 +103,15 @@ CellBroadcastMessage::CellBroadcastMessage(nsPIDOMWindow* aWindow,
 }
 
 JSObject*
-CellBroadcastMessage::WrapObject(JSContext* aCx)
+CellBroadcastMessage::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozCellBroadcastMessageBinding::Wrap(aCx, this);
+  return MozCellBroadcastMessageBinding::Wrap(aCx, this, aGivenProto);
 }
 
 already_AddRefed<CellBroadcastEtwsInfo>
 CellBroadcastMessage::GetEtws() const
 {
-  nsRefPtr<CellBroadcastEtwsInfo> etwsInfo = mEtwsInfo;
+  RefPtr<CellBroadcastEtwsInfo> etwsInfo = mEtwsInfo;
   return etwsInfo.forget();
 }
 
@@ -128,7 +129,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(CellBroadcastEtwsInfo)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-CellBroadcastEtwsInfo::CellBroadcastEtwsInfo(nsPIDOMWindow* aWindow,
+CellBroadcastEtwsInfo::CellBroadcastEtwsInfo(nsPIDOMWindowInner* aWindow,
                                              uint32_t aWarningType,
                                              bool aEmergencyUserAlert,
                                              bool aPopup)
@@ -144,9 +145,9 @@ CellBroadcastEtwsInfo::CellBroadcastEtwsInfo(nsPIDOMWindow* aWindow,
 }
 
 JSObject*
-CellBroadcastEtwsInfo::WrapObject(JSContext* aCx)
+CellBroadcastEtwsInfo::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozCellBroadcastEtwsInfoBinding::Wrap(aCx, this);
+  return MozCellBroadcastEtwsInfoBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

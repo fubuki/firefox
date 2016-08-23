@@ -8,6 +8,7 @@
 #define mozilla_net_TLSFilterTransaction_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/UniquePtr.h"
 #include "nsAHttpTransaction.h"
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
@@ -15,6 +16,7 @@
 #include "nsITimer.h"
 #include "NullHttpTransaction.h"
 #include "mozilla/TimeStamp.h"
+#include "prio.h"
 
 // a TLSFilterTransaction wraps another nsAHttpTransaction but
 // applies a encode/decode filter of TLS onto the ReadSegments
@@ -85,6 +87,7 @@ struct PRSocketOptionData;
 namespace mozilla { namespace net {
 
 class nsHttpRequestHead;
+class NullHttpTransaction;
 class TLSFilterTransaction;
 
 class NudgeTunnelCallback : public nsISupports
@@ -93,9 +96,9 @@ public:
   virtual void OnTunnelNudged(TLSFilterTransaction *) = 0;
 };
 
-#define NS_DECL_NUDGETUNNELCALLBACK void OnTunnelNudged(TLSFilterTransaction *) MOZ_OVERRIDE;
+#define NS_DECL_NUDGETUNNELCALLBACK void OnTunnelNudged(TLSFilterTransaction *) override;
 
-class TLSFilterTransaction MOZ_FINAL
+class TLSFilterTransaction final
   : public nsAHttpTransaction
   , public nsAHttpSegmentReader
   , public nsAHttpSegmentWriter
@@ -115,8 +118,8 @@ public:
                        nsAHttpSegmentWriter *writer);
 
   const nsAHttpTransaction *Transaction() const { return mTransaction.get(); }
-  nsresult CommitToSegmentSize(uint32_t size, bool forceCommitment) MOZ_OVERRIDE;
-  nsresult GetTransactionSecurityInfo(nsISupports **) MOZ_OVERRIDE;
+  nsresult CommitToSegmentSize(uint32_t size, bool forceCommitment) override;
+  nsresult GetTransactionSecurityInfo(nsISupports **) override;
   nsresult NudgeTunnel(NudgeTunnelCallback *callback);
   nsresult SetProxiedTransaction(nsAHttpTransaction *aTrans);
   void     newIODriver(nsIAsyncInputStream *aSocketIn,
@@ -125,10 +128,11 @@ public:
                        nsIAsyncOutputStream **outSocketOut);
 
   // nsAHttpTransaction overloads
-  nsHttpPipeline *QueryPipeline() MOZ_OVERRIDE;
-  bool IsNullTransaction() MOZ_OVERRIDE;
-  nsHttpTransaction *QueryHttpTransaction() MOZ_OVERRIDE;
-  SpdyConnectTransaction *QuerySpdyConnectTransaction() MOZ_OVERRIDE;
+  nsHttpPipeline *QueryPipeline() override;
+  bool IsNullTransaction() override;
+  NullHttpTransaction *QueryNullTransaction() override;
+  nsHttpTransaction *QueryHttpTransaction() override;
+  SpdyConnectTransaction *QuerySpdyConnectTransaction() override;
 
 private:
   nsresult StartTimerCallback();
@@ -148,13 +152,13 @@ private:
   static PRStatus FilterClose(PRFileDesc *fd);
 
 private:
-  nsRefPtr<nsAHttpTransaction> mTransaction;
+  RefPtr<nsAHttpTransaction> mTransaction;
   nsCOMPtr<nsISupports> mSecInfo;
   nsCOMPtr<nsITimer> mTimer;
-  nsRefPtr<NudgeTunnelCallback> mNudgeCallback;
+  RefPtr<NudgeTunnelCallback> mNudgeCallback;
 
   // buffered network output, after encryption
-  nsAutoArrayPtr<char> mEncryptedText;
+  UniquePtr<char[]> mEncryptedText;
   uint32_t mEncryptedTextUsed;
   uint32_t mEncryptedTextSize;
 
@@ -172,9 +176,8 @@ class SocketTransportShim;
 class InputStreamShim;
 class OutputStreamShim;
 class nsHttpConnection;
-class ASpdySession;
 
-class SpdyConnectTransaction MOZ_FINAL : public NullHttpTransaction
+class SpdyConnectTransaction final : public NullHttpTransaction
 {
 public:
   SpdyConnectTransaction(nsHttpConnectionInfo *ci,
@@ -184,7 +187,7 @@ public:
                          nsAHttpConnection *session);
   ~SpdyConnectTransaction();
 
-  SpdyConnectTransaction *QuerySpdyConnectTransaction() MOZ_OVERRIDE { return this; }
+  SpdyConnectTransaction *QuerySpdyConnectTransaction() override { return this; }
 
   // A transaction is forced into plaintext when it is intended to be used as a CONNECT
   // tunnel but the setup fails. The plaintext only carries the CONNECT error.
@@ -193,11 +196,15 @@ public:
                                  nsHttpConnectionInfo *aConnInfo);
 
   nsresult ReadSegments(nsAHttpSegmentReader *reader,
-                        uint32_t count, uint32_t *countRead) MOZ_OVERRIDE MOZ_FINAL;
+                        uint32_t count, uint32_t *countRead) override final;
   nsresult WriteSegments(nsAHttpSegmentWriter *writer,
-                         uint32_t count, uint32_t *countWritten) MOZ_OVERRIDE MOZ_FINAL;
-  nsHttpRequestHead *RequestHead() MOZ_OVERRIDE MOZ_FINAL;
-  void Close(nsresult reason) MOZ_OVERRIDE MOZ_FINAL;
+                         uint32_t count, uint32_t *countWritten) override final;
+  nsHttpRequestHead *RequestHead() override final;
+  void Close(nsresult reason) override final;
+
+  // ConnectedReadyForInput() tests whether the spdy connect transaction is attached to
+  // an nsHttpConnection that can properly deal with flow control, etc..
+  bool ConnectedReadyForInput();
 
 private:
   friend class InputStreamShim;
@@ -208,36 +215,36 @@ private:
 
   nsCString             mConnectString;
   uint32_t              mConnectStringOffset;
-  nsHttpRequestHead     *mRequestHead;
 
   nsAHttpConnection    *mSession;
   nsAHttpSegmentReader *mSegmentReader;
 
-  nsAutoArrayPtr<char> mInputData;
+  UniquePtr<char[]>   mInputData;
   uint32_t             mInputDataSize;
   uint32_t             mInputDataUsed;
   uint32_t             mInputDataOffset;
 
-  nsAutoArrayPtr<char> mOutputData;
+  UniquePtr<char[]>    mOutputData;
   uint32_t             mOutputDataSize;
   uint32_t             mOutputDataUsed;
   uint32_t             mOutputDataOffset;
 
   bool                           mForcePlainText;
   TimeStamp                      mTimestampSyn;
-  nsRefPtr<nsHttpConnectionInfo> mConnInfo;
+  RefPtr<nsHttpConnectionInfo> mConnInfo;
 
   // mTunneledConn, mTunnelTransport, mTunnelStreamIn, mTunnelStreamOut
   // are the connectors to the "real" http connection. They are created
   // together when the tunnel setup is complete and a static reference is held
   // for the lifetime of the tunnel.
-  nsRefPtr<nsHttpConnection>     mTunneledConn;
-  nsRefPtr<SocketTransportShim>  mTunnelTransport;
-  nsRefPtr<InputStreamShim>      mTunnelStreamIn;
-  nsRefPtr<OutputStreamShim>     mTunnelStreamOut;
-  nsRefPtr<nsHttpTransaction>    mDrivingTransaction;
+  RefPtr<nsHttpConnection>     mTunneledConn;
+  RefPtr<SocketTransportShim>  mTunnelTransport;
+  RefPtr<InputStreamShim>      mTunnelStreamIn;
+  RefPtr<OutputStreamShim>     mTunnelStreamOut;
+  RefPtr<nsHttpTransaction>    mDrivingTransaction;
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // mozilla_net_TLSFilterTransaction_h

@@ -14,6 +14,7 @@
 #include "pkcs11t.h"
 
 #include "sftkdbt.h" 
+#include "chacha20poly1305.h"
 #include "hasht.h"
 
 /* 
@@ -104,6 +105,7 @@ typedef struct SFTKHashSignInfoStr SFTKHashSignInfo;
 typedef struct SFTKOAEPEncryptInfoStr SFTKOAEPEncryptInfo;
 typedef struct SFTKOAEPDecryptInfoStr SFTKOAEPDecryptInfo;
 typedef struct SFTKSSLMACInfoStr SFTKSSLMACInfo;
+typedef struct SFTKChaCha20Poly1305InfoStr SFTKChaCha20Poly1305Info;
 typedef struct SFTKItemTemplateStr SFTKItemTemplate;
 
 /* define function pointer typdefs for pointer tables */
@@ -112,7 +114,7 @@ typedef void (*SFTKBegin)(void *);
 typedef SECStatus (*SFTKCipher)(void *,void *,unsigned int *,unsigned int,
 					void *, unsigned int);
 typedef SECStatus (*SFTKVerify)(void *,void *,unsigned int,void *,unsigned int);
-typedef void (*SFTKHash)(void *,void *,unsigned int);
+typedef void (*SFTKHash)(void *,const void *,unsigned int);
 typedef void (*SFTKEnd)(void *,void *,unsigned int *,unsigned int);
 typedef void (*SFTKFree)(void *);
 
@@ -348,7 +350,7 @@ struct SFTKSlotStr {
     PRInt32             rwSessionCount;    	/* set by atomic operations */
                                           	/* (reset) */
     int			sessionObjectHandleCount;/* variable - perserved */
-    int			index;			/* invariant */
+    CK_ULONG		index;			/* invariant */
     PLHashTable		*tokObjHashTable;	/* invariant */
     SFTKObject		**sessObjHashTable;	/* variable - reset */
     unsigned int	sessObjHashSize;	/* invariant */
@@ -397,6 +399,16 @@ struct SFTKSSLMACInfoStr {
     int			padSize;
     unsigned char	key[MAX_KEY_LEN];
     unsigned int	keySize;
+};
+
+/* SFTKChaCha20Poly1305Info saves the key, tag length, nonce,
+ * and additional data for a ChaCha20+Poly1305 AEAD operation. */
+struct SFTKChaCha20Poly1305InfoStr {
+    ChaCha20Poly1305Context freeblCtx;
+    unsigned char nonce[12];
+    unsigned char ad[16];
+    unsigned char *adOverflow;
+    unsigned int adLen;
 };
 
 /*
@@ -724,8 +736,8 @@ sftk_MACConstantTimeCtx* sftk_HMACConstantTime_New(
 	CK_MECHANISM_PTR mech, SFTKObject *key);
 sftk_MACConstantTimeCtx* sftk_SSLv3MACConstantTime_New(
 	CK_MECHANISM_PTR mech, SFTKObject *key);
-void sftk_HMACConstantTime_Update(void *pctx, void *data, unsigned int len);
-void sftk_SSLv3MACConstantTime_Update(void *pctx, void *data, unsigned int len);
+void sftk_HMACConstantTime_Update(void *pctx, const void *data, unsigned int len);
+void sftk_SSLv3MACConstantTime_Update(void *pctx, const void *data, unsigned int len);
 void sftk_MACConstantTime_EndHash(
 	void *pctx, void *out, unsigned int *outLength, unsigned int maxLength);
 void sftk_MACConstantTime_DestroyContext(void *pctx, PRBool);
@@ -738,7 +750,8 @@ extern CK_RV
 sftk_TLSPRFInit(SFTKSessionContext *context, 
 		  SFTKObject *        key, 
 		  CK_KEY_TYPE         key_type,
-		  HASH_HashType       hash_alg);
+		  HASH_HashType       hash_alg,
+		  unsigned int        out_len);
 
 SEC_END_PROTOS
 

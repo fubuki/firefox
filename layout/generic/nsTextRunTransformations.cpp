@@ -6,19 +6,20 @@
 #include "nsTextRunTransformations.h"
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/Move.h"
 
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
-#include "nsStyleContext.h"
 #include "nsUnicharUtils.h"
 #include "nsUnicodeProperties.h"
 #include "nsSpecialCasingData.h"
 #include "mozilla/gfx/2D.h"
 #include "nsTextFrameUtils.h"
 #include "nsIPersistentProperties2.h"
-#include "nsNetUtil.h"
 #include "GreekCasing.h"
 #include "IrishCasing.h"
+
+using namespace mozilla;
 
 // Unicode characters needing special casing treatment in tr/az languages
 #define LATIN_CAPITAL_LETTER_I_WITH_DOT_ABOVE  0x0130
@@ -31,12 +32,13 @@
 #define GREEK_SMALL_LETTER_FINAL_SIGMA         0x03C2
 #define GREEK_SMALL_LETTER_SIGMA               0x03C3
 
-nsTransformedTextRun *
+UniquePtr<nsTransformedTextRun>
 nsTransformedTextRun::Create(const gfxTextRunFactory::Parameters* aParams,
                              nsTransformingTextRunFactory* aFactory,
                              gfxFontGroup* aFontGroup,
                              const char16_t* aString, uint32_t aLength,
-                             const uint32_t aFlags, nsStyleContext** aStyles,
+                             const uint32_t aFlags,
+                             nsTArray<RefPtr<nsTransformedCharStyle>>&& aStyles,
                              bool aOwnsFactory)
 {
   NS_ASSERTION(!(aFlags & gfxTextRunFactory::TEXT_IS_8BIT),
@@ -47,15 +49,15 @@ nsTransformedTextRun::Create(const gfxTextRunFactory::Parameters* aParams,
     return nullptr;
   }
 
-  return new (storage) nsTransformedTextRun(aParams, aFactory, aFontGroup,
-                                            aString, aLength,
-                                            aFlags, aStyles, aOwnsFactory);
+  return UniquePtr<nsTransformedTextRun>(
+    new (storage) nsTransformedTextRun(aParams, aFactory, aFontGroup,
+                                       aString, aLength, aFlags,
+                                       Move(aStyles), aOwnsFactory));
 }
 
 void
 nsTransformedTextRun::SetCapitalization(uint32_t aStart, uint32_t aLength,
-                                        bool* aCapitalization,
-                                        gfxContext* aRefContext)
+                                        bool* aCapitalization)
 {
   if (mCapitalize.IsEmpty()) {
     if (!mCapitalize.AppendElements(GetLength()))
@@ -67,12 +69,11 @@ nsTransformedTextRun::SetCapitalization(uint32_t aStart, uint32_t aLength,
 }
 
 bool
-nsTransformedTextRun::SetPotentialLineBreaks(uint32_t aStart, uint32_t aLength,
-                                             uint8_t* aBreakBefore,
-                                             gfxContext* aRefContext)
+nsTransformedTextRun::SetPotentialLineBreaks(Range aRange,
+                                             uint8_t* aBreakBefore)
 {
-  bool changed = gfxTextRun::SetPotentialLineBreaks(aStart, aLength,
-      aBreakBefore, aRefContext);
+  bool changed =
+    gfxTextRun::SetPotentialLineBreaks(aRange, aBreakBefore);
   if (changed) {
     mNeedsRebuild = true;
   }
@@ -83,8 +84,8 @@ size_t
 nsTransformedTextRun::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 {
   size_t total = gfxTextRun::SizeOfExcludingThis(aMallocSizeOf);
-  total += mStyles.SizeOfExcludingThis(aMallocSizeOf);
-  total += mCapitalize.SizeOfExcludingThis(aMallocSizeOf);
+  total += mStyles.ShallowSizeOfExcludingThis(aMallocSizeOf);
+  total += mCapitalize.ShallowSizeOfExcludingThis(aMallocSizeOf);
   if (mOwnsFactory) {
     total += aMallocSizeOf(mFactory);
   }
@@ -97,28 +98,31 @@ nsTransformedTextRun::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
 
-nsTransformedTextRun*
+UniquePtr<nsTransformedTextRun>
 nsTransformingTextRunFactory::MakeTextRun(const char16_t* aString, uint32_t aLength,
                                           const gfxTextRunFactory::Parameters* aParams,
                                           gfxFontGroup* aFontGroup, uint32_t aFlags,
-                                          nsStyleContext** aStyles, bool aOwnsFactory)
+                                          nsTArray<RefPtr<nsTransformedCharStyle>>&& aStyles,
+                                          bool aOwnsFactory)
 {
   return nsTransformedTextRun::Create(aParams, this, aFontGroup,
-                                      aString, aLength, aFlags, aStyles, aOwnsFactory);
+                                      aString, aLength, aFlags, Move(aStyles),
+                                      aOwnsFactory);
 }
 
-nsTransformedTextRun*
+UniquePtr<nsTransformedTextRun>
 nsTransformingTextRunFactory::MakeTextRun(const uint8_t* aString, uint32_t aLength,
                                           const gfxTextRunFactory::Parameters* aParams,
                                           gfxFontGroup* aFontGroup, uint32_t aFlags,
-                                          nsStyleContext** aStyles, bool aOwnsFactory)
+                                          nsTArray<RefPtr<nsTransformedCharStyle>>&& aStyles,
+                                          bool aOwnsFactory)
 {
   // We'll only have a Unicode code path to minimize the amount of code needed
   // for these rarely used features
   NS_ConvertASCIItoUTF16 unicodeString(reinterpret_cast<const char*>(aString), aLength);
   return MakeTextRun(unicodeString.get(), aLength, aParams, aFontGroup,
                      aFlags & ~(gfxFontGroup::TEXT_IS_PERSISTENT | gfxFontGroup::TEXT_IS_8BIT),
-                     aStyles, aOwnsFactory);
+                     Move(aStyles), aOwnsFactory);
 }
 
 void
@@ -127,9 +131,9 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
 {
   aDest->ResetGlyphRuns();
 
-  gfxTextRun::GlyphRunIterator iter(aSrc, 0, aSrc->GetLength());
+  gfxTextRun::GlyphRunIterator iter(aSrc, gfxTextRun::Range(aSrc));
   uint32_t offset = 0;
-  nsAutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
+  AutoTArray<gfxTextRun::DetailedGlyph,2> glyphs;
   while (iter.NextRun()) {
     gfxTextRun::GlyphRun* run = iter.GetGlyphRun();
     nsresult rv = aDest->AddGlyphRun(run->mFont, run->mMatchType,
@@ -209,10 +213,10 @@ MergeCharactersInTextRun(gfxTextRun* aDest, gfxTextRun* aSrc,
 
 gfxTextRunFactory::Parameters
 GetParametersForInner(nsTransformedTextRun* aTextRun, uint32_t* aFlags,
-    gfxContext* aRefContext)
+                      DrawTarget* aRefDrawTarget)
 {
   gfxTextRunFactory::Parameters params =
-    { aRefContext, nullptr, nullptr,
+    { aRefDrawTarget, nullptr, nullptr,
       nullptr, 0, aTextRun->GetAppUnitsPerDevUnit()
     };
   *aFlags = aTextRun->GetFlags() & ~gfxFontGroup::TEXT_IS_PERSISTENT;
@@ -260,7 +264,7 @@ GetCasingFor(const nsIAtom* aLang)
   int index = langStr.FindChar('-');
   if (index > 0) {
     langStr.Truncate(index);
-    nsCOMPtr<nsIAtom> truncatedLang = do_GetAtom(langStr);
+    nsCOMPtr<nsIAtom> truncatedLang = NS_Atomize(langStr);
     return GetCasingFor(truncatedLang);
   }
 
@@ -277,7 +281,7 @@ nsCaseTransformTextRunFactory::TransformString(
     nsTArray<bool>& aDeletedCharsArray,
     nsTransformedTextRun* aTextRun,
     nsTArray<uint8_t>* aCanBreakBeforeArray,
-    nsTArray<nsStyleContext*>* aStyleArray)
+    nsTArray<RefPtr<nsTransformedCharStyle>>* aStyleArray)
 {
   NS_PRECONDITION(!aTextRun || (aCanBreakBeforeArray && aStyleArray),
                   "either none or all three optional parameters required");
@@ -295,6 +299,7 @@ nsCaseTransformTextRunFactory::TransformString(
   nsIUGenCategory::nsUGenCategory cat;
 
   uint8_t style = aAllUppercase ? NS_STYLE_TEXT_TRANSFORM_UPPERCASE : 0;
+  bool forceNonFullWidth = false;
   const nsIAtom* lang = aLanguage;
 
   LanguageSpecificCasingBehavior languageSpecificCasing = GetCasingFor(lang);
@@ -305,15 +310,15 @@ nsCaseTransformTextRunFactory::TransformString(
   for (uint32_t i = 0; i < length; ++i) {
     uint32_t ch = str[i];
 
-    nsStyleContext* styleContext;
+    RefPtr<nsTransformedCharStyle> charStyle;
     if (aTextRun) {
-      styleContext = aTextRun->mStyles[i];
+      charStyle = aTextRun->mStyles[i];
       style = aAllUppercase ? NS_STYLE_TEXT_TRANSFORM_UPPERCASE :
-        styleContext->StyleText()->mTextTransform;
+        charStyle->mTextTransform;
+      forceNonFullWidth = charStyle->mForceNonFullWidth;
 
-      const nsStyleFont* styleFont = styleContext->StyleFont();
-      nsIAtom* newLang = styleFont->mExplicitLanguage
-                         ? styleFont->mLanguage : nullptr;
+      nsIAtom* newLang = charStyle->mExplicitLanguage
+                         ? charStyle->mLanguage : nullptr;
       if (lang != newLang) {
         lang = newLang;
         languageSpecificCasing = GetCasingFor(lang);
@@ -557,6 +562,10 @@ nsCaseTransformTextRunFactory::TransformString(
       break;
     }
 
+    if (forceNonFullWidth) {
+      ch = mozilla::unicode::GetFullWidthInverse(ch);
+    }
+
     if (ch == uint32_t(-1)) {
       aDeletedCharsArray.AppendElement(true);
       mergeNeeded = true;
@@ -564,9 +573,10 @@ nsCaseTransformTextRunFactory::TransformString(
       aDeletedCharsArray.AppendElement(false);
       aCharsToMergeArray.AppendElement(false);
       if (aTextRun) {
-        aStyleArray->AppendElement(styleContext);
-        aCanBreakBeforeArray->AppendElement(inhibitBreakBefore ? false :
-                                            aTextRun->CanBreakLineBefore(i));
+        aStyleArray->AppendElement(charStyle);
+        aCanBreakBeforeArray->AppendElement(
+          inhibitBreakBefore ? gfxShapedText::CompressedGlyph::FLAG_BREAK_TYPE_NONE
+                             : aTextRun->CanBreakBefore(i));
       }
 
       if (IS_IN_BMP(ch)) {
@@ -584,8 +594,9 @@ nsCaseTransformTextRunFactory::TransformString(
         mergeNeeded = true;
         aCharsToMergeArray.AppendElement(true);
         if (aTextRun) {
-          aStyleArray->AppendElement(styleContext);
-          aCanBreakBeforeArray->AppendElement(false);
+          aStyleArray->AppendElement(charStyle);
+          aCanBreakBeforeArray->AppendElement(
+            gfxShapedText::CompressedGlyph::FLAG_BREAK_TYPE_NONE);
         }
       }
     }
@@ -596,13 +607,14 @@ nsCaseTransformTextRunFactory::TransformString(
 
 void
 nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
-    gfxContext* aRefContext, gfxMissingFontRecorder *aMFR)
+                                              DrawTarget* aRefDrawTarget,
+                                              gfxMissingFontRecorder* aMFR)
 {
   nsAutoString convertedString;
-  nsAutoTArray<bool,50> charsToMergeArray;
-  nsAutoTArray<bool,50> deletedCharsArray;
-  nsAutoTArray<uint8_t,50> canBreakBeforeArray;
-  nsAutoTArray<nsStyleContext*,50> styleArray;
+  AutoTArray<bool,50> charsToMergeArray;
+  AutoTArray<bool,50> deletedCharsArray;
+  AutoTArray<uint8_t,50> canBreakBeforeArray;
+  AutoTArray<RefPtr<nsTransformedCharStyle>,50> styleArray;
 
   bool mergeNeeded = TransformString(aTextRun->mString,
                                      convertedString,
@@ -616,17 +628,17 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
 
   uint32_t flags;
   gfxTextRunFactory::Parameters innerParams =
-      GetParametersForInner(aTextRun, &flags, aRefContext);
+    GetParametersForInner(aTextRun, &flags, aRefDrawTarget);
   gfxFontGroup* fontGroup = aTextRun->GetFontGroup();
 
-  nsAutoPtr<nsTransformedTextRun> transformedChild;
-  nsAutoPtr<gfxTextRun> cachedChild;
+  UniquePtr<nsTransformedTextRun> transformedChild;
+  UniquePtr<gfxTextRun> cachedChild;
   gfxTextRun* child;
 
   if (mInnerTransformingTextRunFactory) {
     transformedChild = mInnerTransformingTextRunFactory->MakeTextRun(
         convertedString.BeginReading(), convertedString.Length(),
-        &innerParams, fontGroup, flags, styleArray.Elements(), false);
+        &innerParams, fontGroup, flags, Move(styleArray), false);
     child = transformedChild.get();
   } else {
     cachedChild = fontGroup->MakeTextRun(
@@ -640,10 +652,10 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
   // (and also child will be shaped appropriately)
   NS_ASSERTION(convertedString.Length() == canBreakBeforeArray.Length(),
                "Dropped characters or break-before values somewhere!");
-  child->SetPotentialLineBreaks(0, canBreakBeforeArray.Length(),
-      canBreakBeforeArray.Elements(), aRefContext);
+  gfxTextRun::Range range(0, uint32_t(canBreakBeforeArray.Length()));
+  child->SetPotentialLineBreaks(range, canBreakBeforeArray.Elements());
   if (transformedChild) {
-    transformedChild->FinishSettingProperties(aRefContext, aMFR);
+    transformedChild->FinishSettingProperties(aRefDrawTarget, aMFR);
   }
 
   if (mergeNeeded) {
@@ -660,6 +672,6 @@ nsCaseTransformTextRunFactory::RebuildTextRun(nsTransformedTextRun* aTextRun,
     // We can't steal the data because the child may be cached and stealing
     // the data would break the cache.
     aTextRun->ResetGlyphRuns();
-    aTextRun->CopyGlyphDataFrom(child, 0, child->GetLength(), 0);
+    aTextRun->CopyGlyphDataFrom(child, gfxTextRun::Range(child), 0);
   }
 }

@@ -16,17 +16,17 @@ class DirectShowDecoder : public MediaDecoder
 {
 public:
 
-  DirectShowDecoder();
+  explicit DirectShowDecoder(MediaDecoderOwner* aOwner);
   virtual ~DirectShowDecoder();
 
-  MediaDecoder* Clone() MOZ_OVERRIDE {
+  MediaDecoder* Clone(MediaDecoderOwner* aOwner) override {
     if (!IsEnabled()) {
       return nullptr;
     }
-    return new DirectShowDecoder();
+    return new DirectShowDecoder(aOwner);
   }
 
-  MediaDecoderStateMachine* CreateStateMachine() MOZ_OVERRIDE;
+  MediaDecoderStateMachine* CreateStateMachine() override;
 
   // Returns true if aType is a MIME type that we render with the
   // DirectShow backend. If aCodecList is non null,

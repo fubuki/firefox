@@ -6,6 +6,7 @@
 #include "nsPrintSettingsImpl.h"
 #include "nsReadableUtils.h"
 #include "nsIPrintSession.h"
+#include "mozilla/RefPtr.h"
 
 #define DEFAULT_MARGIN_WIDTH 0.5
 
@@ -33,20 +34,17 @@ nsPrintSettings::nsPrintSettings() :
   mShowPrintProgress(true),
   mPrintPageDelay(50),
   mPaperData(0),
-  mPaperSizeType(kPaperSizeDefined),
   mPaperWidth(8.5),
   mPaperHeight(11.0),
   mPaperSizeUnit(kPaperSizeInches),
   mPrintReversed(false),
   mPrintInColor(true),
   mOrientation(kPortraitOrientation),
-  mDownloadFonts(false),
   mNumCopies(1),
   mPrintToFile(false),
   mOutputFormat(kOutputFormatNative),
   mIsInitedFromPrinter(false),
-  mIsInitedFromPrefs(false),
-  mPersistMarginBoxSettings(true)
+  mIsInitedFromPrefs(false)
 {
 
   /* member initializers and constructor code */
@@ -82,7 +80,6 @@ nsPrintSettings::~nsPrintSettings()
 {
 }
 
-/* [noscript] attribute nsIPrintSession printSession; */
 NS_IMETHODIMP nsPrintSettings::GetPrintSession(nsIPrintSession **aPrintSession)
 {
   NS_ENSURE_ARG_POINTER(aPrintSession);
@@ -111,7 +108,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintSession(nsIPrintSession *aPrintSession)
   return NS_OK;
 }
 
-/* attribute long startPageRange; */
 NS_IMETHODIMP nsPrintSettings::GetStartPageRange(int32_t *aStartPageRange)
 {
   //NS_ENSURE_ARG_POINTER(aStartPageRange);
@@ -124,7 +120,6 @@ NS_IMETHODIMP nsPrintSettings::SetStartPageRange(int32_t aStartPageRange)
   return NS_OK;
 }
 
-/* attribute long endPageRange; */
 NS_IMETHODIMP nsPrintSettings::GetEndPageRange(int32_t *aEndPageRange)
 {
   //NS_ENSURE_ARG_POINTER(aEndPageRange);
@@ -137,7 +132,6 @@ NS_IMETHODIMP nsPrintSettings::SetEndPageRange(int32_t aEndPageRange)
   return NS_OK;
 }
 
-/* attribute boolean printReversed; */
 NS_IMETHODIMP nsPrintSettings::GetPrintReversed(bool *aPrintReversed)
 {
   //NS_ENSURE_ARG_POINTER(aPrintReversed);
@@ -150,7 +144,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintReversed(bool aPrintReversed)
   return NS_OK;
 }
 
-/* attribute boolean printInColor; */
 NS_IMETHODIMP nsPrintSettings::GetPrintInColor(bool *aPrintInColor)
 {
   //NS_ENSURE_ARG_POINTER(aPrintInColor);
@@ -163,7 +156,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintInColor(bool aPrintInColor)
   return NS_OK;
 }
 
-/* attribute short orientation; */
 NS_IMETHODIMP nsPrintSettings::GetOrientation(int32_t *aOrientation)
 {
   NS_ENSURE_ARG_POINTER(aOrientation);
@@ -176,49 +168,6 @@ NS_IMETHODIMP nsPrintSettings::SetOrientation(int32_t aOrientation)
   return NS_OK;
 }
 
-/* attribute wstring colorspace; */
-NS_IMETHODIMP nsPrintSettings::GetColorspace(char16_t * *aColorspace)
-{
-  NS_ENSURE_ARG_POINTER(aColorspace);
-  if (!mColorspace.IsEmpty()) {
-    *aColorspace = ToNewUnicode(mColorspace);
-  } else {
-    *aColorspace = nullptr;
-  }
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetColorspace(const char16_t * aColorspace)
-{
-  if (aColorspace) {
-    mColorspace = aColorspace;
-  } else {
-    mColorspace.SetLength(0);
-  }
-  return NS_OK;
-}
-
-/* attribute wstring resolutionname; */
-NS_IMETHODIMP nsPrintSettings::GetResolutionName(char16_t * *aResolutionName)
-{
-  NS_ENSURE_ARG_POINTER(aResolutionName);
-  if (!mResolutionName.IsEmpty()) {
-    *aResolutionName = ToNewUnicode(mResolutionName);
-  } else {
-    *aResolutionName = nullptr;
-  }
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetResolutionName(const char16_t * aResolutionName)
-{
-  if (aResolutionName) {
-    mResolutionName = aResolutionName;
-  } else {
-    mResolutionName.SetLength(0);
-  }
-  return NS_OK;
-}
-
-/* attribute wstring resolution; */
 NS_IMETHODIMP nsPrintSettings::GetResolution(int32_t *aResolution)
 {
   NS_ENSURE_ARG_POINTER(aResolution);
@@ -231,7 +180,6 @@ NS_IMETHODIMP nsPrintSettings::SetResolution(const int32_t aResolution)
   return NS_OK;
 }
 
-/* attribute wstring duplex; */
 NS_IMETHODIMP nsPrintSettings::GetDuplex(int32_t *aDuplex)
 {
   NS_ENSURE_ARG_POINTER(aDuplex);
@@ -244,20 +192,6 @@ NS_IMETHODIMP nsPrintSettings::SetDuplex(const int32_t aDuplex)
   return NS_OK;
 }
 
-/* attribute boolean downloadFonts; */
-NS_IMETHODIMP nsPrintSettings::GetDownloadFonts(bool *aDownloadFonts)
-{
-  //NS_ENSURE_ARG_POINTER(aDownloadFonts);
-  *aDownloadFonts = mDownloadFonts;
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetDownloadFonts(bool aDownloadFonts)
-{
-  mDownloadFonts = aDownloadFonts;
-  return NS_OK;
-}
-
-/* attribute wstring printer; */
 NS_IMETHODIMP nsPrintSettings::GetPrinterName(char16_t * *aPrinter)
 {
    NS_ENSURE_ARG_POINTER(aPrinter);
@@ -279,7 +213,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrinterName(const char16_t * aPrinter)
   return NS_OK;
 }
 
-/* attribute long numCopies; */
 NS_IMETHODIMP nsPrintSettings::GetNumCopies(int32_t *aNumCopies)
 {
   NS_ENSURE_ARG_POINTER(aNumCopies);
@@ -292,24 +225,6 @@ NS_IMETHODIMP nsPrintSettings::SetNumCopies(int32_t aNumCopies)
   return NS_OK;
 }
 
-/* attribute wstring printCommand; */
-NS_IMETHODIMP nsPrintSettings::GetPrintCommand(char16_t * *aPrintCommand)
-{
-  //NS_ENSURE_ARG_POINTER(aPrintCommand);
-  *aPrintCommand = ToNewUnicode(mPrintCommand);
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetPrintCommand(const char16_t * aPrintCommand)
-{
-  if (aPrintCommand) {
-    mPrintCommand = aPrintCommand;
-  } else {
-    mPrintCommand.SetLength(0);
-  }
-  return NS_OK;
-}
-
-/* attribute boolean printToFile; */
 NS_IMETHODIMP nsPrintSettings::GetPrintToFile(bool *aPrintToFile)
 {
   //NS_ENSURE_ARG_POINTER(aPrintToFile);
@@ -322,7 +237,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintToFile(bool aPrintToFile)
   return NS_OK;
 }
 
-/* attribute wstring toFileName; */
 NS_IMETHODIMP nsPrintSettings::GetToFileName(char16_t * *aToFileName)
 {
   //NS_ENSURE_ARG_POINTER(aToFileName);
@@ -339,7 +253,6 @@ NS_IMETHODIMP nsPrintSettings::SetToFileName(const char16_t * aToFileName)
   return NS_OK;
 }
 
-/* attribute short outputFormat; */
 NS_IMETHODIMP nsPrintSettings::GetOutputFormat(int16_t *aOutputFormat)
 {
   NS_ENSURE_ARG_POINTER(aOutputFormat);
@@ -352,7 +265,6 @@ NS_IMETHODIMP nsPrintSettings::SetOutputFormat(int16_t aOutputFormat)
   return NS_OK;
 }
 
-/* attribute long printPageDelay; */
 NS_IMETHODIMP nsPrintSettings::GetPrintPageDelay(int32_t *aPrintPageDelay)
 {
   *aPrintPageDelay = mPrintPageDelay;
@@ -364,7 +276,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintPageDelay(int32_t aPrintPageDelay)
   return NS_OK;
 }
 
-/* attribute boolean isInitializedFromPrinter; */
 NS_IMETHODIMP nsPrintSettings::GetIsInitializedFromPrinter(bool *aIsInitializedFromPrinter)
 {
   NS_ENSURE_ARG_POINTER(aIsInitializedFromPrinter);
@@ -377,7 +288,6 @@ NS_IMETHODIMP nsPrintSettings::SetIsInitializedFromPrinter(bool aIsInitializedFr
   return NS_OK;
 }
 
-/* attribute boolean isInitializedFromPrefs; */
 NS_IMETHODIMP nsPrintSettings::GetIsInitializedFromPrefs(bool *aInitializedFromPrefs)
 {
   NS_ENSURE_ARG_POINTER(aInitializedFromPrefs);
@@ -390,20 +300,6 @@ NS_IMETHODIMP nsPrintSettings::SetIsInitializedFromPrefs(bool aInitializedFromPr
   return NS_OK;
 }
 
-/* attribute boolean persistMarginBoxSettings; */
-NS_IMETHODIMP nsPrintSettings::GetPersistMarginBoxSettings(bool *aPersistMarginBoxSettings)
-{
-  NS_ENSURE_ARG_POINTER(aPersistMarginBoxSettings);
-  *aPersistMarginBoxSettings = mPersistMarginBoxSettings;
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetPersistMarginBoxSettings(bool aPersistMarginBoxSettings)
-{
-  mPersistMarginBoxSettings = aPersistMarginBoxSettings;
-  return NS_OK;
-}
-
-/* attribute double marginTop; */
 NS_IMETHODIMP nsPrintSettings::GetMarginTop(double *aMarginTop)
 {
   NS_ENSURE_ARG_POINTER(aMarginTop);
@@ -416,7 +312,6 @@ NS_IMETHODIMP nsPrintSettings::SetMarginTop(double aMarginTop)
   return NS_OK;
 }
 
-/* attribute double marginLeft; */
 NS_IMETHODIMP nsPrintSettings::GetMarginLeft(double *aMarginLeft)
 {
   NS_ENSURE_ARG_POINTER(aMarginLeft);
@@ -429,7 +324,6 @@ NS_IMETHODIMP nsPrintSettings::SetMarginLeft(double aMarginLeft)
   return NS_OK;
 }
 
-/* attribute double marginBottom; */
 NS_IMETHODIMP nsPrintSettings::GetMarginBottom(double *aMarginBottom)
 {
   NS_ENSURE_ARG_POINTER(aMarginBottom);
@@ -442,7 +336,6 @@ NS_IMETHODIMP nsPrintSettings::SetMarginBottom(double aMarginBottom)
   return NS_OK;
 }
 
-/* attribute double marginRight; */
 NS_IMETHODIMP nsPrintSettings::GetMarginRight(double *aMarginRight)
 {
   NS_ENSURE_ARG_POINTER(aMarginRight);
@@ -455,7 +348,6 @@ NS_IMETHODIMP nsPrintSettings::SetMarginRight(double aMarginRight)
   return NS_OK;
 }
 
-/* attribute double edgeTop; */
 NS_IMETHODIMP nsPrintSettings::GetEdgeTop(double *aEdgeTop)
 {
   NS_ENSURE_ARG_POINTER(aEdgeTop);
@@ -468,7 +360,6 @@ NS_IMETHODIMP nsPrintSettings::SetEdgeTop(double aEdgeTop)
   return NS_OK;
 }
 
-/* attribute double edgeLeft; */
 NS_IMETHODIMP nsPrintSettings::GetEdgeLeft(double *aEdgeLeft)
 {
   NS_ENSURE_ARG_POINTER(aEdgeLeft);
@@ -481,7 +372,6 @@ NS_IMETHODIMP nsPrintSettings::SetEdgeLeft(double aEdgeLeft)
   return NS_OK;
 }
 
-/* attribute double edgeBottom; */
 NS_IMETHODIMP nsPrintSettings::GetEdgeBottom(double *aEdgeBottom)
 {
   NS_ENSURE_ARG_POINTER(aEdgeBottom);
@@ -494,7 +384,6 @@ NS_IMETHODIMP nsPrintSettings::SetEdgeBottom(double aEdgeBottom)
   return NS_OK;
 }
 
-/* attribute double edgeRight; */
 NS_IMETHODIMP nsPrintSettings::GetEdgeRight(double *aEdgeRight)
 {
   NS_ENSURE_ARG_POINTER(aEdgeRight);
@@ -507,7 +396,6 @@ NS_IMETHODIMP nsPrintSettings::SetEdgeRight(double aEdgeRight)
   return NS_OK;
 }
 
-/* attribute double unwriteableMarginTop; */
 NS_IMETHODIMP nsPrintSettings::GetUnwriteableMarginTop(double *aUnwriteableMarginTop)
 {
   NS_ENSURE_ARG_POINTER(aUnwriteableMarginTop);
@@ -522,7 +410,6 @@ NS_IMETHODIMP nsPrintSettings::SetUnwriteableMarginTop(double aUnwriteableMargin
   return NS_OK;
 }
 
-/* attribute double unwriteableMarginLeft; */
 NS_IMETHODIMP nsPrintSettings::GetUnwriteableMarginLeft(double *aUnwriteableMarginLeft)
 {
   NS_ENSURE_ARG_POINTER(aUnwriteableMarginLeft);
@@ -537,7 +424,6 @@ NS_IMETHODIMP nsPrintSettings::SetUnwriteableMarginLeft(double aUnwriteableMargi
   return NS_OK;
 }
 
-/* attribute double unwriteableMarginBottom; */
 NS_IMETHODIMP nsPrintSettings::GetUnwriteableMarginBottom(double *aUnwriteableMarginBottom)
 {
   NS_ENSURE_ARG_POINTER(aUnwriteableMarginBottom);
@@ -552,7 +438,6 @@ NS_IMETHODIMP nsPrintSettings::SetUnwriteableMarginBottom(double aUnwriteableMar
   return NS_OK;
 }
 
-/* attribute double unwriteableMarginRight; */
 NS_IMETHODIMP nsPrintSettings::GetUnwriteableMarginRight(double *aUnwriteableMarginRight)
 {
   NS_ENSURE_ARG_POINTER(aUnwriteableMarginRight);
@@ -567,7 +452,6 @@ NS_IMETHODIMP nsPrintSettings::SetUnwriteableMarginRight(double aUnwriteableMarg
   return NS_OK;
 }
 
-/* attribute double scaling; */
 NS_IMETHODIMP nsPrintSettings::GetScaling(double *aScaling)
 {
   NS_ENSURE_ARG_POINTER(aScaling);
@@ -581,7 +465,6 @@ NS_IMETHODIMP nsPrintSettings::SetScaling(double aScaling)
   return NS_OK;
 }
 
-/* attribute boolean printBGColors; */
 NS_IMETHODIMP nsPrintSettings::GetPrintBGColors(bool *aPrintBGColors)
 {
   NS_ENSURE_ARG_POINTER(aPrintBGColors);
@@ -594,7 +477,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintBGColors(bool aPrintBGColors)
   return NS_OK;
 }
 
-/* attribute boolean printBGImages; */
 NS_IMETHODIMP nsPrintSettings::GetPrintBGImages(bool *aPrintBGImages)
 {
   NS_ENSURE_ARG_POINTER(aPrintBGImages);
@@ -607,7 +489,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintBGImages(bool aPrintBGImages)
   return NS_OK;
 }
 
-/* attribute long printRange; */
 NS_IMETHODIMP nsPrintSettings::GetPrintRange(int16_t *aPrintRange)
 {
   NS_ENSURE_ARG_POINTER(aPrintRange);
@@ -620,7 +501,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintRange(int16_t aPrintRange)
   return NS_OK;
 }
 
-/* attribute wstring docTitle; */
 NS_IMETHODIMP nsPrintSettings::GetTitle(char16_t * *aTitle)
 {
   NS_ENSURE_ARG_POINTER(aTitle);
@@ -641,7 +521,6 @@ NS_IMETHODIMP nsPrintSettings::SetTitle(const char16_t * aTitle)
   return NS_OK;
 }
 
-/* attribute wstring docURL; */
 NS_IMETHODIMP nsPrintSettings::GetDocURL(char16_t * *aDocURL)
 {
   NS_ENSURE_ARG_POINTER(aDocURL);
@@ -692,7 +571,7 @@ nsPrintSettings::SetPrintOptions(int32_t aType, bool aTurnOnOff)
  *  See documentation in nsPrintSettingsImpl.h
  *	@update 1/12/01 rods
  */
-NS_IMETHODIMP 
+NS_IMETHODIMP
 nsPrintSettings::GetPrintOptionsBits(int32_t *aBits)
 {
   NS_ENSURE_ARG_POINTER(aBits);
@@ -700,7 +579,13 @@ nsPrintSettings::GetPrintOptionsBits(int32_t *aBits)
   return NS_OK;
 }
 
-/* attribute wstring docTitle; */
+NS_IMETHODIMP
+nsPrintSettings::SetPrintOptionsBits(int32_t aBits)
+{
+  mPrintOptions = aBits;
+  return NS_OK;
+}
+
 nsresult 
 nsPrintSettings::GetMarginStrs(char16_t * *aTitle, 
                               nsHeaderFooterEnum aType, 
@@ -746,7 +631,6 @@ nsPrintSettings::SetMarginStrs(const char16_t * aTitle,
   return NS_OK;
 }
 
-/* attribute wstring Header String Left */
 NS_IMETHODIMP nsPrintSettings::GetHeaderStrLeft(char16_t * *aTitle)
 {
   return GetMarginStrs(aTitle, eHeader, kJustLeft);
@@ -756,7 +640,6 @@ NS_IMETHODIMP nsPrintSettings::SetHeaderStrLeft(const char16_t * aTitle)
   return SetMarginStrs(aTitle, eHeader, kJustLeft);
 }
 
-/* attribute wstring Header String Center */
 NS_IMETHODIMP nsPrintSettings::GetHeaderStrCenter(char16_t * *aTitle)
 {
   return GetMarginStrs(aTitle, eHeader, kJustCenter);
@@ -766,7 +649,6 @@ NS_IMETHODIMP nsPrintSettings::SetHeaderStrCenter(const char16_t * aTitle)
   return SetMarginStrs(aTitle, eHeader, kJustCenter);
 }
 
-/* attribute wstring Header String Right */
 NS_IMETHODIMP nsPrintSettings::GetHeaderStrRight(char16_t * *aTitle)
 {
   return GetMarginStrs(aTitle, eHeader, kJustRight);
@@ -776,8 +658,6 @@ NS_IMETHODIMP nsPrintSettings::SetHeaderStrRight(const char16_t * aTitle)
   return SetMarginStrs(aTitle, eHeader, kJustRight);
 }
 
-
-/* attribute wstring Footer String Left */
 NS_IMETHODIMP nsPrintSettings::GetFooterStrLeft(char16_t * *aTitle)
 {
   return GetMarginStrs(aTitle, eFooter, kJustLeft);
@@ -787,7 +667,6 @@ NS_IMETHODIMP nsPrintSettings::SetFooterStrLeft(const char16_t * aTitle)
   return SetMarginStrs(aTitle, eFooter, kJustLeft);
 }
 
-/* attribute wstring Footer String Center */
 NS_IMETHODIMP nsPrintSettings::GetFooterStrCenter(char16_t * *aTitle)
 {
   return GetMarginStrs(aTitle, eFooter, kJustCenter);
@@ -797,7 +676,6 @@ NS_IMETHODIMP nsPrintSettings::SetFooterStrCenter(const char16_t * aTitle)
   return SetMarginStrs(aTitle, eFooter, kJustCenter);
 }
 
-/* attribute wstring Footer String Right */
 NS_IMETHODIMP nsPrintSettings::GetFooterStrRight(char16_t * *aTitle)
 {
   return GetMarginStrs(aTitle, eFooter, kJustRight);
@@ -807,7 +685,6 @@ NS_IMETHODIMP nsPrintSettings::SetFooterStrRight(const char16_t * aTitle)
   return SetMarginStrs(aTitle, eFooter, kJustRight);
 }
 
-/* attribute short printFrameTypeUsage; */
 NS_IMETHODIMP nsPrintSettings::GetPrintFrameTypeUsage(int16_t *aPrintFrameTypeUsage)
 {
   NS_ENSURE_ARG_POINTER(aPrintFrameTypeUsage);
@@ -820,7 +697,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintFrameTypeUsage(int16_t aPrintFrameTypeUsa
   return NS_OK;
 }
 
-/* attribute long printFrameType; */
 NS_IMETHODIMP nsPrintSettings::GetPrintFrameType(int16_t *aPrintFrameType)
 {
   NS_ENSURE_ARG_POINTER(aPrintFrameType);
@@ -833,7 +709,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintFrameType(int16_t aPrintFrameType)
   return NS_OK;
 }
 
-/* attribute boolean printSilent; */
 NS_IMETHODIMP nsPrintSettings::GetPrintSilent(bool *aPrintSilent)
 {
   NS_ENSURE_ARG_POINTER(aPrintSilent);
@@ -846,7 +721,6 @@ NS_IMETHODIMP nsPrintSettings::SetPrintSilent(bool aPrintSilent)
   return NS_OK;
 }
 
-/* attribute boolean shrinkToFit; */
 NS_IMETHODIMP nsPrintSettings::GetShrinkToFit(bool *aShrinkToFit)
 {
   NS_ENSURE_ARG_POINTER(aShrinkToFit);
@@ -859,7 +733,6 @@ NS_IMETHODIMP nsPrintSettings::SetShrinkToFit(bool aShrinkToFit)
   return NS_OK;
 }
 
-/* attribute boolean showPrintProgress; */
 NS_IMETHODIMP nsPrintSettings::GetShowPrintProgress(bool *aShowPrintProgress)
 {
   NS_ENSURE_ARG_POINTER(aShowPrintProgress);
@@ -872,7 +745,6 @@ NS_IMETHODIMP nsPrintSettings::SetShowPrintProgress(bool aShowPrintProgress)
   return NS_OK;
 }
 
-/* attribute wstring paperName; */
 NS_IMETHODIMP nsPrintSettings::GetPaperName(char16_t * *aPaperName)
 {
   NS_ENSURE_ARG_POINTER(aPaperName);
@@ -893,28 +765,6 @@ NS_IMETHODIMP nsPrintSettings::SetPaperName(const char16_t * aPaperName)
   return NS_OK;
 }
 
-/* attribute wstring plexName; */
-NS_IMETHODIMP nsPrintSettings::GetPlexName(char16_t * *aPlexName)
-{
-  NS_ENSURE_ARG_POINTER(aPlexName);
-  if (!mPlexName.IsEmpty()) {
-    *aPlexName = ToNewUnicode(mPlexName);
-  } else {
-    *aPlexName = nullptr;
-  }
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetPlexName(const char16_t * aPlexName)
-{
-  if (aPlexName) {
-    mPlexName = aPlexName;
-  } else {
-    mPlexName.SetLength(0);
-  }
-  return NS_OK;
-}
-
-/* attribute boolean howToEnableFrameUI; */
 NS_IMETHODIMP nsPrintSettings::GetHowToEnableFrameUI(int16_t *aHowToEnableFrameUI)
 {
   NS_ENSURE_ARG_POINTER(aHowToEnableFrameUI);
@@ -927,7 +777,6 @@ NS_IMETHODIMP nsPrintSettings::SetHowToEnableFrameUI(int16_t aHowToEnableFrameUI
   return NS_OK;
 }
 
-/* attribute long isCancelled; */
 NS_IMETHODIMP nsPrintSettings::GetIsCancelled(bool *aIsCancelled)
 {
   NS_ENSURE_ARG_POINTER(aIsCancelled);
@@ -940,7 +789,6 @@ NS_IMETHODIMP nsPrintSettings::SetIsCancelled(bool aIsCancelled)
   return NS_OK;
 }
 
-/* attribute double paperWidth; */
 NS_IMETHODIMP nsPrintSettings::GetPaperWidth(double *aPaperWidth)
 {
   NS_ENSURE_ARG_POINTER(aPaperWidth);
@@ -953,7 +801,6 @@ NS_IMETHODIMP nsPrintSettings::SetPaperWidth(double aPaperWidth)
   return NS_OK;
 }
 
-/* attribute double paperHeight; */
 NS_IMETHODIMP nsPrintSettings::GetPaperHeight(double *aPaperHeight)
 {
   NS_ENSURE_ARG_POINTER(aPaperHeight);
@@ -966,7 +813,6 @@ NS_IMETHODIMP nsPrintSettings::SetPaperHeight(double aPaperHeight)
   return NS_OK;
 }
 
-/* attribute short PaperSizeUnit; */
 NS_IMETHODIMP nsPrintSettings::GetPaperSizeUnit(int16_t *aPaperSizeUnit)
 {
   NS_ENSURE_ARG_POINTER(aPaperSizeUnit);
@@ -979,20 +825,6 @@ NS_IMETHODIMP nsPrintSettings::SetPaperSizeUnit(int16_t aPaperSizeUnit)
   return NS_OK;
 }
 
-/* attribute short PaperSizeType; */
-NS_IMETHODIMP nsPrintSettings::GetPaperSizeType(int16_t *aPaperSizeType)
-{
-  NS_ENSURE_ARG_POINTER(aPaperSizeType);
-  *aPaperSizeType = mPaperSizeType;
-  return NS_OK;
-}
-NS_IMETHODIMP nsPrintSettings::SetPaperSizeType(int16_t aPaperSizeType)
-{
-  mPaperSizeType = aPaperSizeType;
-  return NS_OK;
-}
-
-/* attribute short PaperData; */
 NS_IMETHODIMP nsPrintSettings::GetPaperData(int16_t *aPaperData)
 {
   NS_ENSURE_ARG_POINTER(aPaperData);
@@ -1110,11 +942,11 @@ nsPrintSettings::GetPageRanges(nsTArray<int32_t> &aPages)
 nsresult 
 nsPrintSettings::_Clone(nsIPrintSettings **_retval)
 {
-  nsPrintSettings* printSettings = new nsPrintSettings(*this);
-  return printSettings->QueryInterface(NS_GET_IID(nsIPrintSettings), (void**)_retval); // ref counts
+  RefPtr<nsPrintSettings> printSettings = new nsPrintSettings(*this);
+  printSettings.forget(_retval);
+  return NS_OK;
 }
 
-/* nsIPrintSettings clone (); */
 NS_IMETHODIMP 
 nsPrintSettings::Clone(nsIPrintSettings **_retval)
 {
@@ -1122,7 +954,6 @@ nsPrintSettings::Clone(nsIPrintSettings **_retval)
   return _Clone(_retval);
 }
 
-/* void assign (in nsIPrintSettings aPS); */
 nsresult 
 nsPrintSettings::_Assign(nsIPrintSettings *aPS)
 {
@@ -1131,7 +962,6 @@ nsPrintSettings::_Assign(nsIPrintSettings *aPS)
   return NS_OK;
 }
 
-/* void assign (in nsIPrintSettings aPS); */
 NS_IMETHODIMP 
 nsPrintSettings::Assign(nsIPrintSettings *aPS)
 {
@@ -1165,8 +995,6 @@ nsPrintSettings& nsPrintSettings::operator=(const nsPrintSettings& rhs)
   mShrinkToFit         = rhs.mShrinkToFit;
   mShowPrintProgress   = rhs.mShowPrintProgress;
   mPaperName           = rhs.mPaperName;
-  mPlexName            = rhs.mPlexName;
-  mPaperSizeType       = rhs.mPaperSizeType;
   mPaperData           = rhs.mPaperData;
   mPaperWidth          = rhs.mPaperWidth;
   mPaperHeight         = rhs.mPaperHeight;
@@ -1174,7 +1002,6 @@ nsPrintSettings& nsPrintSettings::operator=(const nsPrintSettings& rhs)
   mPrintReversed       = rhs.mPrintReversed;
   mPrintInColor        = rhs.mPrintInColor;
   mOrientation         = rhs.mOrientation;
-  mPrintCommand        = rhs.mPrintCommand;
   mNumCopies           = rhs.mNumCopies;
   mPrinter             = rhs.mPrinter;
   mPrintToFile         = rhs.mPrintToFile;

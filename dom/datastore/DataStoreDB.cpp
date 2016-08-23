@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,20 +9,21 @@
 #include "DataStoreCallbacks.h"
 #include "jsapi.h"
 #include "mozilla/dom/IDBDatabaseBinding.h"
+#include "mozilla/dom/IDBDatabase.h"
+#include "mozilla/dom/IDBEvents.h"
+#include "mozilla/dom/IDBFactory.h"
 #include "mozilla/dom/IDBFactoryBinding.h"
+#include "mozilla/dom/IDBIndex.h"
+#include "mozilla/dom/IDBObjectStore.h"
 #include "mozilla/dom/IDBObjectStoreBinding.h"
-#include "mozilla/dom/indexedDB/IDBDatabase.h"
-#include "mozilla/dom/indexedDB/IDBEvents.h"
-#include "mozilla/dom/indexedDB/IDBFactory.h"
-#include "mozilla/dom/indexedDB/IDBIndex.h"
-#include "mozilla/dom/indexedDB/IDBObjectStore.h"
-#include "mozilla/dom/indexedDB/IDBRequest.h"
-#include "mozilla/dom/indexedDB/IDBTransaction.h"
+#include "mozilla/dom/IDBRequest.h"
+#include "mozilla/dom/IDBTransaction.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsIDOMEvent.h"
 #include "nsIPrincipal.h"
 #include "nsIXPConnect.h"
+#include "nsNullPrincipal.h"
 
 #define DATASTOREDB_VERSION        1
 #define DATASTOREDB_NAME           "DataStoreDB"
@@ -33,7 +34,7 @@ using namespace mozilla::dom::indexedDB;
 namespace mozilla {
 namespace dom {
 
-class VersionChangeListener MOZ_FINAL : public nsIDOMEventListener
+class VersionChangeListener final : public nsIDOMEventListener
 {
 public:
   NS_DECL_ISUPPORTS
@@ -43,7 +44,7 @@ public:
   {}
 
   // nsIDOMEventListener
-  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) MOZ_OVERRIDE
+  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) override
   {
     nsString type;
     nsresult rv = aEvent->GetType(type);
@@ -103,26 +104,21 @@ DataStoreDB::CreateFactoryIfNeeded()
 {
   if (!mFactory) {
     nsresult rv;
-    nsCOMPtr<nsIPrincipal> principal =
-      do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
+    nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::Create();
+    if (!principal) {
+      return NS_ERROR_FAILURE;
     }
 
     nsIXPConnect* xpc = nsContentUtils::XPConnect();
     MOZ_ASSERT(xpc);
 
-    AutoSafeJSContext cx;
-
-    nsCOMPtr<nsIXPConnectJSObjectHolder> globalHolder;
-    rv = xpc->CreateSandbox(cx, principal, getter_AddRefs(globalHolder));
+    AutoJSAPI jsapi;
+    jsapi.Init();
+    JSContext* cx = jsapi.cx();
+    JS::Rooted<JSObject*> global(cx);
+    rv = xpc->CreateSandbox(cx, principal, global.address());
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
-    }
-
-    JS::Rooted<JSObject*> global(cx, globalHolder->GetJSObject());
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return NS_ERROR_UNEXPECTED;
     }
 
     // The CreateSandbox call returns a proxy to the actual sandbox object. We
@@ -151,10 +147,15 @@ DataStoreDB::Open(IDBTransactionMode aMode, const Sequence<nsString>& aDbs,
     return rv;
   }
 
+  // We only need a JSContext here to get a stack from, so just init our
+  // AutoJSAPI without a global.
+  AutoJSAPI jsapi;
+  jsapi.Init();
   ErrorResult error;
-  mRequest = mFactory->Open(mDatabaseName, DATASTOREDB_VERSION, error);
+  mRequest = mFactory->Open(jsapi.cx(), mDatabaseName, DATASTOREDB_VERSION,
+                            error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   rv = AddEventListeners();
@@ -228,13 +229,11 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
   MOZ_ASSERT(version.Value() == DATASTOREDB_VERSION);
 #endif
 
-  AutoSafeJSContext cx;
-
   ErrorResult error;
-  JS::Rooted<JS::Value> result(cx);
+  JS::Rooted<JS::Value> result(nsContentUtils::RootingCx());
   mRequest->GetResult(&result, error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   MOZ_ASSERT(result.isObject());
@@ -249,15 +248,15 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
   {
     IDBObjectStoreParameters params;
     params.Init(NS_LITERAL_STRING("{ \"autoIncrement\": true }"));
-    nsRefPtr<IDBObjectStore> store =
+    RefPtr<IDBObjectStore> store =
       database->CreateObjectStore(NS_LITERAL_STRING(DATASTOREDB_NAME),
                                   params, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
   }
 
-  nsRefPtr<IDBObjectStore> store;
+  RefPtr<IDBObjectStore> store;
 
   {
     IDBObjectStoreParameters params;
@@ -267,18 +266,18 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
       database->CreateObjectStore(NS_LITERAL_STRING(DATASTOREDB_REVISION),
                                   params, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
   }
 
   {
     IDBIndexParameters params;
     params.Init(NS_LITERAL_STRING("{ \"unique\": true }"));
-    nsRefPtr<IDBIndex> index =
+    RefPtr<IDBIndex> index =
       store->CreateIndex(NS_LITERAL_STRING(DATASTOREDB_REVISION_INDEX),
                          NS_LITERAL_STRING("revisionId"), params, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
   }
 
@@ -290,13 +289,11 @@ DataStoreDB::DatabaseOpened()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  AutoSafeJSContext cx;
-
   ErrorResult error;
-  JS::Rooted<JS::Value> result(cx);
+  JS::Rooted<JS::Value> result(nsContentUtils::RootingCx());
   mRequest->GetResult(&result, error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   MOZ_ASSERT(result.isObject());
@@ -307,7 +304,7 @@ DataStoreDB::DatabaseOpened()
     return rv;
   }
 
-  nsRefPtr<VersionChangeListener> listener =
+  RefPtr<VersionChangeListener> listener =
     new VersionChangeListener(mDatabase);
   rv = mDatabase->EventTarget::AddEventListener(
     NS_LITERAL_STRING("versionchange"), listener, false);
@@ -315,11 +312,24 @@ DataStoreDB::DatabaseOpened()
     return rv;
   }
 
-  nsRefPtr<IDBTransaction> txn = mDatabase->Transaction(mObjectStores,
-                                                        mTransactionMode,
-                                                        error);
+  StringOrStringSequence objectStores;
+  if (!objectStores.RawSetAsStringSequence().AppendElements(mObjectStores,
+                                                            fallible)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  // We init with the global of our result, just for consistency.
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(&result.toObject())) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  RefPtr<IDBTransaction> txn;
+  error = mDatabase->Transaction(jsapi.cx(),
+                                 objectStores,
+                                 mTransactionMode,
+                                 getter_AddRefs(txn));
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   mTransaction = txn.forget();
@@ -343,17 +353,22 @@ DataStoreDB::Delete()
     mDatabase = nullptr;
   }
 
+  // We only need a JSContext here to get a stack from, so just init our
+  // AutoJSAPI without a global.
+  AutoJSAPI jsapi;
+  jsapi.Init();
   ErrorResult error;
-  nsRefPtr<IDBOpenDBRequest> request =
-    mFactory->DeleteDatabase(mDatabaseName, IDBOpenDBOptions(), error);
+  RefPtr<IDBOpenDBRequest> request =
+    mFactory->DeleteDatabase(jsapi.cx(), mDatabaseName, IDBOpenDBOptions(),
+                             error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   return NS_OK;
 }
 
-indexedDB::IDBTransaction*
+IDBTransaction*
 DataStoreDB::Transaction() const
 {
   MOZ_ASSERT(mTransaction);

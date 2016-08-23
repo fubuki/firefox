@@ -80,7 +80,7 @@ var testData = [
   }];
 // sets of indices of testData array by transition type
 var testDataTyped = [0, 5, 7, 9];
-var testDataDownload = [1, 2, 4, 6, 10]; 
+var testDataDownload = [1, 2, 4, 6, 10];
 var testDataBookmark = [3, 8, 11];
 
 /**
@@ -93,11 +93,11 @@ function run_test()
   run_next_test();
 }
 
-add_task(function test_transitions()
+add_task(function* test_transitions()
 {
   let timeNow = Date.now();
-  for each (let item in testData) {
-    yield promiseAddVisits({
+  for (let item of testData) {
+    yield PlacesTestUtils.addVisits({
       uri: uri(item.uri),
       transition: item.transType,
       visitDate: timeNow++ * 1000,
@@ -150,7 +150,7 @@ add_task(function test_transitions()
   var root = result.root;
   root.containerOpen = true;
   do_check_eq(testDataDownload.length, root.childCount);
-  yield promiseAddVisits({
+  yield PlacesTestUtils.addVisits({
     uri: uri("http://getfirefox.com"),
     transition: TRANSITION_DOWNLOAD
   });

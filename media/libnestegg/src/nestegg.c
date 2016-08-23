@@ -1117,25 +1117,6 @@ ne_parse(nestegg * ctx, struct ebml_element_desc * top_level, int64_t max_offset
   return r;
 }
 
-static uint64_t
-ne_xiph_lace_value(unsigned char ** np)
-{
-  uint64_t lace;
-  uint64_t value;
-  unsigned char * p = *np;
-
-  lace = *p++;
-  value = lace;
-  while (lace == 255) {
-    lace = *p++;
-    value += lace;
-  }
-
-  *np = p;
-
-  return value;
-}
-
 static int
 ne_read_xiph_lace_value(nestegg_io * io, uint64_t * value, size_t * consumed)
 {
@@ -1450,6 +1431,9 @@ ne_read_block_duration(nestegg * ctx, nestegg_packet * pkt)
   struct ebml_element_desc * element;
   struct ebml_type * storage;
 
+  if (!ctx->ancestor)
+    return -1;
+
   r = ne_peek_element(ctx, &id, &size);
   if (r != 1)
     return r;
@@ -1478,6 +1462,9 @@ ne_read_discard_padding(nestegg * ctx, nestegg_packet * pkt)
   uint64_t id, size;
   struct ebml_element_desc * element;
   struct ebml_type * storage;
+
+  if (!ctx->ancestor)
+    return -1;
 
   r = ne_peek_element(ctx, &id, &size);
   if (r != 1)
@@ -1513,6 +1500,9 @@ ne_read_block_additions(nestegg * ctx, nestegg_packet * pkt)
 
   assert(pkt != NULL);
   assert(pkt->block_additional == NULL);
+
+  if (!ctx->ancestor)
+    return -1;
 
   r = ne_peek_element(ctx, &id, &size);
   if (r != 1)
@@ -1577,9 +1567,11 @@ ne_read_block_additions(nestegg * ctx, nestegg_packet * pkt)
 
         has_data = 1;
         data_size = size;
-        if (size != 0) {
-          data = ne_alloc(size);
-          r = ne_io_read(ctx->io, data, size);
+        if (data_size != 0 && data_size < LIMIT_FRAME) {
+          data = ne_alloc(data_size);
+          if (!data)
+            return -1;
+          r = ne_io_read(ctx->io, data, data_size);
           if (r != 1) {
             free(data);
             return r;
@@ -2161,6 +2153,8 @@ nestegg_track_seek(nestegg * ctx, unsigned int track, uint64_t tstamp)
 
   /* Seek and set up parser state for segment-level element (Cluster). */
   r = nestegg_offset_seek(ctx, ctx->segment_offset + seek_pos);
+  if (r != 0)
+    return -1;
 
   if (!ne_is_suspend_element(ctx->last_id))
     return -1;
@@ -2187,7 +2181,7 @@ nestegg_track_type(nestegg * ctx, unsigned int track)
   if (type & TRACK_TYPE_AUDIO)
     return NESTEGG_TRACK_AUDIO;
 
-  return -1;
+  return NESTEGG_TRACK_UNKNOWN;
 }
 
 int
@@ -2215,7 +2209,7 @@ nestegg_track_codec_id(nestegg * ctx, unsigned int track)
   if (strcmp(codec_id, TRACK_ID_OPUS) == 0)
     return NESTEGG_CODEC_OPUS;
 
-  return -1;
+  return NESTEGG_CODEC_UNKNOWN;
 }
 
 int
@@ -2224,6 +2218,7 @@ nestegg_track_codec_data_count(nestegg * ctx, unsigned int track,
 {
   struct track_entry * entry;
   struct ebml_binary codec_private;
+  int codec_id;
   unsigned char * p;
 
   *count = 0;
@@ -2232,7 +2227,14 @@ nestegg_track_codec_data_count(nestegg * ctx, unsigned int track,
   if (!entry)
     return -1;
 
-  if (nestegg_track_codec_id(ctx, track) != NESTEGG_CODEC_VORBIS)
+  codec_id = nestegg_track_codec_id(ctx, track);
+
+  if (codec_id == NESTEGG_CODEC_OPUS) {
+    *count = 1;
+    return 0;
+  }
+
+  if (codec_id != NESTEGG_CODEC_VORBIS)
     return -1;
 
   if (ne_get_binary(entry->codec_private, &codec_private) != 0)
@@ -2256,12 +2258,13 @@ nestegg_track_codec_data(nestegg * ctx, unsigned int track, unsigned int item,
 {
   struct track_entry * entry;
   struct ebml_binary codec_private;
-  uint64_t sizes[3], total;
+  uint64_t sizes[3], size, total, avail;
   unsigned char * p;
   unsigned int count, i;
 
   *data = NULL;
   *length = 0;
+  count = 1;
 
   entry = ne_find_track_entry(ctx, track);
   if (!entry)
@@ -2276,28 +2279,42 @@ nestegg_track_codec_data(nestegg * ctx, unsigned int track, unsigned int item,
 
   if (nestegg_track_codec_id(ctx, track) == NESTEGG_CODEC_VORBIS) {
     p = codec_private.data;
-    count = *p++ + 1;
-
-    if (count > 3)
+    avail = codec_private.length;
+    if (avail < 1)
       return -1;
 
-    i = 0;
+    count = *p++ + 1;
+    avail -= 1;
+
+    if (count > 3 || item >= count)
+      return -1;
+
     total = 0;
-    while (--count) {
-      sizes[i] = ne_xiph_lace_value(&p);
-      total += sizes[i];
-      i += 1;
+    for (i = 0; i < count - 1; ++i) {
+      size = 0;
+      do {
+        if (avail - total <= size) {
+          return -1;
+        }
+        size += *p;
+        avail -= 1;
+      } while (*p++ == 255);
+      if (avail - total < size)
+        return -1;
+      sizes[i] = size;
+      total += size;
     }
-    sizes[i] = codec_private.length - total - (p - codec_private.data);
+    sizes[i] = avail - total;
 
     for (i = 0; i < item; ++i) {
-      if (sizes[i] > LIMIT_FRAME)
-        return -1;
       p += sizes[i];
     }
     *data = p;
     *length = sizes[item];
   } else {
+    if (item >= count)
+      return -1;
+
     *data = codec_private.data;
     *length = codec_private.length;
   }
@@ -2470,7 +2487,7 @@ nestegg_read_packet(nestegg * ctx, nestegg_packet ** pkt)
       return read_block;
     }
 
-    r =  ne_parse(ctx, NULL, -1);
+    r = ne_parse(ctx, NULL, -1);
     if (r != 1)
       return r;
   }

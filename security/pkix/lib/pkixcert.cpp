@@ -22,7 +22,6 @@
  * limitations under the License.
  */
 
-#include "pkix/bind.h"
 #include "pkixutil.h"
 
 namespace mozilla { namespace pkix {
@@ -80,11 +79,7 @@ BackCert::Init()
   if (rv != Success) {
     return rv;
   }
-  // XXX: Ignored. What are we supposed to check? This seems totally redundant
-  // with Certificate.signatureAlgorithm. Is it important to check that they
-  // are consistent with each other? It doesn't seem to matter!
-  SignatureAlgorithm signature;
-  rv = der::SignatureAlgorithmIdentifier(tbsCertificate, signature);
+  rv = der::ExpectTagAndGetValue(tbsCertificate, der::SEQUENCE, signature);
   if (rv != Success) {
     return rv;
   }
@@ -104,13 +99,6 @@ BackCert::Init()
   if (rv != Success) {
     return rv;
   }
-  // TODO(bug XXXXXXX): We defer parsing/validating subjectPublicKeyInfo to
-  // the point where the public key is needed. For end-entity certificates, we
-  // assume that the caller will extract the public key and use it somehow; if
-  // they don't do that then we'll never know whether the key is invalid. On
-  // the other hand, if the caller never uses the key then in some ways it
-  // doesn't matter. Regardless, we should parse and validate
-  // subjectPublicKeyKeyInfo internally.
   rv = der::ExpectTagAndGetTLV(tbsCertificate, der::SEQUENCE,
                                subjectPublicKeyInfo);
   if (rv != Success) {
@@ -140,9 +128,12 @@ BackCert::Init()
     }
   }
 
-  rv = der::OptionalExtensions(tbsCertificate, CSC | 3,
-                               bind(&BackCert::RememberExtension, *this, _1,
-                                    _2, _3, _4));
+  rv = der::OptionalExtensions(
+         tbsCertificate, CSC | 3,
+         [this](Reader& extnID, const Input& extnValue, bool critical,
+                /*out*/ bool& understood) {
+           return RememberExtension(extnID, extnValue, critical, understood);
+         });
   if (rv != Success) {
     return rv;
   }
@@ -178,10 +169,8 @@ BackCert::Init()
   return der::End(tbsCertificate);
 }
 
-// XXX: The second value is of type |const Input&| instead of type |Input| due
-// to limitations in our std::bind polyfill.
 Result
-BackCert::RememberExtension(Reader& extnID, const Input& extnValue,
+BackCert::RememberExtension(Reader& extnID, Input extnValue,
                             bool critical, /*out*/ bool& understood)
 {
   understood = false;
@@ -230,6 +219,10 @@ BackCert::RememberExtension(Reader& extnID, const Input& extnValue,
   static const uint8_t Netscape_certificate_type[] = {
     0x60, 0x86, 0x48, 0x01, 0x86, 0xf8, 0x42, 0x01, 0x01
   };
+  // python DottedOIDToCode.py id-pe-tlsfeature 1.3.6.1.5.5.7.1.24
+  static const uint8_t id_pe_tlsfeature[] = {
+    0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x18
+  };
 
   Input* out = nullptr;
 
@@ -274,6 +267,8 @@ BackCert::RememberExtension(Reader& extnID, const Input& extnValue,
     out = &inhibitAnyPolicy;
   } else if (extnID.MatchRest(id_pe_authorityInfoAccess)) {
     out = &authorityInfoAccess;
+  } else if (extnID.MatchRest(id_pe_tlsfeature)) {
+    out = &requiredTLSFeatures;
   } else if (extnID.MatchRest(id_pkix_ocsp_nocheck) && critical) {
     // We need to make sure we don't reject delegated OCSP response signing
     // certificates that contain the id-pkix-ocsp-nocheck extension marked as

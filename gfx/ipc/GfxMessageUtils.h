@@ -7,25 +7,25 @@
 #ifndef __GFXMESSAGEUTILS_H__
 #define __GFXMESSAGEUTILS_H__
 
+#include "FilterSupport.h"
+#include "FrameMetrics.h"
+#include "ImageTypes.h"
+#include "RegionBuilder.h"
 #include "base/process_util.h"
 #include "chrome/common/ipc_message_utils.h"
-#include "ipc/IPCMessageUtils.h"
-
-#include <stdint.h>
-
-#include "gfxColor.h"
-#include "mozilla/gfx/Matrix.h"
-#include "GraphicsFilter.h"
 #include "gfxPoint.h"
 #include "gfxRect.h"
+#include "gfxTypes.h"
+#include "ipc/IPCMessageUtils.h"
+#include "mozilla/gfx/Matrix.h"
+#include "mozilla/layers/AsyncDragMetrics.h"
+#include "mozilla/layers/CompositorTypes.h"
+#include "mozilla/layers/GeckoContentController.h"
+#include "mozilla/layers/LayersTypes.h"
 #include "nsRect.h"
 #include "nsRegion.h"
-#include "gfxTypes.h"
-#include "mozilla/layers/LayersTypes.h"
-#include "mozilla/layers/CompositorTypes.h"
-#include "FrameMetrics.h"
-#include "FilterSupport.h"
-#include "mozilla/layers/GeckoContentController.h"
+
+#include <stdint.h>
 
 #ifdef _MSC_VER
 #pragma warning( disable : 4800 )
@@ -34,13 +34,6 @@
 namespace mozilla {
 
 typedef gfxImageFormat PixelFormat;
-#if defined(MOZ_HAVE_CXX11_STRONG_ENUMS)
-typedef ::GraphicsFilter GraphicsFilterType;
-#else
-// If we don't have support for enum classes, then we need to use the actual
-// enum type here instead of the simulated enum class.
-typedef GraphicsFilter::Enum GraphicsFilterType;
-#endif
 
 } // namespace mozilla
 
@@ -198,7 +191,7 @@ struct ParamTraits<gfxRect>
 
 template <>
 struct ParamTraits<gfxContentType>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              gfxContentType,
              gfxContentType::COLOR,
              gfxContentType::SENTINEL>
@@ -206,23 +199,23 @@ struct ParamTraits<gfxContentType>
 
 template <>
 struct ParamTraits<gfxSurfaceType>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              gfxSurfaceType,
              gfxSurfaceType::Image,
              gfxSurfaceType::Max>
 {};
 
 template <>
-struct ParamTraits<mozilla::GraphicsFilterType>
+struct ParamTraits<mozilla::gfx::Filter>
   : public ContiguousEnumSerializer<
-             mozilla::GraphicsFilterType,
-             GraphicsFilter::FILTER_FAST,
-             GraphicsFilter::FILTER_SENTINEL>
+             mozilla::gfx::Filter,
+             mozilla::gfx::Filter::GOOD,
+             mozilla::gfx::Filter::SENTINEL>
 {};
 
 template <>
 struct ParamTraits<mozilla::layers::LayersBackend>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::layers::LayersBackend,
              mozilla::layers::LayersBackend::LAYERS_NONE,
              mozilla::layers::LayersBackend::LAYERS_LAST>
@@ -230,18 +223,10 @@ struct ParamTraits<mozilla::layers::LayersBackend>
 
 template <>
 struct ParamTraits<mozilla::layers::ScaleMode>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::layers::ScaleMode,
              mozilla::layers::ScaleMode::SCALE_NONE,
              mozilla::layers::ScaleMode::SENTINEL>
-{};
-
-template <>
-struct ParamTraits<gfxImageFormat>
-  : public ContiguousTypedEnumSerializer<
-             gfxImageFormat,
-             gfxImageFormat::ARGB32,
-             gfxImageFormat::Unknown>
 {};
 
 template <>
@@ -254,7 +239,7 @@ struct ParamTraits<mozilla::gfx::AttributeName>
 
 template <>
 struct ParamTraits<mozilla::gfx::AttributeType>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::gfx::AttributeType,
              mozilla::gfx::AttributeType::eBool,
              mozilla::gfx::AttributeType::Max>
@@ -262,7 +247,7 @@ struct ParamTraits<mozilla::gfx::AttributeType>
 
 template <>
 struct ParamTraits<mozilla::gfx::PrimitiveType>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::gfx::PrimitiveType,
              mozilla::gfx::PrimitiveType::Empty,
              mozilla::gfx::PrimitiveType::Max>
@@ -270,7 +255,7 @@ struct ParamTraits<mozilla::gfx::PrimitiveType>
 
 template <>
 struct ParamTraits<mozilla::gfx::ColorSpace>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::gfx::ColorSpace,
              mozilla::gfx::ColorSpace::SRGB,
              mozilla::gfx::ColorSpace::Max>
@@ -278,29 +263,14 @@ struct ParamTraits<mozilla::gfx::ColorSpace>
 
 template <>
 struct ParamTraits<mozilla::layers::TextureFlags>
-  : public BitFlagsTypedEnumSerializer<
+  : public BitFlagsEnumSerializer<
             mozilla::layers::TextureFlags,
             mozilla::layers::TextureFlags::ALL_BITS>
 {};
 
 template <>
-struct ParamTraits<mozilla::layers::TextureIdentifier>
-  : public ContiguousTypedEnumSerializer<
-             mozilla::layers::TextureIdentifier,
-             mozilla::layers::TextureIdentifier::Front,
-             mozilla::layers::TextureIdentifier::HighBound>
-{};
-
-template <>
-struct ParamTraits<mozilla::layers::DeprecatedTextureHostFlags>
-  : public BitFlagsTypedEnumSerializer<
-             mozilla::layers::DeprecatedTextureHostFlags,
-             mozilla::layers::DeprecatedTextureHostFlags::ALL_BITS>
-{};
-
-template <>
 struct ParamTraits<mozilla::layers::DiagnosticTypes>
-  : public BitFlagsTypedEnumSerializer<
+  : public BitFlagsEnumSerializer<
              mozilla::layers::DiagnosticTypes,
              mozilla::layers::DiagnosticTypes::ALL_BITS>
 {};
@@ -309,32 +279,10 @@ struct ParamTraits<mozilla::layers::DiagnosticTypes>
 template <>
 struct ParamTraits<mozilla::PixelFormat>
   : public EnumSerializer<mozilla::PixelFormat,
-                          gfxImageFormat::ARGB32,
-                          gfxImageFormat::Unknown>
+                          SurfaceFormat::A8R8G8B8_UINT32,
+                          SurfaceFormat::UNKNOWN>
 {};
 */
-
-template<>
-struct ParamTraits<gfxRGBA>
-{
-  typedef gfxRGBA paramType;
-
-  static void Write(Message* msg, const paramType& param)
-  {
-    WriteParam(msg, param.r);
-    WriteParam(msg, param.g);
-    WriteParam(msg, param.b);
-    WriteParam(msg, param.a);
-  }
-
-  static bool Read(const Message* msg, void** iter, paramType* result)
-  {
-    return (ReadParam(msg, iter, &result->r) &&
-            ReadParam(msg, iter, &result->g) &&
-            ReadParam(msg, iter, &result->b) &&
-            ReadParam(msg, iter, &result->a));
-  }
-};
 
 template<>
 struct ParamTraits<mozilla::gfx::Color>
@@ -412,28 +360,6 @@ struct ParamTraits<mozilla::gfx::IntSizeTyped<T> >
   }
 };
 
-template<>
-struct ParamTraits<nsIntRect>
-{
-  typedef nsIntRect paramType;
-
-  static void Write(Message* msg, const paramType& param)
-  {
-    WriteParam(msg, param.x);
-    WriteParam(msg, param.y);
-    WriteParam(msg, param.width);
-    WriteParam(msg, param.height);
-  }
-
-  static bool Read(const Message* msg, void** iter, paramType* result)
-  {
-    return (ReadParam(msg, iter, &result->x) &&
-            ReadParam(msg, iter, &result->y) &&
-            ReadParam(msg, iter, &result->width) &&
-            ReadParam(msg, iter, &result->height));
-  }
-};
-
 template<typename Region, typename Rect, typename Iter>
 struct RegionParamTraits
 {
@@ -441,10 +367,11 @@ struct RegionParamTraits
 
   static void Write(Message* msg, const paramType& param)
   {
-    Iter it(param);
-    while (const Rect* r = it.Next()) {
-      MOZ_ASSERT(!r->IsEmpty());
-      WriteParam(msg, *r);
+
+    for (auto iter = param.RectIter(); !iter.Done(); iter.Next()) {
+      const Rect& r = iter.Get();
+      MOZ_RELEASE_ASSERT(!r.IsEmpty());
+      WriteParam(msg, r);
     }
     // empty rects are sentinel values because nsRegions will never
     // contain them
@@ -453,25 +380,31 @@ struct RegionParamTraits
 
   static bool Read(const Message* msg, void** iter, paramType* result)
   {
+    RegionBuilder<Region> builder;
     Rect rect;
     while (ReadParam(msg, iter, &rect)) {
-      if (rect.IsEmpty())
+      if (rect.IsEmpty()) {
+        *result = builder.ToRegion();
         return true;
-      result->Or(*result, rect);
+      }
+      builder.Or(rect);
     }
+
     return false;
   }
 };
 
-template<>
-struct ParamTraits<nsIntRegion>
-  : RegionParamTraits<nsIntRegion, nsIntRect, nsIntRegionRectIterator>
+template<class Units>
+struct ParamTraits<mozilla::gfx::IntRegionTyped<Units>>
+  : RegionParamTraits<mozilla::gfx::IntRegionTyped<Units>,
+                      mozilla::gfx::IntRectTyped<Units>,
+                      typename mozilla::gfx::IntRegionTyped<Units>::RectIterator>
 {};
 
 template<>
-struct ParamTraits<nsIntSize>
+struct ParamTraits<mozilla::gfx::IntSize>
 {
-  typedef nsIntSize paramType;
+  typedef mozilla::gfx::IntSize paramType;
 
   static void Write(Message* msg, const paramType& param)
   {
@@ -534,6 +467,24 @@ struct ParamTraits< mozilla::gfx::ScaleFactor<T, U> >
   }
 };
 
+template<class T, class U>
+struct ParamTraits< mozilla::gfx::ScaleFactors2D<T, U> >
+{
+  typedef mozilla::gfx::ScaleFactors2D<T, U> paramType;
+
+  static void Write(Message* msg, const paramType& param)
+  {
+    WriteParam(msg, param.xScale);
+    WriteParam(msg, param.yScale);
+  }
+
+  static bool Read(const Message* msg, void** iter, paramType* result)
+  {
+    return (ReadParam(msg, iter, &result->xScale) &&
+            ReadParam(msg, iter, &result->yScale));
+  }
+};
+
 template<class T>
 struct ParamTraits< mozilla::gfx::PointTyped<T> >
 {
@@ -552,10 +503,10 @@ struct ParamTraits< mozilla::gfx::PointTyped<T> >
   }
 };
 
-template<class T>
-struct ParamTraits< mozilla::gfx::Point3DTyped<T> >
+template<class F, class T>
+struct ParamTraits< mozilla::gfx::Point3DTyped<F, T> >
 {
-  typedef mozilla::gfx::Point3DTyped<T> paramType;
+  typedef mozilla::gfx::Point3DTyped<F, T> paramType;
 
   static void Write(Message* msg, const paramType& param)
   {
@@ -720,7 +671,15 @@ struct ParamTraits<nsRect>
 
 template<>
 struct ParamTraits<nsRegion>
-  : RegionParamTraits<nsRegion, nsRect, nsRegionRectIterator>
+  : RegionParamTraits<nsRegion, nsRect, nsRegion::RectIterator>
+{};
+
+template<>
+struct ParamTraits<mozilla::layers::FrameMetrics::ScrollOffsetUpdateType>
+  : public ContiguousEnumSerializer<
+             mozilla::layers::FrameMetrics::ScrollOffsetUpdateType,
+             mozilla::layers::FrameMetrics::ScrollOffsetUpdateType::eNone,
+             mozilla::layers::FrameMetrics::ScrollOffsetUpdateType::eSentinel>
 {};
 
 template <>
@@ -730,34 +689,39 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
 
   static void Write(Message* aMsg, const paramType& aParam)
   {
-    WriteParam(aMsg, aParam.mScrollableRect);
-    WriteParam(aMsg, aParam.mViewport);
-    WriteParam(aMsg, aParam.mScrollOffset);
-    WriteParam(aMsg, aParam.mDisplayPort);
-    WriteParam(aMsg, aParam.mDisplayPortMargins);
-    WriteParam(aMsg, aParam.mUseDisplayPortMargins);
-    WriteParam(aMsg, aParam.mCriticalDisplayPort);
-    WriteParam(aMsg, aParam.mCompositionBounds);
-    WriteParam(aMsg, aParam.mRootCompositionSize);
     WriteParam(aMsg, aParam.mScrollId);
     WriteParam(aMsg, aParam.mScrollParentId);
     WriteParam(aMsg, aParam.mPresShellResolution);
+    WriteParam(aMsg, aParam.mCompositionBounds);
+    WriteParam(aMsg, aParam.mDisplayPort);
+    WriteParam(aMsg, aParam.mCriticalDisplayPort);
+    WriteParam(aMsg, aParam.mScrollableRect);
     WriteParam(aMsg, aParam.mCumulativeResolution);
-    WriteParam(aMsg, aParam.mZoom);
     WriteParam(aMsg, aParam.mDevPixelsPerCSSPixel);
-    WriteParam(aMsg, aParam.mMayHaveTouchListeners);
-    WriteParam(aMsg, aParam.mMayHaveTouchCaret);
-    WriteParam(aMsg, aParam.mPresShellId);
-    WriteParam(aMsg, aParam.mIsRoot);
-    WriteParam(aMsg, aParam.mHasScrollgrab);
-    WriteParam(aMsg, aParam.mUpdateScrollOffset);
+    WriteParam(aMsg, aParam.mScrollOffset);
+    WriteParam(aMsg, aParam.mZoom);
     WriteParam(aMsg, aParam.mScrollGeneration);
+    WriteParam(aMsg, aParam.mSmoothScrollOffset);
+    WriteParam(aMsg, aParam.mRootCompositionSize);
+    WriteParam(aMsg, aParam.mDisplayPortMargins);
+    WriteParam(aMsg, aParam.mPresShellId);
+    WriteParam(aMsg, aParam.mViewport);
     WriteParam(aMsg, aParam.mExtraResolution);
     WriteParam(aMsg, aParam.mBackgroundColor);
-    WriteParam(aMsg, aParam.mDoSmoothScroll);
-    WriteParam(aMsg, aParam.mSmoothScrollOffset);
-    WriteParam(aMsg, aParam.GetLineScrollAmount());
     WriteParam(aMsg, aParam.GetContentDescription());
+    WriteParam(aMsg, aParam.mLineScrollAmount);
+    WriteParam(aMsg, aParam.mPageScrollAmount);
+    WriteParam(aMsg, aParam.mPaintRequestTime);
+    WriteParam(aMsg, aParam.mScrollUpdateType);
+    WriteParam(aMsg, aParam.mIsRootContent);
+    WriteParam(aMsg, aParam.mHasScrollgrab);
+    WriteParam(aMsg, aParam.mDoSmoothScroll);
+    WriteParam(aMsg, aParam.mUseDisplayPortMargins);
+    WriteParam(aMsg, aParam.mAllowVerticalScrollWithWheel);
+    WriteParam(aMsg, aParam.mIsLayersIdRoot);
+    WriteParam(aMsg, aParam.mUsesContainerScrolling);
+    WriteParam(aMsg, aParam.mIsScrollInfoLayer);
+    WriteParam(aMsg, aParam.mForceDisableApz);
   }
 
   static bool ReadContentDescription(const Message* aMsg, void** aIter, paramType* aResult)
@@ -770,36 +734,103 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
     return true;
   }
 
+  // We need this helper because we can't get the address of a bitfield to
+  // pass directly to ReadParam. So instead we read it into a temporary bool
+  // and set the bitfield using a setter function
+  static bool ReadBoolForBitfield(const Message* aMsg, void** aIter,
+        paramType* aResult, void (paramType::*aSetter)(bool))
+  {
+    bool value;
+    if (ReadParam(aMsg, aIter, &value)) {
+      (aResult->*aSetter)(value);
+      return true;
+    }
+    return false;
+  }
+
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
   {
-    return (ReadParam(aMsg, aIter, &aResult->mScrollableRect) &&
-            ReadParam(aMsg, aIter, &aResult->mViewport) &&
-            ReadParam(aMsg, aIter, &aResult->mScrollOffset) &&
-            ReadParam(aMsg, aIter, &aResult->mDisplayPort) &&
-            ReadParam(aMsg, aIter, &aResult->mDisplayPortMargins) &&
-            ReadParam(aMsg, aIter, &aResult->mUseDisplayPortMargins) &&
-            ReadParam(aMsg, aIter, &aResult->mCriticalDisplayPort) &&
-            ReadParam(aMsg, aIter, &aResult->mCompositionBounds) &&
-            ReadParam(aMsg, aIter, &aResult->mRootCompositionSize) &&
-            ReadParam(aMsg, aIter, &aResult->mScrollId) &&
+    return (ReadParam(aMsg, aIter, &aResult->mScrollId) &&
             ReadParam(aMsg, aIter, &aResult->mScrollParentId) &&
             ReadParam(aMsg, aIter, &aResult->mPresShellResolution) &&
+            ReadParam(aMsg, aIter, &aResult->mCompositionBounds) &&
+            ReadParam(aMsg, aIter, &aResult->mDisplayPort) &&
+            ReadParam(aMsg, aIter, &aResult->mCriticalDisplayPort) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollableRect) &&
             ReadParam(aMsg, aIter, &aResult->mCumulativeResolution) &&
-            ReadParam(aMsg, aIter, &aResult->mZoom) &&
             ReadParam(aMsg, aIter, &aResult->mDevPixelsPerCSSPixel) &&
-            ReadParam(aMsg, aIter, &aResult->mMayHaveTouchListeners) &&
-            ReadParam(aMsg, aIter, &aResult->mMayHaveTouchCaret) &&
-            ReadParam(aMsg, aIter, &aResult->mPresShellId) &&
-            ReadParam(aMsg, aIter, &aResult->mIsRoot) &&
-            ReadParam(aMsg, aIter, &aResult->mHasScrollgrab) &&
-            ReadParam(aMsg, aIter, &aResult->mUpdateScrollOffset) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollOffset) &&
+            ReadParam(aMsg, aIter, &aResult->mZoom) &&
             ReadParam(aMsg, aIter, &aResult->mScrollGeneration) &&
+            ReadParam(aMsg, aIter, &aResult->mSmoothScrollOffset) &&
+            ReadParam(aMsg, aIter, &aResult->mRootCompositionSize) &&
+            ReadParam(aMsg, aIter, &aResult->mDisplayPortMargins) &&
+            ReadParam(aMsg, aIter, &aResult->mPresShellId) &&
+            ReadParam(aMsg, aIter, &aResult->mViewport) &&
             ReadParam(aMsg, aIter, &aResult->mExtraResolution) &&
             ReadParam(aMsg, aIter, &aResult->mBackgroundColor) &&
-            ReadParam(aMsg, aIter, &aResult->mDoSmoothScroll) &&
-            ReadParam(aMsg, aIter, &aResult->mSmoothScrollOffset) &&
+            ReadContentDescription(aMsg, aIter, aResult) &&
             ReadParam(aMsg, aIter, &aResult->mLineScrollAmount) &&
-            ReadContentDescription(aMsg, aIter, aResult));
+            ReadParam(aMsg, aIter, &aResult->mPageScrollAmount) &&
+            ReadParam(aMsg, aIter, &aResult->mPaintRequestTime) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollUpdateType) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetIsRootContent) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetHasScrollgrab) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetDoSmoothScroll) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetUseDisplayPortMargins) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetAllowVerticalScrollWithWheel) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetIsLayersIdRoot) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetUsesContainerScrolling) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetIsScrollInfoLayer) &&
+            ReadBoolForBitfield(aMsg, aIter, aResult, &paramType::SetForceDisableApz));
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::ScrollSnapInfo>
+{
+  typedef mozilla::layers::ScrollSnapInfo paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mScrollSnapTypeX);
+    WriteParam(aMsg, aParam.mScrollSnapTypeY);
+    WriteParam(aMsg, aParam.mScrollSnapIntervalX);
+    WriteParam(aMsg, aParam.mScrollSnapIntervalY);
+    WriteParam(aMsg, aParam.mScrollSnapDestination);
+    WriteParam(aMsg, aParam.mScrollSnapCoordinates);
+  }
+
+  static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
+  {
+    return (ReadParam(aMsg, aIter, &aResult->mScrollSnapTypeX) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollSnapTypeY) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollSnapIntervalX) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollSnapIntervalY) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollSnapDestination) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollSnapCoordinates));
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::ScrollMetadata>
+{
+  typedef mozilla::layers::ScrollMetadata paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mMetrics);
+    WriteParam(aMsg, aParam.mSnapInfo);
+    WriteParam(aMsg, aParam.mMaskLayerIndex);
+    WriteParam(aMsg, aParam.mClipRect);
+  }
+
+  static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
+  {
+    return (ReadParam(aMsg, aIter, &aResult->mMetrics) &&
+            ReadParam(aMsg, aIter, &aResult->mSnapInfo) &&
+            ReadParam(aMsg, aIter, &aResult->mMaskLayerIndex) &&
+            ReadParam(aMsg, aIter, &aResult->mClipRect));
   }
 };
 
@@ -811,7 +842,6 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.mParentBackend);
-    WriteParam(aMsg, aParam.mSupportedBlendModes.serialize());
     WriteParam(aMsg, aParam.mMaxTextureSize);
     WriteParam(aMsg, aParam.mSupportsTextureBlitting);
     WriteParam(aMsg, aParam.mSupportsPartialUploads);
@@ -820,14 +850,11 @@ struct ParamTraits<mozilla::layers::TextureFactoryIdentifier>
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
   {
-    uint32_t supportedBlendModes = 0;
     bool result = ReadParam(aMsg, aIter, &aResult->mParentBackend) &&
-                  ReadParam(aMsg, aIter, &supportedBlendModes) &&
                   ReadParam(aMsg, aIter, &aResult->mMaxTextureSize) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsTextureBlitting) &&
                   ReadParam(aMsg, aIter, &aResult->mSupportsPartialUploads) &&
                   ReadParam(aMsg, aIter, &aResult->mSyncHandle);
-    aResult->mSupportedBlendModes.deserialize(supportedBlendModes);
     return result;
   }
 };
@@ -836,25 +863,23 @@ template<>
 struct ParamTraits<mozilla::layers::TextureInfo>
 {
   typedef mozilla::layers::TextureInfo paramType;
-  
+
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.mCompositableType);
-    WriteParam(aMsg, aParam.mDeprecatedTextureHostFlags);
     WriteParam(aMsg, aParam.mTextureFlags);
   }
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
   {
     return ReadParam(aMsg, aIter, &aResult->mCompositableType) &&
-           ReadParam(aMsg, aIter, &aResult->mDeprecatedTextureHostFlags) &&
            ReadParam(aMsg, aIter, &aResult->mTextureFlags);
   }
 };
 
 template <>
 struct ParamTraits<mozilla::layers::CompositableType>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::layers::CompositableType,
              mozilla::layers::CompositableType::UNKNOWN,
              mozilla::layers::CompositableType::COUNT>
@@ -862,10 +887,18 @@ struct ParamTraits<mozilla::layers::CompositableType>
 
 template <>
 struct ParamTraits<mozilla::gfx::SurfaceFormat>
-  : public ContiguousTypedEnumSerializer<
+  : public ContiguousEnumSerializer<
              mozilla::gfx::SurfaceFormat,
              mozilla::gfx::SurfaceFormat::B8G8R8A8,
              mozilla::gfx::SurfaceFormat::UNKNOWN>
+{};
+
+template <>
+struct ParamTraits<mozilla::StereoMode>
+  : public ContiguousEnumSerializer<
+             mozilla::StereoMode,
+             mozilla::StereoMode::MONO,
+             mozilla::StereoMode::MAX>
 {};
 
 template <>
@@ -887,6 +920,7 @@ struct ParamTraits<mozilla::layers::ScrollableLayerGuid>
             ReadParam(aMsg, aIter, &aResult->mScrollId));
   }
 };
+
 
 template <>
 struct ParamTraits<mozilla::layers::ZoomConstraints>
@@ -919,59 +953,20 @@ struct ParamTraits<mozilla::layers::EventRegions>
   {
     WriteParam(aMsg, aParam.mHitRegion);
     WriteParam(aMsg, aParam.mDispatchToContentHitRegion);
+    WriteParam(aMsg, aParam.mNoActionRegion);
+    WriteParam(aMsg, aParam.mHorizontalPanRegion);
+    WriteParam(aMsg, aParam.mVerticalPanRegion);
   }
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
   {
     return (ReadParam(aMsg, aIter, &aResult->mHitRegion) &&
-            ReadParam(aMsg, aIter, &aResult->mDispatchToContentHitRegion));
+            ReadParam(aMsg, aIter, &aResult->mDispatchToContentHitRegion) &&
+            ReadParam(aMsg, aIter, &aResult->mNoActionRegion) &&
+            ReadParam(aMsg, aIter, &aResult->mHorizontalPanRegion) &&
+            ReadParam(aMsg, aIter, &aResult->mVerticalPanRegion));
   }
 };
-
-struct MessageAndAttributeMap
-{
-  Message* msg;
-  const mozilla::gfx::AttributeMap& map;
-};
-
-static bool
-WriteAttribute(mozilla::gfx::AttributeName aName,
-               mozilla::gfx::AttributeType aType,
-               void* aUserData)
-{
-  MessageAndAttributeMap* msgAndMap =
-    static_cast<MessageAndAttributeMap*>(aUserData);
-
-  WriteParam(msgAndMap->msg, aType);
-  WriteParam(msgAndMap->msg, aName);
-
-  switch (aType) {
-
-#define HANDLE_TYPE(typeName)                                          \
-    case mozilla::gfx::AttributeType::e##typeName:                     \
-      WriteParam(msgAndMap->msg, msgAndMap->map.Get##typeName(aName)); \
-      break;
-
-    HANDLE_TYPE(Bool)
-    HANDLE_TYPE(Uint)
-    HANDLE_TYPE(Float)
-    HANDLE_TYPE(Size)
-    HANDLE_TYPE(IntSize)
-    HANDLE_TYPE(IntPoint)
-    HANDLE_TYPE(Matrix)
-    HANDLE_TYPE(Matrix5x4)
-    HANDLE_TYPE(Point3D)
-    HANDLE_TYPE(Color)
-    HANDLE_TYPE(AttributeMap)
-    HANDLE_TYPE(Floats)
-
-#undef HANDLE_TYPE
-
-    default:
-      MOZ_CRASH("unhandled attribute type");
-  }
-  return true;
-}
 
 template <>
 struct ParamTraits<mozilla::gfx::AttributeMap>
@@ -981,8 +976,41 @@ struct ParamTraits<mozilla::gfx::AttributeMap>
   static void Write(Message* aMsg, const paramType& aParam)
   {
     WriteParam(aMsg, aParam.Count());
-    MessageAndAttributeMap msgAndMap = { aMsg, aParam };
-    aParam.EnumerateRead(WriteAttribute, &msgAndMap);
+    for (auto iter = aParam.ConstIter(); !iter.Done(); iter.Next()) {
+      mozilla::gfx::AttributeName name =
+        mozilla::gfx::AttributeName(iter.Key());
+      mozilla::gfx::AttributeType type =
+        mozilla::gfx::AttributeMap::GetType(iter.UserData());
+
+      WriteParam(aMsg, type);
+      WriteParam(aMsg, name);
+
+      switch (type) {
+
+#define CASE_TYPE(typeName)                                          \
+    case mozilla::gfx::AttributeType::e##typeName:                     \
+      WriteParam(aMsg, aParam.Get##typeName(name)); \
+      break;
+
+    CASE_TYPE(Bool)
+    CASE_TYPE(Uint)
+    CASE_TYPE(Float)
+    CASE_TYPE(Size)
+    CASE_TYPE(IntSize)
+    CASE_TYPE(IntPoint)
+    CASE_TYPE(Matrix)
+    CASE_TYPE(Matrix5x4)
+    CASE_TYPE(Point3D)
+    CASE_TYPE(Color)
+    CASE_TYPE(AttributeMap)
+    CASE_TYPE(Floats)
+
+#undef CASE_TYPE
+
+        default:
+          MOZ_CRASH("unhandled attribute type");
+      }
+    }
   }
 
   static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
@@ -1010,6 +1038,7 @@ struct ParamTraits<mozilla::gfx::AttributeMap>
             return false;                                              \
           }                                                            \
           aResult->Set(name, value);                                   \
+          break;                                                       \
         }
 
         HANDLE_TYPE(bool, Bool)
@@ -1126,6 +1155,47 @@ struct ParamTraits<APZStateChange>
              APZStateChange::TransformBegin,
              APZStateChange::APZStateChangeSentinel>
 {};
+
+template<>
+struct ParamTraits<mozilla::layers::EventRegionsOverride>
+  : public BitFlagsEnumSerializer<
+            mozilla::layers::EventRegionsOverride,
+            mozilla::layers::EventRegionsOverride::ALL_BITS>
+{};
+
+template<>
+struct ParamTraits<mozilla::layers::AsyncDragMetrics::DragDirection>
+  : public ContiguousEnumSerializer<
+             mozilla::layers::AsyncDragMetrics::DragDirection,
+             mozilla::layers::AsyncDragMetrics::DragDirection::NONE,
+             mozilla::layers::AsyncDragMetrics::DragDirection::SENTINEL>
+{};
+
+template<>
+struct ParamTraits<mozilla::layers::AsyncDragMetrics>
+{
+  typedef mozilla::layers::AsyncDragMetrics paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mViewId);
+    WriteParam(aMsg, aParam.mPresShellId);
+    WriteParam(aMsg, aParam.mDragStartSequenceNumber);
+    WriteParam(aMsg, aParam.mScrollbarDragOffset);
+    WriteParam(aMsg, aParam.mScrollTrack);
+    WriteParam(aMsg, aParam.mDirection);
+  }
+
+  static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
+  {
+    return (ReadParam(aMsg, aIter, &aResult->mViewId) &&
+            ReadParam(aMsg, aIter, &aResult->mPresShellId) &&
+            ReadParam(aMsg, aIter, &aResult->mDragStartSequenceNumber) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollbarDragOffset) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollTrack) &&
+            ReadParam(aMsg, aIter, &aResult->mDirection));
+  }
+};
 
 } /* namespace IPC */
 

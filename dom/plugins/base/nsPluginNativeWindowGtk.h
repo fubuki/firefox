@@ -6,7 +6,6 @@
 #define _nsPluginNativeWindowGdk_h_
 
 #include "nsPluginNativeWindow.h"
-#include "nsNPAPIPlugin.h"
 #include "npapi.h"
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -23,7 +22,7 @@ public:
   nsPluginNativeWindowGtk();
   virtual ~nsPluginNativeWindowGtk();
 
-  virtual nsresult CallSetWindow(nsRefPtr<nsNPAPIPluginInstance> &aPluginInstance);
+  virtual nsresult CallSetWindow(RefPtr<nsNPAPIPluginInstance> &aPluginInstance);
   nsresult CreateXEmbedWindow(bool aEnableXtFocus);
   void SetAllocation();
 

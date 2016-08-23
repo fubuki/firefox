@@ -1,21 +1,38 @@
-/* Any copyright is dedicated to the Public Domain.
- * http://creativecommons.org/publicdomain/zero/1.0/ */
-
 "use strict";
 
-let gTestTab;
-let gContentAPI;
-let gContentWindow;
+var gTestTab;
+var gContentAPI;
+var gContentWindow;
 
-Components.utils.import("resource:///modules/UITour.jsm");
+add_task(setup_UITourTest);
 
-function test() {
-  UITourTest();
-}
+let formerSelectedProfile, formerDefaultProfile;
+registerCleanupFunction(function() {
+  let profileService = Cc["@mozilla.org/toolkit/profile-service;1"].
+                       getService(Ci.nsIToolkitProfileService);
+  if (formerSelectedProfile) {
+    info("Restoring selected profile");
+    profileService.selectedProfile = formerSelectedProfile;
+  }
+  if (formerDefaultProfile) {
+    info("Restoring default profile");
+    profileService.defaultProfile = formerDefaultProfile;
+  }
+});
 
-let tests = [
-  // Test that a reset profile dialog appears when "resetFirefox" event is triggered
-  function test_resetFirefox(done) {
+// Test that a reset profile dialog appears when "resetFirefox" event is triggered
+add_UITour_task(function* test_resetFirefox() {
+  let profileService = Cc["@mozilla.org/toolkit/profile-service;1"].
+                       getService(Ci.nsIToolkitProfileService);
+  try {
+    formerSelectedProfile = profileService.selectedProfile;
+  } catch (ex) {}
+  try {
+    formerDefaultProfile = profileService.defaultProfile;
+  } catch (ex) {}
+  let canReset = yield getConfigurationPromise("canReset");
+  ok(!canReset, "Shouldn't be able to reset from mochitest's temporary profile.");
+  let dialogPromise = new Promise((resolve) => {
     let winWatcher = Cc["@mozilla.org/embedcomp/window-watcher;1"].
                      getService(Ci.nsIWindowWatcher);
     winWatcher.registerNotification(function onOpen(subj, topic, data) {
@@ -29,11 +46,24 @@ let tests = [
             is(subj.opener, window,
                "Reset Firefox event opened a reset profile window.");
             subj.close();
-            done();
+            resolve();
           }
         });
       }
     });
-    gContentAPI.resetFirefox();
-  },
-];
+  });
+
+  // make reset possible.
+  let currentProfileDir = Services.dirsvc.get("ProfD", Ci.nsIFile);
+  let profileName = "mochitest-test-profile-temp-" + Date.now();
+  let tempProfile = profileService.createProfile(currentProfileDir, profileName);
+  profileService.defaultProfile = profileService.selectedProfile = tempProfile;
+  canReset = yield getConfigurationPromise("canReset");
+  ok(canReset, "Should be able to reset from mochitest's temporary profile once it's in the profile manager.");
+  yield gContentAPI.resetFirefox();
+  yield dialogPromise;
+  tempProfile.remove(false);
+  canReset = yield getConfigurationPromise("canReset");
+  ok(!canReset, "Shouldn't be able to reset from mochitest's temporary profile once removed from the profile manager.");
+});
+

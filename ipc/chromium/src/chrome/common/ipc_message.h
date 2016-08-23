@@ -56,7 +56,8 @@ class Message : public Pickle {
 
   enum MessageCompression {
     COMPRESSION_NONE,
-    COMPRESSION_ENABLED
+    COMPRESSION_ENABLED,
+    COMPRESSION_ALL
   };
 
   virtual ~Message();
@@ -69,10 +70,12 @@ class Message : public Pickle {
           MessageCompression compression = COMPRESSION_NONE,
           const char* const name="???");
 
-  // Initializes a message from a const block of data.  The data is not copied;
-  // instead the data is merely referenced by this message.  Only const methods
-  // should be used on the message when initialized this way.
-  Message(const char* data, int data_len);
+  // Initializes a message from a const block of data. If ownership == BORROWS,
+  // the data is not copied; instead the data is merely referenced by this
+  // message. Only const methods should be used on the message when initialized
+  // this way. If ownership == OWNS, then again no copying takes place. However,
+  // the buffer is writable and will be freed when the message is destroyed.
+  Message(const char* data, int data_len, Ownership ownership = BORROWS);
 
   Message(const Message& other);
   Message(Message&& other);
@@ -99,8 +102,12 @@ class Message : public Pickle {
   }
 
   // True if compression is enabled for this message.
-  bool compress() const {
-    return (header()->flags & COMPRESS_BIT) != 0;
+  MessageCompression compress_type() const {
+    return (header()->flags & COMPRESS_BIT) ?
+               COMPRESSION_ENABLED :
+               (header()->flags & COMPRESSALL_BIT) ?
+                   COMPRESSION_ALL :
+                   COMPRESSION_NONE;
   }
 
   // Set this on a reply to a synchronous message.
@@ -185,16 +192,16 @@ class Message : public Pickle {
     return header()->seqno;
   }
 
-  void set_seqno(int32_t seqno) {
-    header()->seqno = seqno;
+  void set_seqno(int32_t aSeqno) {
+    header()->seqno = aSeqno;
   }
 
-  const char* const name() const {
+  const char* name() const {
     return name_;
   }
 
-  void set_name(const char* const name) {
-    name_ = name;
+  void set_name(const char* const aName) {
+    name_ = aName;
   }
 
 #if defined(OS_POSIX)
@@ -235,6 +242,12 @@ class Message : public Pickle {
   // if the entire message is not found in the given data range.
   static const char* FindNext(const char* range_start, const char* range_end) {
     return Pickle::FindNext(sizeof(Header), range_start, range_end);
+  }
+
+  // If the given range contains at least header_size bytes, return the length
+  // of the message including the header.
+  static uint32_t GetLength(const char* range_start, const char* range_end) {
+    return Pickle::GetLength(sizeof(Header), range_start, range_end);
   }
 
 #if defined(OS_POSIX)
@@ -285,6 +298,7 @@ class Message : public Pickle {
     HAS_SENT_TIME_BIT = 0x0080,
     INTERRUPT_BIT   = 0x0100,
     COMPRESS_BIT    = 0x0200,
+    COMPRESSALL_BIT = 0x0400,
   };
 
   struct Header : Pickle::Header {
@@ -326,7 +340,7 @@ class Message : public Pickle {
 
 #if defined(OS_POSIX)
   // The set of file descriptors associated with this message.
-  nsRefPtr<FileDescriptorSet> file_descriptor_set_;
+  RefPtr<FileDescriptorSet> file_descriptor_set_;
 
   // Ensure that a FileDescriptorSet is allocated
   void EnsureFileDescriptorSet();
@@ -342,6 +356,21 @@ class Message : public Pickle {
 
   const char* name_;
 
+};
+
+class MessageInfo {
+public:
+    typedef uint32_t msgid_t;
+
+    explicit MessageInfo(const Message& aMsg)
+        : mSeqno(aMsg.seqno()), mType(aMsg.type()) {}
+
+    int32_t seqno() const { return mSeqno; }
+    msgid_t type() const { return mType; }
+
+private:
+    int32_t mSeqno;
+    msgid_t mType;
 };
 
 //------------------------------------------------------------------------------

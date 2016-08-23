@@ -20,10 +20,10 @@ namespace dom {
 
 class HTMLTrackElement;
 
-class WebVTTListener MOZ_FINAL : public nsIWebVTTListener,
-                                 public nsIStreamListener,
-                                 public nsIChannelEventSink,
-                                 public nsIInterfaceRequestor
+class WebVTTListener final : public nsIWebVTTListener,
+                             public nsIStreamListener,
+                             public nsIChannelEventSink,
+                             public nsIInterfaceRequestor
 {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIWEBVTTLISTENER
@@ -55,7 +55,7 @@ private:
                               const char* aFromSegment, uint32_t aToOffset,
                               uint32_t aCount, uint32_t* aWriteCount);
 
-  nsRefPtr<HTMLTrackElement> mElement;
+  RefPtr<HTMLTrackElement> mElement;
   nsCOMPtr<nsIWebVTTParserWrapper> mParserWrapper;
 };
 

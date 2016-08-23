@@ -2,11 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
-Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Snackbars", "resource://gre/modules/Snackbars.jsm");
 
 var WebcompatReporter = {
   menuItem: null,
@@ -15,7 +18,14 @@ var WebcompatReporter = {
     Services.obs.addObserver(this, "DesktopMode:Change", false);
     Services.obs.addObserver(this, "chrome-document-global-created", false);
     Services.obs.addObserver(this, "content-document-global-created", false);
-    this.addMenuItem();
+
+    let visible = true;
+    if ("@mozilla.org/parental-controls-service;1" in Cc) {
+      let pc = Cc["@mozilla.org/parental-controls-service;1"].createInstance(Ci.nsIParentalControlsService);
+      visible = !pc.parentalControlsEnabled;
+    }
+
+    this.addMenuItem(visible);
   },
 
   observe: function(subject, topic, data) {
@@ -40,19 +50,49 @@ var WebcompatReporter = {
       let tab = BrowserApp.getTabForId(args.tabId);
       let currentURI = tab.browser.currentURI.spec;
       if (args.desktopMode && this.isReportableUrl(currentURI)) {
-        this.reportDesktopModePrompt();
+        this.reportDesktopModePrompt(tab);
       }
     }
   },
 
-  addMenuItem: function() {
+  addMenuItem: function(visible) {
     this.menuItem = NativeWindow.menu.add({
       name: this.strings.GetStringFromName("webcompat.menu.name"),
       callback: () => {
-        let currentURI = BrowserApp.selectedTab.browser.currentURI.spec;
-        this.reportIssue(currentURI);
+        Promise.resolve(BrowserApp.selectedTab).then(this.getScreenshot)
+                                               .then(this.reportIssue)
+                                               .catch(Cu.reportError);
       },
       enabled: false,
+      visible: visible,
+    });
+  },
+
+  getScreenshot: (tab) => {
+    return new Promise((resolve) => {
+      try {
+        let win = tab.window;
+        let dpr = win.devicePixelRatio;
+        let canvas = win.document.createElement("canvas");
+        let ctx = canvas.getContext("2d");
+        // Grab the visible viewport coordinates
+        let x = win.document.documentElement.scrollLeft;
+        let y = win.document.documentElement.scrollTop;
+        let w = win.innerWidth;
+        let h = win.innerHeight;
+        // Scale according to devicePixelRatio and coordinates
+        canvas.width = dpr * w;
+        canvas.height = dpr * h;
+        ctx.scale(dpr, dpr);
+        ctx.drawWindow(win, x, y, w, h, '#ffffff');
+        let screenshot = canvas.toDataURL();
+        resolve({tab: tab, data: screenshot});
+      } catch (e) {
+        // drawWindow can fail depending on memory or surface size. Rather than reject here,
+        // we resolve the URL so the user can continue to file an issue without a screenshot.
+        Cu.reportError("WebCompatReporter: getting a screenshot failed: " + e);
+        resolve({tab: tab});
+      }
     });
   },
 
@@ -63,27 +103,39 @@ var WebcompatReporter = {
                     url.startsWith("resource"));
   },
 
-  reportDesktopModePrompt: function() {
-    let currentURI = BrowserApp.selectedTab.browser.currentURI.spec;
+  reportDesktopModePrompt: function(tab) {
     let message = this.strings.GetStringFromName("webcompat.reportDesktopMode.message");
     let options = {
-      button: {
+      action: {
         label: this.strings.GetStringFromName("webcompat.reportDesktopModeYes.label"),
-        callback: () => this.reportIssue(currentURI)
+        callback: () => this.reportIssue({tab: tab})
       }
     };
-    NativeWindow.toast.show(message, "long", options);
+    Snackbars.show(message, Snackbars.LENGTH_LONG, options);
   },
 
-  reportIssue: function(url) {
-    let webcompatURL = new URL("https://webcompat.com/");
-    webcompatURL.searchParams.append("open", "1");
-    webcompatURL.searchParams.append("url", url);
-    if (PrivateBrowsingUtils.isBrowserPrivate(BrowserApp.selectedTab.browser)) {
-      BrowserApp.addTab(webcompatURL.href, {parentId: BrowserApp.selectedTab.id, isPrivate: true});
-    } else {
-      BrowserApp.addTab(webcompatURL.href);
-    }
+  reportIssue: (tabData) => {
+    return new Promise((resolve) => {
+      const WEBCOMPAT_ORIGIN = "https://webcompat.com";
+      let url = tabData.tab.browser.currentURI.spec
+      let webcompatURL = `${WEBCOMPAT_ORIGIN}/?open=1&url=${url}`;
+
+      if (tabData.data && typeof tabData.data === "string") {
+        BrowserApp.deck.addEventListener("DOMContentLoaded", function sendDataToTab(event) {
+          BrowserApp.deck.removeEventListener("DOMContentLoaded", sendDataToTab, false);
+
+          if (event.target.defaultView.location.origin === WEBCOMPAT_ORIGIN) {
+            // Waive Xray vision so event.origin is not chrome://browser on the other side.
+            let win = Cu.waiveXrays(event.target.defaultView);
+            win.postMessage(tabData.data, WEBCOMPAT_ORIGIN);
+          }
+        }, false);
+      }
+
+      let isPrivateTab = PrivateBrowsingUtils.isBrowserPrivate(tabData.tab.browser);
+      BrowserApp.addTab(webcompatURL, {parentId: tabData.tab.id, isPrivate: isPrivateTab});
+      resolve();
+    });
   }
 };
 

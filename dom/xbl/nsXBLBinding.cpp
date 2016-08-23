@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,7 +14,6 @@
 #include "nsIChannel.h"
 #include "nsXPIDLString.h"
 #include "nsReadableUtils.h"
-#include "nsNetUtil.h"
 #include "plstr.h"
 #include "nsIContent.h"
 #include "nsIDocument.h"
@@ -50,12 +49,12 @@
 #include "prprf.h"
 #include "nsNodeUtils.h"
 #include "nsJSUtils.h"
-#include "nsCycleCollector.h"
 
 // Nasty hack.  Maybe we could move some of the classinfo utility methods
 // (e.g. WrapNative) over to nsContentUtils?
 #include "nsDOMClassInfo.h"
 
+#include "mozilla/DeferredFinalize.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/ShadowRoot.h"
@@ -74,7 +73,7 @@ XBLFinalize(JSFreeOp *fop, JSObject *obj)
 {
   nsXBLDocumentInfo* docInfo =
     static_cast<nsXBLDocumentInfo*>(::JS_GetPrivate(obj));
-  cyclecollector::DeferredFinalize(docInfo);
+  DeferredFinalize(docInfo);
 }
 
 static bool
@@ -87,15 +86,19 @@ XBLEnumerate(JSContext *cx, JS::Handle<JSObject*> obj)
   return protoBinding->ResolveAllFields(cx, obj);
 }
 
+static const JSClassOps gPrototypeJSClassOps = {
+    nullptr, nullptr, nullptr, nullptr,
+    XBLEnumerate, nullptr,
+    nullptr, XBLFinalize,
+    nullptr, nullptr, nullptr, nullptr
+};
+
 static const JSClass gPrototypeJSClass = {
     "XBL prototype JSClass",
     JSCLASS_HAS_PRIVATE | JSCLASS_PRIVATE_IS_NSISUPPORTS |
     // Our one reserved slot holds the relevant nsXBLPrototypeBinding
     JSCLASS_HAS_RESERVED_SLOTS(1),
-    nullptr, nullptr, nullptr, nullptr,
-    XBLEnumerate, nullptr,
-    nullptr, XBLFinalize,
-    nullptr, nullptr, nullptr, nullptr
+    &gPrototypeJSClassOps
 };
 
 // Implementation /////////////////////////////////////////////////////////////////
@@ -199,7 +202,7 @@ nsXBLBinding::InstallAnonymousContent(nsIContent* aAnonParent, nsIContent* aElem
   // aElement.
   // (2) The children's parent back pointer should not be to this synthetic root
   // but should instead point to the enclosing parent element.
-  nsIDocument* doc = aElement->GetCurrentDoc();
+  nsIDocument* doc = aElement->GetUncomposedDoc();
   bool allowScripts = AllowScripts();
 
   nsAutoScriptBlocker scriptBlocker;
@@ -760,7 +763,7 @@ nsXBLBinding::ChangeDocument(nsIDocument* aOldDocument, nsIDocument* aNewDocumen
             continue;
           }
 
-          nsRefPtr<nsXBLDocumentInfo> docInfo =
+          RefPtr<nsXBLDocumentInfo> docInfo =
             static_cast<nsXBLDocumentInfo*>(::JS_GetPrivate(proto));
           if (!docInfo) {
             // Not the proto we seek
@@ -873,7 +876,7 @@ GetOrCreateClassObjectMap(JSContext *cx, JS::Handle<JSObject*> scope, const char
   MOZ_ASSERT(scope == xpc::GetXBLScopeOrGlobal(cx, scope));
 
   // First, see if the map is already defined.
-  JS::Rooted<JSPropertyDescriptor> desc(cx);
+  JS::Rooted<JS::PropertyDescriptor> desc(cx);
   if (!JS_GetOwnPropertyDescriptor(cx, scope, mapName, &desc)) {
     return nullptr;
   }
@@ -916,6 +919,8 @@ GetOrCreateMapEntryForPrototype(JSContext *cx, JS::Handle<JSObject*> proto)
   // content, and the Window for chrome (whether add-ons are involved or not).
   JS::Rooted<JSObject*> scope(cx, xpc::GetXBLScopeOrGlobal(cx, proto));
   NS_ENSURE_TRUE(scope, nullptr);
+  MOZ_ASSERT(js::GetGlobalForObjectCrossCompartment(scope) == scope);
+
   JS::Rooted<JSObject*> wrappedProto(cx, proto);
   JSAutoCompartment ac(cx, scope);
   if (!JS_WrapObject(cx, &wrappedProto)) {
@@ -939,7 +944,7 @@ GetOrCreateMapEntryForPrototype(JSContext *cx, JS::Handle<JSObject*> proto)
 
   // We don't have an entry. Create one and stick it in the map.
   JS::Rooted<JSObject*> entry(cx);
-  entry = JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr(), scope);
+  entry = JS_NewObjectWithGivenProto(cx, nullptr, nullptr);
   if (!entry) {
     return nullptr;
   }
@@ -956,7 +961,7 @@ GetOrCreateMapEntryForPrototype(JSContext *cx, JS::Handle<JSObject*> proto)
 nsresult
 nsXBLBinding::DoInitJSClass(JSContext *cx,
                             JS::Handle<JSObject*> obj,
-                            const nsAFlatCString& aClassName,
+                            const nsAFlatString& aClassName,
                             nsXBLPrototypeBinding* aProtoBinding,
                             JS::MutableHandle<JSObject*> aClassObject,
                             bool* aNew)
@@ -1000,8 +1005,8 @@ nsXBLBinding::DoInitJSClass(JSContext *cx,
   // holder should be class objects. If we don't find the class object, we need
   // to create and define it.
   JS::Rooted<JSObject*> proto(cx);
-  JS::Rooted<JSPropertyDescriptor> desc(cx);
-  if (!JS_GetOwnPropertyDescriptor(cx, holder, aClassName.get(), &desc)) {
+  JS::Rooted<JS::PropertyDescriptor> desc(cx);
+  if (!JS_GetOwnUCPropertyDescriptor(cx, holder, aClassName.get(), &desc)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
   *aNew = !desc.object();
@@ -1013,7 +1018,7 @@ nsXBLBinding::DoInitJSClass(JSContext *cx,
     // We need to create the prototype. First, enter the compartment where it's
     // going to live, and create it.
     JSAutoCompartment ac2(cx, global);
-    proto = JS_NewObjectWithGivenProto(cx, &gPrototypeJSClass, parent_proto, global);
+    proto = JS_NewObjectWithGivenProto(cx, &gPrototypeJSClass, parent_proto);
     if (!proto) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -1027,15 +1032,15 @@ nsXBLBinding::DoInitJSClass(JSContext *cx,
     nsXBLDocumentInfo* docInfo = aProtoBinding->XBLDocumentInfo();
     ::JS_SetPrivate(proto, docInfo);
     NS_ADDREF(docInfo);
-    JS_SetReservedSlot(proto, 0, PRIVATE_TO_JSVAL(aProtoBinding));
+    JS_SetReservedSlot(proto, 0, JS::PrivateValue(aProtoBinding));
 
     // Next, enter the compartment of the property holder, wrap the proto, and
     // stick it on.
     JSAutoCompartment ac3(cx, holder);
     if (!JS_WrapObject(cx, &proto) ||
-        !JS_DefineProperty(cx, holder, aClassName.get(), proto,
-                           JSPROP_READONLY | JSPROP_PERMANENT,
-                           JS_STUBGETTER, JS_STUBSETTER))
+        !JS_DefineUCProperty(cx, holder, aClassName.get(), -1, proto,
+                             JSPROP_READONLY | JSPROP_PERMANENT,
+                             JS_STUBGETTER, JS_STUBSETTER))
     {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -1082,7 +1087,7 @@ nsXBLBinding::ResolveAllFields(JSContext *cx, JS::Handle<JSObject*> obj) const
 
 bool
 nsXBLBinding::LookupMember(JSContext* aCx, JS::Handle<jsid> aId,
-                           JS::MutableHandle<JSPropertyDescriptor> aDesc)
+                           JS::MutableHandle<JS::PropertyDescriptor> aDesc)
 {
   // We should never enter this function with a pre-filled property descriptor.
   MOZ_ASSERT(!aDesc.object());
@@ -1137,7 +1142,7 @@ nsXBLBinding::LookupMember(JSContext* aCx, JS::Handle<jsid> aId,
 bool
 nsXBLBinding::LookupMemberInternal(JSContext* aCx, nsString& aName,
                                    JS::Handle<jsid> aNameAsId,
-                                   JS::MutableHandle<JSPropertyDescriptor> aDesc,
+                                   JS::MutableHandle<JS::PropertyDescriptor> aDesc,
                                    JS::Handle<JSObject*> aXBLScope)
 {
   // First, see if we have an implementation. If we don't, it means that this
@@ -1154,8 +1159,8 @@ nsXBLBinding::LookupMemberInternal(JSContext* aCx, nsString& aName,
   // Find our class object. It's in a protected scope and permanent just in case,
   // so should be there no matter what.
   JS::Rooted<JS::Value> classObject(aCx);
-  if (!JS_GetProperty(aCx, aXBLScope, PrototypeBinding()->ClassName().get(),
-                      &classObject)) {
+  if (!JS_GetUCProperty(aCx, aXBLScope, PrototypeBinding()->ClassName().get(),
+                        -1, &classObject)) {
     return false;
   }
 

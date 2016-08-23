@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,12 +13,14 @@
 #include "nsPIDOMWindow.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIScriptContext.h"
+#include "nsIWeakReferenceUtils.h"
 #include "MainThreadUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/dom/EventTarget.h"
 
 struct JSCompartment;
+class nsIDocument;
 
 namespace mozilla {
 
@@ -36,7 +39,7 @@ public:
     , mHasOrHasHadOwnerWindow(false)
   {
   }
-  explicit DOMEventTargetHelper(nsPIDOMWindow* aWindow)
+  explicit DOMEventTargetHelper(nsPIDOMWindowInner* aWindow)
     : mParentObject(nullptr)
     , mOwnerWindow(nullptr)
     , mHasOrHasHadOwnerWindow(false)
@@ -63,15 +66,15 @@ public:
 
   NS_DECL_NSIDOMEVENTTARGET
 
-  virtual EventListenerManager* GetExistingListenerManager() const MOZ_OVERRIDE;
-  virtual EventListenerManager* GetOrCreateListenerManager() MOZ_OVERRIDE;
+  virtual EventListenerManager* GetExistingListenerManager() const override;
+  virtual EventListenerManager* GetOrCreateListenerManager() override;
 
   using dom::EventTarget::RemoveEventListener;
   virtual void AddEventListener(const nsAString& aType,
                                 dom::EventListener* aListener,
                                 bool aCapture,
                                 const dom::Nullable<bool>& aWantsUntrusted,
-                                ErrorResult& aRv) MOZ_OVERRIDE;
+                                ErrorResult& aRv) override;
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_DOMEVENTTARGETHELPER_IID)
 
@@ -101,6 +104,11 @@ public:
     return static_cast<DOMEventTargetHelper*>(target);
   }
 
+  bool HasListenersFor(const nsAString& aType)
+  {
+    return mListenerManager && mListenerManager->HasListenersFor(aType);
+  }
+
   bool HasListenersFor(nsIAtom* aTypeWithOn)
   {
     return mListenerManager && mListenerManager->HasListenersFor(aTypeWithOn);
@@ -114,12 +122,12 @@ public:
                        JSContext* aCx,
                        JS::Value* aValue);
   using dom::EventTarget::GetEventHandler;
-  virtual nsIDOMWindow* GetOwnerGlobal() MOZ_OVERRIDE
+  virtual nsPIDOMWindowOuter* GetOwnerGlobalForBindings() override
   {
-    return nsPIDOMWindow::GetOuterFromCurrentInner(GetOwner());
+    return nsPIDOMWindowOuter::GetFromCurrentInner(GetOwner());
   }
 
-  nsresult CheckInnerWindowCorrectness()
+  nsresult CheckInnerWindowCorrectness() const
   {
     NS_ENSURE_STATE(!mHasOrHasHadOwnerWindow || mOwnerWindow);
     if (mOwnerWindow && !mOwnerWindow->IsCurrentInnerWindow()) {
@@ -128,16 +136,30 @@ public:
     return NS_OK;
   }
 
-  nsPIDOMWindow* GetOwner() const { return mOwnerWindow; }
+  nsPIDOMWindowInner* GetOwner() const { return mOwnerWindow; }
+  // Like GetOwner, but only returns non-null if the window being returned is
+  // current (in the "current document" sense of the HTML spec).
+  nsPIDOMWindowInner* GetWindowIfCurrent() const;
+  // Returns the document associated with this event target, if that document is
+  // the current document of its browsing context.  Will return null otherwise.
+  nsIDocument* GetDocumentIfCurrent() const;
   void BindToOwner(nsIGlobalObject* aOwner);
-  void BindToOwner(nsPIDOMWindow* aOwner);
+  void BindToOwner(nsPIDOMWindowInner* aOwner);
   void BindToOwner(DOMEventTargetHelper* aOther);
   virtual void DisconnectFromOwner();                   
-  nsIGlobalObject* GetParentObject() const { return mParentObject; }
+  nsIGlobalObject* GetParentObject() const
+  {
+    return GetOwnerGlobal();
+  }
+  virtual nsIGlobalObject* GetOwnerGlobal() const override
+  {
+    nsCOMPtr<nsIGlobalObject> parentObject = do_QueryReferent(mParentObject);
+    return parentObject;
+  }
   bool HasOrHasHadOwner() { return mHasOrHasHadOwnerWindow; }
 
-  virtual void EventListenerAdded(nsIAtom* aType) MOZ_OVERRIDE;
-  virtual void EventListenerRemoved(nsIAtom* aType) MOZ_OVERRIDE;
+  virtual void EventListenerAdded(nsIAtom* aType) override;
+  virtual void EventListenerRemoved(nsIAtom* aType) override;
   virtual void EventListenerWasAdded(const nsAString& aType,
                                      ErrorResult& aRv,
                                      JSCompartment* aCompartment = nullptr) {}
@@ -152,17 +174,26 @@ protected:
 
   nsresult WantsUntrusted(bool* aRetVal);
 
-  nsRefPtr<EventListenerManager> mListenerManager;
+  // If this method returns true your object is kept alive until it returns
+  // false. You can use this method instead using
+  // NS_IMPL_CYCLE_COLLECTION_CAN_SKIP_BEGIN macro.
+  virtual bool IsCertainlyAliveForCC() const
+  {
+    return false;
+  }
+
+  RefPtr<EventListenerManager> mListenerManager;
   // Make |event| trusted and dispatch |aEvent| to |this|.
   nsresult DispatchTrustedEvent(nsIDOMEvent* aEvent);
 
   virtual void LastRelease() {}
 private:
   // Inner window or sandbox.
-  nsIGlobalObject*           mParentObject;
+  nsWeakPtr                  mParentObject;
   // mParentObject pre QI-ed and cached (inner window)
   // (it is needed for off main thread access)
-  nsPIDOMWindow*             mOwnerWindow;
+  // It is obtained in BindToOwner and reset in DisconnectFromOwner.
+  nsPIDOMWindowInner* MOZ_NON_OWNING_REF mOwnerWindow;
   bool                       mHasOrHasHadOwnerWindow;
 };
 
@@ -271,11 +302,11 @@ NS_DEFINE_STATIC_IID_ACCESSOR(DOMEventTargetHelper,
   using _class::RemoveEventListener;                \
   NS_FORWARD_NSIDOMEVENTTARGET(_class::)            \
   virtual mozilla::EventListenerManager*            \
-  GetOrCreateListenerManager() MOZ_OVERRIDE {       \
+  GetOrCreateListenerManager() override {           \
     return _class::GetOrCreateListenerManager();    \
   }                                                 \
   virtual mozilla::EventListenerManager*            \
-  GetExistingListenerManager() const MOZ_OVERRIDE { \
+  GetExistingListenerManager() const override {     \
     return _class::GetExistingListenerManager();    \
   }
 

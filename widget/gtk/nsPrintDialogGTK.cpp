@@ -17,7 +17,6 @@
 #include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsIFile.h"
-#include "nsNetUtil.h"
 #include "nsIStringBundle.h"
 #include "nsIPrintSettingsService.h"
 #include "nsIDOMWindow.h"
@@ -114,10 +113,11 @@ ShowCustomDialog(GtkComboBox *changed_box, gpointer user_data)
 
 class nsPrintDialogWidgetGTK {
   public:
-    nsPrintDialogWidgetGTK(nsIDOMWindow *aParent, nsIPrintSettings *aPrintSettings);
+    nsPrintDialogWidgetGTK(nsPIDOMWindowOuter *aParent,
+                           nsIPrintSettings *aPrintSettings);
     ~nsPrintDialogWidgetGTK() { gtk_widget_destroy(dialog); }
     NS_ConvertUTF16toUTF8 GetUTF8FromBundle(const char* aKey);
-    const gint Run();
+    gint Run();
 
     nsresult ImportSettings(nsIPrintSettings *aNSSettings);
     nsresult ExportSettings(nsIPrintSettings *aNSSettings);
@@ -150,7 +150,8 @@ class nsPrintDialogWidgetGTK {
     void ExportHeaderFooter(nsIPrintSettings *aNS);
 };
 
-nsPrintDialogWidgetGTK::nsPrintDialogWidgetGTK(nsIDOMWindow *aParent, nsIPrintSettings *aSettings)
+nsPrintDialogWidgetGTK::nsPrintDialogWidgetGTK(nsPIDOMWindowOuter *aParent,
+                                               nsIPrintSettings *aSettings)
 {
   nsCOMPtr<nsIWidget> widget = WidgetUtils::DOMWindowToWidget(aParent);
   NS_ASSERTION(widget, "Need a widget for dialog to be modal.");
@@ -344,7 +345,7 @@ nsPrintDialogWidgetGTK::OptionWidgetToString(GtkWidget *dropdown)
     return header_footer_tags[index];
 }
 
-const gint
+gint
 nsPrintDialogWidgetGTK::Run()
 {
   const gint response = gtk_dialog_run(GTK_DIALOG(dialog));
@@ -526,7 +527,8 @@ nsPrintDialogServiceGTK::Init()
 }
 
 NS_IMETHODIMP
-nsPrintDialogServiceGTK::Show(nsIDOMWindow *aParent, nsIPrintSettings *aSettings,
+nsPrintDialogServiceGTK::Show(nsPIDOMWindowOuter *aParent,
+                              nsIPrintSettings *aSettings,
                               nsIWebBrowserPrint *aWebBrowserPrint)
 {
   NS_PRECONDITION(aParent, "aParent must not be null");
@@ -561,7 +563,7 @@ nsPrintDialogServiceGTK::Show(nsIDOMWindow *aParent, nsIPrintSettings *aSettings
 }
 
 NS_IMETHODIMP
-nsPrintDialogServiceGTK::ShowPageSetup(nsIDOMWindow *aParent,
+nsPrintDialogServiceGTK::ShowPageSetup(nsPIDOMWindowOuter *aParent,
                                        nsIPrintSettings *aNSSettings)
 {
   NS_PRECONDITION(aParent, "aParent must not be null");

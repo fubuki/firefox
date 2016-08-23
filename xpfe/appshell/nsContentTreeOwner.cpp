@@ -57,24 +57,24 @@ using namespace mozilla;
 
 class nsSiteWindow : public nsIEmbeddingSiteWindow
 {
+  // nsSiteWindow shares a lifetime with nsContentTreeOwner, and proxies it's
+  // AddRef and Release calls to said object.
+  // When nsContentTreeOwner is destroyed, nsSiteWindow will be destroyed as well.
+  // nsContentTreeOwner is a friend class of nsSiteWindow such that it can call
+  // nsSiteWindow's destructor, which is private, as public destructors
+  // on reference counted classes are generally unsafe.
+  friend class nsContentTreeOwner;
+
 public:
   explicit nsSiteWindow(nsContentTreeOwner *aAggregator);
-  virtual ~nsSiteWindow();
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIEMBEDDINGSITEWINDOW
 
 private:
+  virtual ~nsSiteWindow();
   nsContentTreeOwner *mAggregator;
 };
-
-namespace mozilla {
-template<>
-struct HasDangerousPublicDestructor<nsSiteWindow>
-{
-  static const bool value = true;
-};
-}
 
 //*****************************************************************************
 //***    nsContentTreeOwner: Object Management
@@ -145,7 +145,8 @@ NS_IMETHODIMP nsContentTreeOwner::GetInterface(const nsIID& aIID, void** aSink)
     return NS_ERROR_FAILURE;
   }
 
-  if (aIID.Equals(NS_GET_IID(nsIDOMWindow))) {
+  if (aIID.Equals(NS_GET_IID(nsIDOMWindow)) ||
+      aIID.Equals(NS_GET_IID(nsPIDOMWindowOuter))) {
     NS_ENSURE_STATE(mXULWindow);
     nsCOMPtr<nsIDocShellTreeItem> shell;
     mXULWindow->GetPrimaryContentShell(getter_AddRefs(shell));
@@ -245,7 +246,7 @@ NS_IMETHODIMP nsContentTreeOwner::FindItemWithName(const char16_t* aName,
        xulWindow->GetPrimaryContentShell(aFoundItem);
      } else {
        // Get all the targetable windows from xulWindow and search them
-       nsRefPtr<nsXULWindow> win;
+       RefPtr<nsXULWindow> win;
        xulWindow->QueryInterface(NS_GET_IID(nsXULWindow), getter_AddRefs(win));
        if (win) {
          int32_t count = win->mTargetableShells.Count();
@@ -310,6 +311,27 @@ nsContentTreeOwner::GetPrimaryContentShell(nsIDocShellTreeItem** aShell)
 {
    NS_ENSURE_STATE(mXULWindow);
    return mXULWindow->GetPrimaryContentShell(aShell);
+}
+
+NS_IMETHODIMP
+nsContentTreeOwner::TabParentAdded(nsITabParent* aTab, bool aPrimary)
+{
+  NS_ENSURE_STATE(mXULWindow);
+  return mXULWindow->TabParentAdded(aTab, aPrimary);
+}
+
+NS_IMETHODIMP
+nsContentTreeOwner::TabParentRemoved(nsITabParent* aTab)
+{
+  NS_ENSURE_STATE(mXULWindow);
+  return mXULWindow->TabParentRemoved(aTab);
+}
+
+NS_IMETHODIMP
+nsContentTreeOwner::GetPrimaryTabParent(nsITabParent** aTab)
+{
+  NS_ENSURE_STATE(mXULWindow);
+  return mXULWindow->GetPrimaryTabParent(aTab);
 }
 
 NS_IMETHODIMP nsContentTreeOwner::SizeShellTo(nsIDocShellTreeItem* aShellItem,
@@ -600,6 +622,18 @@ NS_IMETHODIMP nsContentTreeOwner::GetUnscaledDevicePixelsPerCSSPixel(double* aSc
    return mXULWindow->GetUnscaledDevicePixelsPerCSSPixel(aScale);
 }
 
+NS_IMETHODIMP nsContentTreeOwner::GetDevicePixelsPerDesktopPixel(double* aScale)
+{
+   NS_ENSURE_STATE(mXULWindow);
+   return mXULWindow->GetDevicePixelsPerDesktopPixel(aScale);
+}
+
+NS_IMETHODIMP nsContentTreeOwner::SetPositionDesktopPix(int32_t aX, int32_t aY)
+{
+   NS_ENSURE_STATE(mXULWindow);
+   return mXULWindow->SetPositionDesktopPix(aX, aY);
+}
+
 NS_IMETHODIMP nsContentTreeOwner::SetPosition(int32_t aX, int32_t aY)
 {
    NS_ENSURE_STATE(mXULWindow);
@@ -809,7 +843,7 @@ NS_IMETHODIMP nsContentTreeOwner::SetTitle(const char16_t* aTitle)
     nsIDocument* document = docShellElement->OwnerDoc();
     ErrorResult rv;
     document->SetTitle(title, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   return mXULWindow->SetTitle(title.get());
@@ -819,7 +853,7 @@ NS_IMETHODIMP nsContentTreeOwner::SetTitle(const char16_t* aTitle)
 // nsContentTreeOwner: nsIWindowProvider
 //*****************************************************************************   
 NS_IMETHODIMP
-nsContentTreeOwner::ProvideWindow(nsIDOMWindow* aParent,
+nsContentTreeOwner::ProvideWindow(mozIDOMWindowProxy* aParent,
                                   uint32_t aChromeFlags,
                                   bool aCalledFromJS,
                                   bool aPositionSpecified,
@@ -828,9 +862,11 @@ nsContentTreeOwner::ProvideWindow(nsIDOMWindow* aParent,
                                   const nsAString& aName,
                                   const nsACString& aFeatures,
                                   bool* aWindowIsNew,
-                                  nsIDOMWindow** aReturn)
+                                  mozIDOMWindowProxy** aReturn)
 {
   NS_ENSURE_ARG_POINTER(aParent);
+
+  auto* parent = nsPIDOMWindowOuter::From(aParent);
   
   *aReturn = nullptr;
 
@@ -851,13 +887,13 @@ nsContentTreeOwner::ProvideWindow(nsIDOMWindow* aParent,
   // open a modal-type window, we're going to create a new <iframe mozbrowser>
   // and return its window here.
   nsCOMPtr<nsIDocShell> docshell = do_GetInterface(aParent);
-  if (docshell && docshell->GetIsInBrowserOrApp() &&
+  if (docshell && docshell->GetIsInMozBrowserOrApp() &&
       !(aChromeFlags & (nsIWebBrowserChrome::CHROME_MODAL |
                         nsIWebBrowserChrome::CHROME_OPENAS_DIALOG |
                         nsIWebBrowserChrome::CHROME_OPENAS_CHROME))) {
 
     BrowserElementParent::OpenWindowResult opened =
-      BrowserElementParent::OpenWindowInProcess(aParent, aURI, aName,
+      BrowserElementParent::OpenWindowInProcess(parent, aURI, aName,
                                                 aFeatures, aReturn);
 
     // If OpenWindowInProcess handled the open (by opening it or blocking the
@@ -888,7 +924,7 @@ nsContentTreeOwner::ProvideWindow(nsIDOMWindow* aParent,
   }
 
   int32_t openLocation =
-    nsWindowWatcher::GetWindowOpenLocation(aParent, aChromeFlags, aCalledFromJS,
+    nsWindowWatcher::GetWindowOpenLocation(parent, aChromeFlags, aCalledFromJS,
                                            aPositionSpecified, aSizeSpecified);
 
   if (openLocation != nsIBrowserDOMWindow::OPEN_NEWTAB &&
@@ -897,7 +933,7 @@ nsContentTreeOwner::ProvideWindow(nsIDOMWindow* aParent,
     return NS_OK;
   }
 
-  nsCOMPtr<nsIDOMWindow> domWin;
+  nsCOMPtr<mozIDOMWindowProxy> domWin;
   mXULWindow->GetWindowDOMWindow(getter_AddRefs(domWin));
   nsCOMPtr<nsIDOMChromeWindow> chromeWin = do_QueryInterface(domWin);
   if (!chromeWin) {
@@ -1048,7 +1084,7 @@ nsSiteWindow::SetFocus(void)
     nsCOMPtr<nsIDocShell> docshell;
     window->GetDocShell(getter_AddRefs(docshell));
     if (docShell) {
-      nsCOMPtr<nsIDOMWindow> domWindow(docShell->GetWindow());
+      nsCOMPtr<nsPIDOMWindowOuter> domWindow(docShell->GetWindow());
       if (domWindow)
         domWindow->Focus();
     }
@@ -1115,7 +1151,7 @@ nsSiteWindow::Blur(void)
       return NS_OK;
     }
 
-    nsCOMPtr<nsIDOMWindow> domWindow(docshell->GetWindow());
+    nsCOMPtr<nsPIDOMWindowOuter> domWindow = docshell->GetWindow();
     if (domWindow)
       domWindow->Focus();
   }

@@ -6,7 +6,7 @@
 // https://wiki.mozilla.org/Firefox3.1/PrivateBrowsing/TestPlan#History
 // http://developer.mozilla.org/en/Using_the_Places_history_service
 
-let visitedURIs = [
+var visitedURIs = [
   "http://www.test-link.com/",
   "http://www.test-typed.com/",
   "http://www.test-bookmark.com/",
@@ -17,7 +17,7 @@ let visitedURIs = [
   "http://www.test-download.com/"
 ].map(NetUtil.newURI.bind(NetUtil));
 
-add_task(function () {
+add_task(function* () {
   let windowsToClose = [];
   let placeItemsCount = 0;
 
@@ -27,18 +27,18 @@ add_task(function () {
     });
   });
 
-  yield promiseClearHistory();
+  yield PlacesTestUtils.clearHistory();
 
    // Ensure we wait for the default bookmarks import.
-  let bookmarksDeferred = Promise.defer();
-  waitForCondition(() => {
-    placeItemsCount = getPlacesItemsCount();
-    return placeItemsCount > 0
-  }, bookmarksDeferred.resolve, "Should have default bookmarks");
-  yield bookmarksDeferred.promise;
+  yield new Promise(resolve => {
+    waitForCondition(() => {
+      placeItemsCount = getPlacesItemsCount();
+      return placeItemsCount > 0
+    }, resolve, "Should have default bookmarks")
+  });
 
   // Create a handful of history items with various visit types
-  yield promiseAddVisits([
+  yield PlacesTestUtils.addVisits([
     { uri: visitedURIs[0], transition: TRANSITION_LINK },
     { uri: visitedURIs[1], transition: TRANSITION_TYPED },
     { uri: visitedURIs[2], transition: TRANSITION_BOOKMARK },
@@ -55,9 +55,9 @@ add_task(function () {
      "Check the total items count");
 
   function* testOnWindow(aIsPrivate, aCount) {
-    let deferred = Promise.defer();
-    whenNewWindowLoaded({ private: aIsPrivate }, deferred.resolve);
-    let win = yield deferred.promise;
+    let win = yield new Promise(resolve => {
+      whenNewWindowLoaded({ private: aIsPrivate }, resolve);
+    });
     windowsToClose.push(win);
 
     // History items should be retrievable by query
@@ -67,18 +67,16 @@ add_task(function () {
     let count = getPlacesItemsCount();
 
     // Create Bookmark
-    let bookmarkTitle = "title " + windowsToClose.length;
-    let bookmarkKeyword = "keyword " + windowsToClose.length;
-    let bookmarkUri = NetUtil.newURI("http://test-a-" + windowsToClose.length + ".com/");
+    let title = "title " + windowsToClose.length;
+    let keyword = "keyword " + windowsToClose.length;
+    let url = "http://test-a-" + windowsToClose.length + ".com/";
 
-    let id = PlacesUtils.bookmarks.insertBookmark(PlacesUtils.bookmarksMenuFolderId,
-                                                  bookmarkUri,
-                                                  PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                                  bookmarkTitle);
-    PlacesUtils.bookmarks.setKeywordForBookmark(id, bookmarkKeyword);
+    yield PlacesUtils.bookmarks.insert({ url, title,
+                                         parentGuid: PlacesUtils.bookmarks.menuGuid });
+    yield PlacesUtils.keywords.insert({ url, keyword });
     count++;
 
-    ok(PlacesUtils.bookmarks.isBookmarked(bookmarkUri),
+    ok((yield PlacesUtils.bookmarks.fetch({ url })),
        "Bookmark should be bookmarked, data should be retrievable");
     is(getPlacesItemsCount(), count,
        "Check the new bookmark items count");

@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,11 +27,11 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(Gamepad, mParent, mButtons)
 void
 Gamepad::UpdateTimestamp()
 {
-  nsCOMPtr<nsPIDOMWindow> newWindow(do_QueryInterface(mParent));
+  nsCOMPtr<nsPIDOMWindowInner> newWindow(do_QueryInterface(mParent));
   if(newWindow) {
     nsPerformance* perf = newWindow->GetPerformance();
     if (perf) {
-      mTimestamp =  perf->GetDOMTiming()->TimeStampToDOMHighRes(TimeStamp::Now());
+      mTimestamp =  perf->Now();
     }
   }
 }
@@ -44,7 +46,8 @@ Gamepad::Gamepad(nsISupports* aParent,
     mMapping(aMapping),
     mConnected(true),
     mButtons(aNumButtons),
-    mAxes(aNumAxes)
+    mAxes(aNumAxes),
+    mTimestamp(0)
 {
   for (unsigned i = 0; i < aNumButtons; i++) {
     mButtons.InsertElementAt(i, new GamepadButton(mParent));
@@ -112,7 +115,7 @@ Gamepad::SyncState(Gamepad* aOther)
 already_AddRefed<Gamepad>
 Gamepad::Clone(nsISupports* aParent)
 {
-  nsRefPtr<Gamepad> out =
+  RefPtr<Gamepad> out =
     new Gamepad(aParent, mID, mIndex, mMapping,
                 mButtons.Length(), mAxes.Length());
   out->SyncState(this);
@@ -120,9 +123,9 @@ Gamepad::Clone(nsISupports* aParent)
 }
 
 /* virtual */ JSObject*
-Gamepad::WrapObject(JSContext* aCx)
+Gamepad::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return GamepadBinding::Wrap(aCx, this);
+  return GamepadBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

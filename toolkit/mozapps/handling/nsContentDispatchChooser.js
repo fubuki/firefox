@@ -58,7 +58,7 @@ nsContentDispatchChooser.prototype =
     let SupportsString = Components.Constructor(
                            "@mozilla.org/supports-string;1",
                            "nsISupportsString");
-    for each (let text in arr) {
+    for (let text of arr) {
       let string = new SupportsString;
       string.data = text;
       params.appendElement(string, false);
@@ -66,7 +66,7 @@ nsContentDispatchChooser.prototype =
     params.appendElement(aHandler, false);
     params.appendElement(aURI, false);
     params.appendElement(aWindowContext, false);
-    
+
     var ww = Cc["@mozilla.org/embedcomp/window-watcher;1"].
              getService(Ci.nsIWindowWatcher);
     ww.openWindow(window,
@@ -85,6 +85,6 @@ nsContentDispatchChooser.prototype =
 ////////////////////////////////////////////////////////////////////////////////
 //// Module
 
-let components = [nsContentDispatchChooser];
+var components = [nsContentDispatchChooser];
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);

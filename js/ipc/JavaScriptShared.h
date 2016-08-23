@@ -9,16 +9,12 @@
 #define mozilla_jsipc_JavaScriptShared_h__
 
 #include "mozilla/dom/DOMTypes.h"
+#include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/jsipc/PJavaScript.h"
+#include "js/GCHashTable.h"
 #include "nsJSUtils.h"
-#include "nsFrameMessageManager.h"
 
 namespace mozilla {
-
-namespace dom {
-class CPOWManagerGetter;
-}
-
 namespace jsipc {
 
 class ObjectId {
@@ -36,7 +32,7 @@ class ObjectId {
             MOZ_CRASH("Bad CPOW Id");
     }
 
-    bool operator==(const ObjectId &other) const {
+    bool operator==(const ObjectId& other) const {
         bool equal = serialNumber() == other.serialNumber();
         MOZ_ASSERT_IF(equal, hasXrayWaiver() == other.hasXrayWaiver());
         return equal;
@@ -56,6 +52,10 @@ class ObjectId {
         return ObjectId(data >> FLAG_BITS, data & 1);
     }
 
+    // For use with StructGCPolicy.
+    void trace(JSTracer*) const {}
+    bool needsSweep() const { return false; }
+
   private:
     ObjectId() : serialNumber_(0), hasXrayWaiver_(false) {}
 
@@ -65,31 +65,19 @@ class ObjectId {
 
 class JavaScriptShared;
 
-class CpowIdHolder : public CpowHolder
-{
-  public:
-    CpowIdHolder(dom::CPOWManagerGetter *managerGetter, const InfallibleTArray<CpowEntry> &cpows);
-
-    bool ToObject(JSContext *cx, JS::MutableHandleObject objp);
-
-  private:
-    JavaScriptShared *js_;
-    const InfallibleTArray<CpowEntry> &cpows_;
-};
-
 // DefaultHasher<T> requires that T coerce to an integral type. We could make
 // ObjectId do that, but doing so would weaken our type invariants, so we just
 // reimplement it manually.
 struct ObjectIdHasher
 {
     typedef ObjectId Lookup;
-    static js::HashNumber hash(const Lookup &l) {
+    static js::HashNumber hash(const Lookup& l) {
         return l.serialize();
     }
-    static bool match(const ObjectId &k, const ObjectId &l) {
+    static bool match(const ObjectId& k, const ObjectId& l) {
         return k == l;
     }
-    static void rekey(ObjectId &k, const ObjectId& newKey) {
+    static void rekey(ObjectId& k, const ObjectId& newKey) {
         k = newKey;
     }
 };
@@ -97,17 +85,17 @@ struct ObjectIdHasher
 // Map ids -> JSObjects
 class IdToObjectMap
 {
-    typedef js::HashMap<ObjectId, JS::Heap<JSObject *>, ObjectIdHasher, js::SystemAllocPolicy> Table;
+    typedef js::HashMap<ObjectId, JS::Heap<JSObject*>, ObjectIdHasher, js::SystemAllocPolicy> Table;
 
   public:
     IdToObjectMap();
 
     bool init();
-    void trace(JSTracer *trc);
+    void trace(JSTracer* trc);
     void sweep();
 
-    bool add(ObjectId id, JSObject *obj);
-    JSObject *find(ObjectId id);
+    bool add(ObjectId id, JSObject* obj);
+    JSObject* find(ObjectId id);
     void remove(ObjectId id);
 
     void clear();
@@ -120,34 +108,33 @@ class IdToObjectMap
 // Map JSObjects -> ids
 class ObjectToIdMap
 {
-    typedef js::PointerHasher<JSObject *, 3> Hasher;
-    typedef js::HashMap<JSObject *, ObjectId, Hasher, js::SystemAllocPolicy> Table;
+    using Hasher = js::MovableCellHasher<JS::Heap<JSObject*>>;
+    using Table = js::GCHashMap<JS::Heap<JSObject*>, ObjectId, Hasher, js::SystemAllocPolicy>;
 
   public:
-    ObjectToIdMap();
+    explicit ObjectToIdMap(JSRuntime* rt);
     ~ObjectToIdMap();
 
     bool init();
-    void trace(JSTracer *trc);
+    void trace(JSTracer* trc);
     void sweep();
 
-    bool add(JSContext *cx, JSObject *obj, ObjectId id);
-    ObjectId find(JSObject *obj);
-    void remove(JSObject *obj);
+    bool add(JSContext* cx, JSObject* obj, ObjectId id);
+    ObjectId find(JSObject* obj);
+    void remove(JSObject* obj);
     void clear();
 
   private:
-    static void keyMarkCallback(JSTracer *trc, JSObject *key, void *data);
-
-    Table *table_;
+    JSRuntime* rt_;
+    Table table_;
 };
 
 class Logging;
 
-class JavaScriptShared
+class JavaScriptShared : public CPOWManager
 {
   public:
-    explicit JavaScriptShared(JSRuntime *rt);
+    explicit JavaScriptShared(JSRuntime* rt);
     virtual ~JavaScriptShared();
 
     bool init();
@@ -155,40 +142,40 @@ class JavaScriptShared
     void decref();
     void incref();
 
-    bool Unwrap(JSContext *cx, const InfallibleTArray<CpowEntry> &aCpows, JS::MutableHandleObject objp);
-    bool Wrap(JSContext *cx, JS::HandleObject aObj, InfallibleTArray<CpowEntry> *outCpows);
+    bool Unwrap(JSContext* cx, const InfallibleTArray<CpowEntry>& aCpows, JS::MutableHandleObject objp);
+    bool Wrap(JSContext* cx, JS::HandleObject aObj, InfallibleTArray<CpowEntry>* outCpows);
 
   protected:
-    bool toVariant(JSContext *cx, JS::HandleValue from, JSVariant *to);
-    bool fromVariant(JSContext *cx, const JSVariant &from, JS::MutableHandleValue to);
+    bool toVariant(JSContext* cx, JS::HandleValue from, JSVariant* to);
+    bool fromVariant(JSContext* cx, const JSVariant& from, JS::MutableHandleValue to);
 
-    bool toJSIDVariant(JSContext *cx, JS::HandleId from, JSIDVariant *to);
-    bool fromJSIDVariant(JSContext *cx, const JSIDVariant &from, JS::MutableHandleId to);
+    bool toJSIDVariant(JSContext* cx, JS::HandleId from, JSIDVariant* to);
+    bool fromJSIDVariant(JSContext* cx, const JSIDVariant& from, JS::MutableHandleId to);
 
-    bool toSymbolVariant(JSContext *cx, JS::Symbol *sym, SymbolVariant *symVarp);
-    JS::Symbol *fromSymbolVariant(JSContext *cx, SymbolVariant symVar);
+    bool toSymbolVariant(JSContext* cx, JS::Symbol* sym, SymbolVariant* symVarp);
+    JS::Symbol* fromSymbolVariant(JSContext* cx, SymbolVariant symVar);
 
-    bool fromDescriptor(JSContext *cx, JS::Handle<JSPropertyDescriptor> desc,
-                        PPropertyDescriptor *out);
-    bool toDescriptor(JSContext *cx, const PPropertyDescriptor &in,
-                      JS::MutableHandle<JSPropertyDescriptor> out);
+    bool fromDescriptor(JSContext* cx, JS::Handle<JS::PropertyDescriptor> desc,
+                        PPropertyDescriptor* out);
+    bool toDescriptor(JSContext* cx, const PPropertyDescriptor& in,
+                      JS::MutableHandle<JS::PropertyDescriptor> out);
 
-    bool toObjectOrNullVariant(JSContext *cx, JSObject *obj, ObjectOrNullVariant *objVarp);
-    JSObject *fromObjectOrNullVariant(JSContext *cx, ObjectOrNullVariant objVar);
+    bool toObjectOrNullVariant(JSContext* cx, JSObject* obj, ObjectOrNullVariant* objVarp);
+    JSObject* fromObjectOrNullVariant(JSContext* cx, ObjectOrNullVariant objVar);
 
-    bool convertIdToGeckoString(JSContext *cx, JS::HandleId id, nsString *to);
-    bool convertGeckoStringToId(JSContext *cx, const nsString &from, JS::MutableHandleId id);
+    bool convertIdToGeckoString(JSContext* cx, JS::HandleId id, nsString* to);
+    bool convertGeckoStringToId(JSContext* cx, const nsString& from, JS::MutableHandleId id);
 
-    virtual bool toObjectVariant(JSContext *cx, JSObject *obj, ObjectVariant *objVarp) = 0;
-    virtual JSObject *fromObjectVariant(JSContext *cx, ObjectVariant objVar) = 0;
+    virtual bool toObjectVariant(JSContext* cx, JSObject* obj, ObjectVariant* objVarp) = 0;
+    virtual JSObject* fromObjectVariant(JSContext* cx, ObjectVariant objVar) = 0;
 
-    static void ConvertID(const nsID &from, JSIID *to);
-    static void ConvertID(const JSIID &from, nsID *to);
+    static void ConvertID(const nsID& from, JSIID* to);
+    static void ConvertID(const JSIID& from, nsID* to);
 
-    JSObject *findCPOWById(const ObjectId &objId) {
+    JSObject* findCPOWById(const ObjectId& objId) {
         return cpows_.find(objId);
     }
-    JSObject *findObjectById(JSContext *cx, const ObjectId &objId);
+    JSObject* findObjectById(JSContext* cx, const ObjectId& objId);
 
     static bool LoggingEnabled() { return sLoggingEnabled; }
     static bool StackLoggingEnabled() { return sStackLoggingEnabled; }
@@ -197,10 +184,10 @@ class JavaScriptShared
 
     virtual bool isParent() = 0;
 
-    virtual JSObject *scopeForTargetObjects() = 0;
+    virtual JSObject* scopeForTargetObjects() = 0;
 
   protected:
-    JSRuntime *rt_;
+    JSRuntime* rt_;
     uintptr_t refcount_;
 
     IdToObjectMap objects_;
@@ -225,7 +212,7 @@ class JavaScriptShared
     // For the object-to-id map, we just keep two maps, one for each type.
     ObjectToIdMap unwaivedObjectIds_;
     ObjectToIdMap waivedObjectIds_;
-    ObjectToIdMap &objectIdMap(bool waiver) {
+    ObjectToIdMap& objectIdMap(bool waiver) {
         return waiver ? waivedObjectIds_ : unwaivedObjectIds_;
     }
 

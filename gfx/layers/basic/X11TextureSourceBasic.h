@@ -8,6 +8,7 @@
 
 #include "mozilla/layers/BasicCompositor.h"
 #include "mozilla/layers/TextureHostBasic.h"
+#include "mozilla/layers/X11TextureHost.h"
 #include "mozilla/gfx/2D.h"
 
 namespace mozilla {
@@ -18,22 +19,26 @@ class BasicCompositor;
 // TextureSource for Xlib-backed surfaces.
 class X11TextureSourceBasic
   : public TextureSourceBasic
-  , public TextureSource
+  , public X11TextureSource
 {
 public:
   X11TextureSourceBasic(BasicCompositor* aCompositor, gfxXlibSurface* aSurface);
 
-  virtual X11TextureSourceBasic* AsSourceBasic() MOZ_OVERRIDE { return this; }
+  virtual const char* Name() const override { return "X11TextureSourceBasic"; }
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE;
+  virtual X11TextureSourceBasic* AsSourceBasic() override { return this; }
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
+  virtual gfx::IntSize GetSize() const override;
 
-  virtual gfx::SourceSurface* GetSurface(gfx::DrawTarget* aTarget) MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const override;
 
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE { }
+  virtual gfx::SourceSurface* GetSurface(gfx::DrawTarget* aTarget) override;
 
-  virtual void SetCompositor(Compositor* aCompositor);
+  virtual void DeallocateDeviceData() override { }
+
+  virtual void SetCompositor(Compositor* aCompositor) override;
+
+  virtual void Updated() override { }
 
   static gfx::SurfaceFormat ContentTypeToSurfaceFormat(gfxContentType aType);
 

@@ -2,24 +2,17 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include ../../shared/jar.inc.mn
+
 toolkit.jar:
-% skin global classic/1.0 %skin/classic/global/
   skin/classic/global/10pct_transparent_grey.png
   skin/classic/global/50pct_transparent_grey.png
-  skin/classic/global/about.css                                      (../../windows/global/about.css)
-  skin/classic/global/aboutCache.css                                 (../../windows/global/aboutCache.css)
-  skin/classic/global/aboutCacheEntry.css                            (../../windows/global/aboutCacheEntry.css)
-  skin/classic/global/aboutMemory.css                                (../../windows/global/aboutMemory.css)
-  skin/classic/global/aboutReader.css                                (../../windows/global/aboutReader.css)
-  skin/classic/global/aboutSupport.css                               (../../windows/global/aboutSupport.css)
-  skin/classic/global/appPicker.css                                  (../../windows/global/appPicker.css)
   skin/classic/global/arrow.css
   skin/classic/global/autocomplete.css
   skin/classic/global/button.css
   skin/classic/global/checkbox.css
   skin/classic/global/colorpicker.css
   skin/classic/global/commonDialog.css
-* skin/classic/global/config.css
   skin/classic/global/customizeToolbar.css
   skin/classic/global/dialog.css
   skin/classic/global/dropmarker.css
@@ -29,7 +22,6 @@ toolkit.jar:
 * skin/classic/global/findBar.css
 * skin/classic/global/global.css
   skin/classic/global/groupbox.css
-* skin/classic/global/inContentUI.css
   skin/classic/global/linkTree.css
   skin/classic/global/listbox.css
   skin/classic/global/menu.css
@@ -37,7 +29,6 @@ toolkit.jar:
 * skin/classic/global/notification.css
   skin/classic/global/netError.css
   skin/classic/global/numberbox.css
-  skin/classic/global/passwordmgr.css
   skin/classic/global/popup.css
   skin/classic/global/preferences.css
   skin/classic/global/progressmeter.css
@@ -59,7 +50,6 @@ toolkit.jar:
 * skin/classic/global/viewbuttons.css
   skin/classic/global/wizard.css
   skin/classic/global/alerts/alert.css                               (alerts/alert.css)
-  skin/classic/global/alerts/notification-48.png                     (alerts/notification-48.png)
   skin/classic/global/arrow/arrow-dn-dis.gif                         (arrow/arrow-dn-dis.gif)
   skin/classic/global/arrow/arrow-dn-dis.png                         (arrow/arrow-dn-dis.png)
   skin/classic/global/arrow/arrow-dn-sharp.gif                       (arrow/arrow-dn-sharp.gif)
@@ -89,7 +79,6 @@ toolkit.jar:
 * skin/classic/global/console/console.css                            (console/console.css)
   skin/classic/global/dirListing/dirListing.css                      (dirListing/dirListing.css)
   skin/classic/global/dirListing/folder.png                          (dirListing/folder.png)
-  skin/classic/global/dirListing/local.png                           (dirListing/folder.png)
   skin/classic/global/dirListing/remote.png                          (dirListing/remote.png)
   skin/classic/global/dirListing/up.png                              (dirListing/up.png)
   skin/classic/global/icons/autocomplete-dropmarker.png              (icons/autocomplete-dropmarker.png)
@@ -113,7 +102,8 @@ toolkit.jar:
   skin/classic/global/icons/information-32.png                       (icons/information-32.png)
   skin/classic/global/icons/information-64.png                       (icons/information-64.png)
   skin/classic/global/icons/information-large.png                    (icons/information-large.png)
-  skin/classic/global/icons/loading_16.png                           (icons/loading_16.png)
+  skin/classic/global/icons/loading.png                              (icons/loading.png)
+  skin/classic/global/icons/loading@2x.png                           (icons/loading@2x.png)
   skin/classic/global/icons/menulist-dropmarker.png                  (icons/menulist-dropmarker.png)
   skin/classic/global/icons/notfound.png                             (icons/notfound.png)
   skin/classic/global/icons/panebutton-active.png                    (icons/panebutton-active.png)
@@ -124,35 +114,24 @@ toolkit.jar:
   skin/classic/global/icons/resizer-rtl.png                          (icons/resizer-rtl.png)
   skin/classic/global/icons/resizer-rtl@2x.png                       (icons/resizer-rtl@2x.png)
   skin/classic/global/icons/search-textbox.png                       (icons/search-textbox.png)
-  skin/classic/global/icons/searchfield-regular-cancel.png           (icons/searchfield-regular-cancel.png)
-  skin/classic/global/icons/searchfield-small-cancel.png             (icons/searchfield-small-cancel.png)
+  skin/classic/global/icons/searchfield-cancel.svg                   (icons/searchfield-cancel.svg)
   skin/classic/global/icons/tabprompts-bgtexture.png                 (icons/tabprompts-bgtexture.png)
   skin/classic/global/icons/warning-16.png                           (icons/warning-16.png)
-  skin/classic/global/icons/warning-24.png                           (icons/warning-24.png)
   skin/classic/global/icons/warning-32.png                           (icons/warning-32.png)
   skin/classic/global/icons/warning-64.png                           (icons/warning-64.png)
   skin/classic/global/icons/warning-large.png                        (icons/warning-large.png)
   skin/classic/global/icons/error-16.png                             (icons/error-16.png)
-  skin/classic/global/icons/error-24.png                             (icons/error-24.png)
   skin/classic/global/icons/error-64.png                             (icons/error-64.png)
   skin/classic/global/icons/error-large.png                          (icons/error-large.png)
   skin/classic/global/icons/Error.png                                (icons/Error.png)
   skin/classic/global/icons/question-16.png                          (icons/question-16.png)
-  skin/classic/global/icons/question-24.png                          (icons/question-24.png)
   skin/classic/global/icons/question-32.png                          (icons/question-32.png)
   skin/classic/global/icons/question-64.png                          (icons/question-64.png)
   skin/classic/global/icons/question-large.png                       (icons/question-large.png)
   skin/classic/global/icons/sslWarning.png                           (icons/sslWarning.png)
-  skin/classic/global/icons/webapps-16.png                           (icons/webapps-16.png)
-  skin/classic/global/icons/webapps-16@2x.png                        (icons/webapps-16@2x.png)
-  skin/classic/global/icons/webapps-64.png                           (icons/webapps-64.png)
-  skin/classic/global/inContentUI/background-texture.png             (inContentUI/background-texture.png)
   skin/classic/global/notification/close.png                         (notification/close.png)
-  skin/classic/global/notification/critical-bar-background.png       (notification/critical-bar-background.png)
   skin/classic/global/notification/error-icon.png                    (notification/error-icon.png)
-  skin/classic/global/notification/info-bar-background.png           (notification/info-bar-background.png)
   skin/classic/global/notification/info-icon.png                     (notification/info-icon.png)
-  skin/classic/global/notification/warning-bar-background.png        (notification/warning-bar-background.png)
   skin/classic/global/notification/warning-icon.png                  (notification/warning-icon.png)
   skin/classic/global/media/TopLevelImageDocument.css                (media/TopLevelImageDocument.css)
   skin/classic/global/media/TopLevelVideoDocument.css                (media/TopLevelVideoDocument.css)
@@ -184,15 +163,8 @@ toolkit.jar:
   skin/classic/global/media/volume-full@2x.png                       (media/volume-full@2x.png)
   skin/classic/global/media/clicktoplay-bgtexture.png                (media/clicktoplay-bgtexture.png)
   skin/classic/global/media/videoClickToPlayButton.svg               (media/videoClickToPlayButton.svg)
-  skin/classic/global/menu/shared-menu-check.png                     (../../shared/menu-check.png)
-  skin/classic/global/menu/shared-menu-check@2x.png                  (../../shared/menu-check@2x.png)
 * skin/classic/global/in-content/common.css                          (in-content/common.css)
-  skin/classic/global/in-content/check.svg                           (../../shared/in-content/check.svg)
-  skin/classic/global/in-content/dropdown.svg                        (../../shared/in-content/dropdown.svg)
-  skin/classic/global/in-content/help-glyph.svg                      (../../shared/in-content/help-glyph.svg)
-  skin/classic/global/in-content/radio.svg                           (../../shared/in-content/radio.svg)
-  skin/classic/global/in-content/sorter.png                          (../../shared/in-content/sorter.png)
-  skin/classic/global/in-content/sorter@2x.png                       (../../shared/in-content/sorter@2x.png)
+* skin/classic/global/in-content/info-pages.css                      (in-content/info-pages.css)
   skin/classic/global/scale/scale-tray-horiz.gif                     (scale/scale-tray-horiz.gif)
   skin/classic/global/scale/scale-tray-vert.gif                      (scale/scale-tray-vert.gif)
   skin/classic/global/splitter/dimple.png                            (splitter/dimple.png)
@@ -202,6 +174,14 @@ toolkit.jar:
   skin/classic/global/splitter/grip-right.gif                        (splitter/grip-right.gif)
   skin/classic/global/toolbar/spring.png                             (toolbar/spring.png)
   skin/classic/global/toolbar/toolbar-separator.png                  (toolbar/toolbar-separator.png)
+  skin/classic/global/tree/arrow-disclosure.svg                      (tree/arrow-disclosure.svg)
   skin/classic/global/tree/columnpicker.gif                          (tree/columnpicker.gif)
   skin/classic/global/tree/folder.png                                (tree/folder.png)
   skin/classic/global/tree/folder@2x.png                             (tree/folder@2x.png)
+
+#if MOZ_BUILD_APP == browser
+[browser/extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}] chrome.jar:
+#elif MOZ_SEPARATE_MANIFEST_FOR_THEME_OVERRIDES
+[extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}] chrome.jar:
+#endif
+% override chrome://global/skin/dirListing/local.png                 chrome://global/skin/dirListing/folder.png

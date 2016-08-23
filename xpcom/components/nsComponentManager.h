@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +15,7 @@
 #include "nsIMemoryReporter.h"
 #include "nsIServiceManager.h"
 #include "nsIFile.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Module.h"
 #include "mozilla/ModuleLoader.h"
@@ -23,7 +25,7 @@
 #include "nsIFactory.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "prtime.h"
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
@@ -117,13 +119,13 @@ public:
 
 private:
   mozilla::Mutex mMutex;
-  volatile PRThread* mOwnerThread;
+  mozilla::Atomic<PRThread*, mozilla::Relaxed> mOwnerThread;
 };
 
 typedef mozilla::BaseAutoLock<SafeMutex> SafeMutexAutoLock;
 typedef mozilla::BaseAutoUnlock<SafeMutex> SafeMutexAutoUnlock;
 
-class nsComponentManagerImpl MOZ_FINAL
+class nsComponentManagerImpl final
   : public nsIComponentManager
   , public nsIServiceManager
   , public nsSupportsWeakReference
@@ -330,7 +332,7 @@ public:
 
   nsTArray<PendingServiceInfo> mPendingServices;
 
-  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf);
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 #ifdef MOZ_B2G_LOADER
   // Preload XPT interface info for B2G loader.

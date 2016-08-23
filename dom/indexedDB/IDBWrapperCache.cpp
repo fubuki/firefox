@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,13 +11,8 @@
 #include "nsIScriptGlobalObject.h"
 #include "nsPIDOMWindow.h"
 
-#ifdef DEBUG
-#include "nsCycleCollector.h"
-#endif
-
 namespace mozilla {
 namespace dom {
-namespace indexedDB {
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(IDBWrapperCache)
 
@@ -52,7 +47,7 @@ IDBWrapperCache::IDBWrapperCache(DOMEventTargetHelper* aOwner)
   : DOMEventTargetHelper(aOwner), mScriptOwner(nullptr)
 { }
 
-IDBWrapperCache::IDBWrapperCache(nsPIDOMWindow* aOwner)
+IDBWrapperCache::IDBWrapperCache(nsPIDOMWindowInner* aOwner)
   : DOMEventTargetHelper(aOwner), mScriptOwner(nullptr)
 { }
 
@@ -76,11 +71,10 @@ IDBWrapperCache::SetScriptOwner(JSObject* aScriptOwner)
 void
 IDBWrapperCache::AssertIsRooted() const
 {
-  MOZ_ASSERT(cyclecollector::IsJSHolder(const_cast<IDBWrapperCache*>(this)),
+  MOZ_ASSERT(IsJSHolder(const_cast<IDBWrapperCache*>(this)),
              "Why aren't we rooted?!");
 }
 #endif
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla

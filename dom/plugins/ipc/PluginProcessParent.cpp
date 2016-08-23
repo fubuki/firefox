@@ -14,6 +14,10 @@
 #include "mozilla/Telemetry.h"
 #include "nsThreadUtils.h"
 
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+#include "nsDirectoryServiceDefs.h"
+#endif
+
 using std::vector;
 using std::string;
 
@@ -33,6 +37,7 @@ struct RunnableMethodTraits<PluginProcessParent>
 PluginProcessParent::PluginProcessParent(const std::string& aPluginFilePath) :
     GeckoChildProcessHost(GeckoProcessType_Plugin),
     mPluginFilePath(aPluginFilePath),
+    mTaskFactory(this),
     mMainMsgLoop(MessageLoop::current()),
     mRunCompleteTaskImmediately(false)
 {
@@ -42,14 +47,97 @@ PluginProcessParent::~PluginProcessParent()
 {
 }
 
+#if defined(XP_WIN) && defined(MOZ_SANDBOX)
+static void
+AddSandboxAllowedFile(vector<std::wstring>& aAllowedFiles, nsIProperties* aDirSvc,
+                      const char* aDir, const nsAString& aSuffix = EmptyString())
+{
+    nsCOMPtr<nsIFile> userDir;
+    nsresult rv = aDirSvc->Get(aDir, NS_GET_IID(nsIFile), getter_AddRefs(userDir));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    nsAutoString userDirPath;
+    rv = userDir->GetPath(userDirPath);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    if (!aSuffix.IsEmpty()) {
+        userDirPath.Append(aSuffix);
+    }
+    aAllowedFiles.push_back(std::wstring(userDirPath.get()));
+    return;
+}
+
+static void
+AddSandboxAllowedFiles(int32_t aSandboxLevel,
+                       vector<std::wstring>& aAllowedFilesRead,
+                       vector<std::wstring>& aAllowedFilesReadWrite,
+                       vector<std::wstring>& aAllowedDirectories)
+{
+    if (aSandboxLevel < 2) {
+        return;
+    }
+
+    nsresult rv;
+    nsCOMPtr<nsIProperties> dirSvc =
+        do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    // Higher than level 2 currently removes the users own rights.
+    if (aSandboxLevel > 2) {
+        AddSandboxAllowedFile(aAllowedFilesRead, dirSvc, NS_WIN_HOME_DIR);
+        AddSandboxAllowedFile(aAllowedFilesRead, dirSvc, NS_WIN_HOME_DIR,
+                              NS_LITERAL_STRING("\\*"));
+    }
+
+    // Level 2 and above is now using low integrity, so we need to give write
+    // access to the Flash directories.
+    // This should be made Flash specific (Bug 1171396).
+    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_WIN_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Macromedia\\Flash Player\\*"));
+    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_WIN_LOCAL_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Macromedia\\Flash Player\\*"));
+    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_WIN_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Adobe\\Flash Player\\*"));
+
+    // Access also has to be given to create the parent directories as they may
+    // not exist.
+    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Macromedia"));
+    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Macromedia\\Flash Player"));
+    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_LOCAL_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Macromedia"));
+    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_LOCAL_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Macromedia\\Flash Player"));
+    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Adobe"));
+    AddSandboxAllowedFile(aAllowedDirectories, dirSvc, NS_WIN_APPDATA_DIR,
+                          NS_LITERAL_STRING("\\Adobe\\Flash Player"));
+
+    // Write access to the Temp directory is needed in some mochitest crash
+    // tests.
+    // Bug 1171393 tracks removing this requirement.
+    AddSandboxAllowedFile(aAllowedFilesReadWrite, dirSvc, NS_OS_TEMP_DIR,
+                          NS_LITERAL_STRING("\\*"));
+}
+#endif
+
 bool
 PluginProcessParent::Launch(mozilla::UniquePtr<LaunchCompleteTask> aLaunchCompleteTask,
-                            bool aEnableSandbox)
+                            int32_t aSandboxLevel)
 {
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
-    mEnableNPAPISandbox = aEnableSandbox;
+    mSandboxLevel = aSandboxLevel;
+    AddSandboxAllowedFiles(mSandboxLevel, mAllowedFilesRead,
+                           mAllowedFilesReadWrite, mAllowedDirectories);
 #else
-    if (aEnableSandbox) {
+    if (aSandboxLevel != 0) {
         MOZ_ASSERT(false,
                    "Can't enable an NPAPI process sandbox for platform/build.");
     }
@@ -82,6 +170,9 @@ PluginProcessParent::Launch(mozilla::UniquePtr<LaunchCompleteTask> aLaunchComple
         }
         else if (base::PROCESS_ARCH_ARM & pluginLibArchitectures & containerArchitectures) {
           selectedArchitecture = base::PROCESS_ARCH_ARM;
+        }
+        else if (base::PROCESS_ARCH_MIPS & pluginLibArchitectures & containerArchitectures) {
+          selectedArchitecture = base::PROCESS_ARCH_MIPS;
         }
         else {
             return false;
@@ -156,7 +247,7 @@ PluginProcessParent::OnChannelConnected(int32_t peer_pid)
     GeckoChildProcessHost::OnChannelConnected(peer_pid);
     if (mLaunchCompleteTask && !mRunCompleteTaskImmediately) {
         mLaunchCompleteTask->SetLaunchSucceeded();
-        mMainMsgLoop->PostTask(FROM_HERE, NewRunnableMethod(this,
+        mMainMsgLoop->PostTask(FROM_HERE, mTaskFactory.NewRunnableMethod(
                                    &PluginProcessParent::RunLaunchCompleteTask));
     }
 }
@@ -166,7 +257,7 @@ PluginProcessParent::OnChannelError()
 {
     GeckoChildProcessHost::OnChannelError();
     if (mLaunchCompleteTask && !mRunCompleteTaskImmediately) {
-        mMainMsgLoop->PostTask(FROM_HERE, NewRunnableMethod(this,
+        mMainMsgLoop->PostTask(FROM_HERE, mTaskFactory.NewRunnableMethod(
                                    &PluginProcessParent::RunLaunchCompleteTask));
     }
 }

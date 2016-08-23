@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -87,7 +89,7 @@ public:
    * Boolean value corresponding to whether the file location is initialized
    * or not.
    */
-  operator bool() const { return mBaseFile || mBaseZip; }
+  explicit operator bool() const { return mBaseFile || mBaseZip; }
 
   /**
    * Returns whether another FileLocation points to the same resource
@@ -112,7 +114,7 @@ public:
   protected:
     friend class FileLocation;
     nsZipItem* mItem;
-    nsRefPtr<nsZipArchive> mZip;
+    RefPtr<nsZipArchive> mZip;
     mozilla::AutoFDClose mFd;
   };
 
@@ -123,7 +125,7 @@ public:
   nsresult GetData(Data& aData);
 private:
   nsCOMPtr<nsIFile> mBaseFile;
-  nsRefPtr<nsZipArchive> mBaseZip;
+  RefPtr<nsZipArchive> mBaseZip;
   nsCString mPath;
 }; /* class FileLocation */
 

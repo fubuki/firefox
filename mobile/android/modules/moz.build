@@ -9,13 +9,15 @@ EXTRA_JS_MODULES += [
     'AndroidLog.jsm',
     'ContactService.jsm',
     'dbg-browser-actors.js',
+    'DelayedInit.jsm',
     'DownloadNotifications.jsm',
+    'FxAccountsWebChannel.jsm',
     'HelperApps.jsm',
     'Home.jsm',
     'HomeProvider.jsm',
+    'JavaAddonManager.jsm',
     'JNI.jsm',
     'LightweightThemeConsumer.jsm',
-    'MatchstickApp.jsm',
     'MediaPlayerApp.jsm',
     'Messaging.jsm',
     'NetErrorHelper.jsm',
@@ -23,13 +25,10 @@ EXTRA_JS_MODULES += [
     'OrderedBroadcast.jsm',
     'PageActions.jsm',
     'Prompt.jsm',
+    'RuntimePermissions.jsm',
     'Sanitizer.jsm',
     'SharedPreferences.jsm',
+    'Snackbars.jsm',
     'SSLExceptions.jsm',
     'TabMirror.jsm',
-    'WebappManagerWorker.js',
-]
-
-EXTRA_PP_JS_MODULES += [
-    'WebappManager.jsm',
 ]

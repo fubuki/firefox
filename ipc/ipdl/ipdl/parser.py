@@ -123,6 +123,7 @@ reserved = set((
         'child',
         'class',
         'compress',
+        'compressall',
         '__delete__',
         'delete',                       # reserve 'delete' to prevent its use
         'from',
@@ -498,7 +499,7 @@ def p_MessageDirectionLabel(p):
         assert 0
 
 def p_MessageDecl(p):
-    """MessageDecl : OptionalSendSemanticsQual MessageBody"""
+    """MessageDecl : SendSemanticsQual MessageBody"""
     msg = p[2]
     msg.priority = p[1][0]
     msg.sendSemantics = p[1][1]
@@ -546,12 +547,17 @@ def p_MessageOutParams(p):
         p[0] = p[3]
 
 def p_OptionalMessageCompress(p):
-    """OptionalMessageCompress : COMPRESS
+    """OptionalMessageCompress : MessageCompress
                                | """
     if 1 == len(p):
         p[0] = ''
     else:
-        p[0] = 'compress'
+        p[0] = p[1]
+
+def p_MessageCompress(p):
+    """MessageCompress : COMPRESS
+                       | COMPRESSALL"""
+    p[0] = p[1]
 
 ##--------------------
 ## State machine
@@ -629,12 +635,6 @@ def p_Priority(p):
              'high': 2,
              'urgent': 3}
     p[0] = prios[p[1]]
-
-def p_OptionalSendSemanticsQual(p):
-    """OptionalSendSemanticsQual : SendSemanticsQual
-                                 | """
-    if 2 == len(p): p[0] = p[1]
-    else:           p[0] = [ NORMAL_PRIORITY, ASYNC ]
 
 def p_SendSemanticsQual(p):
     """SendSemanticsQual : ASYNC

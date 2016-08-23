@@ -1,3 +1,4 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* vim: set ts=8 sts=4 et sw=4 tw=80:
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -25,7 +26,6 @@
 #include "nsIChannel.h"
 #include "nsIClassInfo.h"
 #include "nsIDirectoryService.h"
-#include "nsIJSRuntimeService.h"
 #include "nsIPrincipal.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIURI.h"
@@ -46,6 +46,8 @@ using mozilla::ipc::XPCShellEnvironment;
 using mozilla::ipc::TestShellChild;
 using mozilla::ipc::TestShellParent;
 using mozilla::AutoSafeJSContext;
+using mozilla::dom::AutoJSAPI;
+using mozilla::dom::AutoEntryScript;
 using namespace JS;
 
 namespace {
@@ -73,8 +75,11 @@ private:
 inline XPCShellEnvironment*
 Environment(Handle<JSObject*> global)
 {
-    AutoSafeJSContext cx;
-    JSAutoCompartment ac(cx, global);
+    AutoJSAPI jsapi;
+    if (!jsapi.Init(global)) {
+        return nullptr;
+    }
+    JSContext* cx = jsapi.cx();
     Rooted<Value> v(cx);
     if (!JS_GetProperty(cx, global, "__XPCShellEnvironment", &v) ||
         !v.get().isDouble())
@@ -149,6 +154,11 @@ Load(JSContext *cx,
     if (!obj)
         return false;
 
+    if (!JS_IsGlobalObject(obj)) {
+        JS_ReportError(cx, "Trying to load() into a non-global object");
+        return false;
+    }
+
     for (unsigned i = 0; i < args.length(); i++) {
         JS::Rooted<JSString*> str(cx, JS::ToString(cx, args[i]));
         if (!str)
@@ -161,17 +171,16 @@ Load(JSContext *cx,
             JS_ReportError(cx, "cannot open file '%s' for reading", filename.ptr());
             return false;
         }
-        Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
         JS::CompileOptions options(cx);
         options.setUTF8(true)
                .setFileAndLine(filename.ptr(), 1);
         JS::Rooted<JSScript*> script(cx);
-        bool ok = JS::Compile(cx, obj, options, file, &script);
+        bool ok = JS::Compile(cx, options, file, &script);
         fclose(file);
         if (!ok)
             return false;
 
-        if (!JS_ExecuteScript(cx, obj, script)) {
+        if (!JS_ExecuteScript(cx, script)) {
             return false;
         }
     }
@@ -189,15 +198,6 @@ Version(JSContext *cx,
     if (args.get(0).isInt32())
         JS_SetVersionForCompartment(js::GetContextCompartment(cx),
                                     JSVersion(args[0].toInt32()));
-    return true;
-}
-
-static bool
-BuildDate(JSContext *cx, unsigned argc, JS::Value *vp)
-{
-    JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-    fprintf(stdout, "built on %s at %s\n", __DATE__, __TIME__);
-    args.rval().setUndefined();
     return true;
 }
 
@@ -270,7 +270,6 @@ const JSFunctionSpec gGlobalFunctions[] =
     JS_FS("load",            Load,           1,0),
     JS_FS("quit",            Quit,           0,0),
     JS_FS("version",         Version,        1,0),
-    JS_FS("build",           BuildDate,      0,0),
     JS_FS("dumpXPC",         DumpXPC,        1,0),
     JS_FS("dump",            Dump,           1,0),
     JS_FS("gc",              GC,             0,0),
@@ -294,7 +293,6 @@ typedef enum JSShellErrNum
 
 void
 XPCShellEnvironment::ProcessFile(JSContext *cx,
-                                 JS::Handle<JSObject*> obj,
                                  const char *filename,
                                  FILE *file,
                                  bool forceTTY)
@@ -306,6 +304,9 @@ XPCShellEnvironment::ProcessFile(JSContext *cx,
     bool ok, hitEOF;
     char *bufp, buffer[4096];
     JSString *str;
+
+    JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
+    MOZ_ASSERT(global);
 
     if (forceTTY) {
         file = stdin;
@@ -329,15 +330,12 @@ XPCShellEnvironment::ProcessFile(JSContext *cx,
         }
         ungetc(ch, file);
 
-        JSAutoRequest ar(cx);
-        JSAutoCompartment ac(cx, obj);
-
         JS::CompileOptions options(cx);
         options.setUTF8(true)
                .setFileAndLine(filename, 1);
         JS::Rooted<JSScript*> script(cx);
-        if (JS::Compile(cx, obj, options, file, &script))
-            (void)JS_ExecuteScript(cx, obj, script, &result);
+        if (JS::Compile(cx, options, file, &script))
+            (void)JS_ExecuteScript(cx, script, &result);
 
         return;
     }
@@ -348,9 +346,6 @@ XPCShellEnvironment::ProcessFile(JSContext *cx,
     do {
         bufp = buffer;
         *bufp = '\0';
-
-        JSAutoRequest ar(cx);
-        JSAutoCompartment ac(cx, obj);
 
         /*
          * Accumulate lines until we get a 'compilable unit' - one that either
@@ -366,18 +361,18 @@ XPCShellEnvironment::ProcessFile(JSContext *cx,
             }
             bufp += strlen(bufp);
             lineno++;
-        } while (!JS_BufferIsCompilableUnit(cx, obj, buffer, strlen(buffer)));
+        } while (!JS_BufferIsCompilableUnit(cx, global, buffer, strlen(buffer)));
 
         /* Clear any pending exception from previous failed compiles.  */
         JS_ClearPendingException(cx);
         JS::CompileOptions options(cx);
         options.setFileAndLine("typein", startline);
         JS::Rooted<JSScript*> script(cx);
-        if (JS_CompileScript(cx, obj, buffer, strlen(buffer), options, &script)) {
+        if (JS_CompileScript(cx, buffer, strlen(buffer), options, &script)) {
             JSErrorReporter older;
 
-            ok = JS_ExecuteScript(cx, obj, script, &result);
-            if (ok && result != JSVAL_VOID) {
+            ok = JS_ExecuteScript(cx, script, &result);
+            if (ok && !result.isUndefined()) {
                 /* Suppress error reports from JS::ToString(). */
                 older = JS_SetErrorReporter(JS_GetRuntime(cx), nullptr);
                 str = JS::ToString(cx, result);
@@ -461,15 +456,19 @@ XPCShellEnvironment::XPCShellEnvironment()
 
 XPCShellEnvironment::~XPCShellEnvironment()
 {
+    if (GetGlobalObject()) {
+        AutoJSAPI jsapi;
+        if (!jsapi.Init(GetGlobalObject())) {
+            return;
+        }
+        JSContext* cx = jsapi.cx();
+        Rooted<JSObject*> global(cx, GetGlobalObject());
 
-    AutoSafeJSContext cx;
-    Rooted<JSObject*> global(cx, GetGlobalObject());
-    if (global) {
         {
             JSAutoCompartment ac(cx, global);
             JS_SetAllNonReservedSlotsToUndefined(cx, global);
         }
-        mGlobalHolder.Release();
+        mGlobalHolder.reset();
 
         JSRuntime *rt = JS_GetRuntime(cx);
         JS_GC(rt);
@@ -485,23 +484,13 @@ XPCShellEnvironment::Init()
     // is unbuffered by default
     setbuf(stdout, 0);
 
-    nsCOMPtr<nsIJSRuntimeService> rtsvc =
-        do_GetService("@mozilla.org/js/xpc/RuntimeService;1");
-    if (!rtsvc) {
-        NS_ERROR("failed to get nsJSRuntimeService!");
-        return false;
-    }
-
-    JSRuntime *rt;
-    if (NS_FAILED(rtsvc->GetRuntime(&rt)) || !rt) {
+    JSRuntime *rt = xpc::GetJSRuntime();
+    if (!rt) {
         NS_ERROR("failed to get JSRuntime from nsJSRuntimeService!");
         return false;
     }
 
-    if (!mGlobalHolder.Hold(rt)) {
-        NS_ERROR("Can't protect global object!");
-        return false;
-    }
+    mGlobalHolder.init(rt);
 
     AutoSafeJSContext cx;
 
@@ -526,7 +515,7 @@ XPCShellEnvironment::Init()
         fprintf(stderr, "+++ Failed to get ScriptSecurityManager service, running without principals");
     }
 
-    nsRefPtr<BackstagePass> backstagePass;
+    RefPtr<BackstagePass> backstagePass;
     rv = NS_NewBackstagePass(getter_AddRefs(backstagePass));
     if (NS_FAILED(rv)) {
         NS_ERROR("Failed to create backstage pass!");
@@ -534,8 +523,11 @@ XPCShellEnvironment::Init()
     }
 
     JS::CompartmentOptions options;
-    options.setZone(JS::SystemZone)
-           .setVersion(JSVERSION_LATEST);
+    options.creationOptions().setZone(JS::SystemZone);
+    options.behaviors().setVersion(JSVERSION_LATEST);
+    if (xpc::SharedMemoryEnabled())
+        options.creationOptions().setSharedMemoryAndAtomicsEnabled(true);
+
     nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
     rv = xpc->InitClassesWithNewWrappedGlobal(cx,
                                               static_cast<nsIGlobalObject *>(backstagePass),
@@ -573,7 +565,7 @@ XPCShellEnvironment::Init()
     FILE* runtimeScriptFile = fopen(kDefaultRuntimeScriptFilename, "r");
     if (runtimeScriptFile) {
         fprintf(stdout, "[loading '%s'...]\n", kDefaultRuntimeScriptFilename);
-        ProcessFile(cx, globalObj, kDefaultRuntimeScriptFilename,
+        ProcessFile(cx, kDefaultRuntimeScriptFilename,
                     runtimeScriptFile, false);
         fclose(runtimeScriptFile);
     }
@@ -585,14 +577,14 @@ bool
 XPCShellEnvironment::EvaluateString(const nsString& aString,
                                     nsString* aResult)
 {
-  AutoSafeJSContext cx;
-  JS::Rooted<JSObject*> global(cx, GetGlobalObject());
-  JSAutoCompartment ac(cx, global);
+  AutoEntryScript aes(GetGlobalObject(),
+                      "ipc XPCShellEnvironment::EvaluateString");
+  JSContext* cx = aes.cx();
 
   JS::CompileOptions options(cx);
   options.setFileAndLine("typein", 0);
   JS::Rooted<JSScript*> script(cx);
-  if (!JS_CompileUCScript(cx, global, aString.get(), aString.Length(), options,
+  if (!JS_CompileUCScript(cx, aString.get(), aString.Length(), options,
                           &script))
   {
      return false;
@@ -603,8 +595,8 @@ XPCShellEnvironment::EvaluateString(const nsString& aString,
   }
 
   JS::Rooted<JS::Value> result(cx);
-  bool ok = JS_ExecuteScript(cx, global, script, &result);
-  if (ok && result != JSVAL_VOID) {
+  bool ok = JS_ExecuteScript(cx, script, &result);
+  if (ok && !result.isUndefined()) {
       JSErrorReporter old = JS_SetErrorReporter(JS_GetRuntime(cx), nullptr);
       JSString* str = JS::ToString(cx, result);
       nsAutoJSString autoStr;

@@ -1,22 +1,22 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_indexeddb_idbtransaction_h__
-#define mozilla_dom_indexeddb_idbtransaction_h__
+#ifndef mozilla_dom_idbtransaction_h__
+#define mozilla_dom_idbtransaction_h__
 
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/IDBTransactionBinding.h"
-#include "mozilla/dom/indexedDB/IDBWrapperCache.h"
+#include "mozilla/dom/IDBWrapperCache.h"
 #include "nsAutoPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIRunnable.h"
 #include "nsString.h"
 #include "nsTArray.h"
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 
@@ -27,28 +27,29 @@ namespace dom {
 
 class DOMError;
 class DOMStringList;
-class PBlobChild;
-
-namespace indexedDB {
-
-class BackgroundCursorChild;
-class BackgroundRequestChild;
-class BackgroundTransactionChild;
-class BackgroundVersionChangeTransactionChild;
 class IDBDatabase;
 class IDBObjectStore;
 class IDBOpenDBRequest;
 class IDBRequest;
+
+namespace indexedDB {
+class BackgroundCursorChild;
+class BackgroundRequestChild;
+class BackgroundTransactionChild;
+class BackgroundVersionChangeTransactionChild;
 class IndexMetadata;
 class ObjectStoreSpec;
 class OpenCursorParams;
-class PBackgroundIDBDatabaseFileChild;
 class RequestParams;
+}
 
-class IDBTransaction MOZ_FINAL
+class IDBTransaction final
   : public IDBWrapperCache
   , public nsIRunnable
 {
+  friend class indexedDB::BackgroundCursorChild;
+  friend class indexedDB::BackgroundRequestChild;
+
   class WorkerFeature;
   friend class WorkerFeature;
 
@@ -57,6 +58,8 @@ public:
   {
     READ_ONLY = 0,
     READ_WRITE,
+    READ_WRITE_FLUSH,
+    CLEANUP,
     VERSION_CHANGE,
 
     // Only needed for IPC serialization helper, should never be used in code.
@@ -72,19 +75,19 @@ public:
   };
 
 private:
-  nsRefPtr<IDBDatabase> mDatabase;
-  nsRefPtr<DOMError> mError;
+  RefPtr<IDBDatabase> mDatabase;
+  RefPtr<DOMError> mError;
   nsTArray<nsString> mObjectStoreNames;
-  nsTArray<nsRefPtr<IDBObjectStore>> mObjectStores;
-  nsTArray<nsRefPtr<IDBObjectStore>> mDeletedObjectStores;
+  nsTArray<RefPtr<IDBObjectStore>> mObjectStores;
+  nsTArray<RefPtr<IDBObjectStore>> mDeletedObjectStores;
   nsAutoPtr<WorkerFeature> mWorkerFeature;
 
   // Tagged with mMode. If mMode is VERSION_CHANGE then mBackgroundActor will be
   // a BackgroundVersionChangeTransactionChild. Otherwise it will be a
   // BackgroundTransactionChild.
   union {
-    BackgroundTransactionChild* mNormalBackgroundActor;
-    BackgroundVersionChangeTransactionChild* mVersionChangeBackgroundActor;
+    indexedDB::BackgroundTransactionChild* mNormalBackgroundActor;
+    indexedDB::BackgroundVersionChangeTransactionChild* mVersionChangeBackgroundActor;
   } mBackgroundActor;
 
   const int64_t mLoggingSerialNumber;
@@ -98,6 +101,7 @@ private:
 
   nsString mFilename;
   uint32_t mLineNo;
+  uint32_t mColumn;
 
   ReadyState mReadyState;
   Mode mMode;
@@ -114,13 +118,13 @@ private:
 public:
   static already_AddRefed<IDBTransaction>
   CreateVersionChange(IDBDatabase* aDatabase,
-                      BackgroundVersionChangeTransactionChild* aActor,
+                      indexedDB::BackgroundVersionChangeTransactionChild* aActor,
                       IDBOpenDBRequest* aOpenRequest,
                       int64_t aNextObjectStoreId,
                       int64_t aNextIndexId);
 
   static already_AddRefed<IDBTransaction>
-  Create(IDBDatabase* aDatabase,
+  Create(JSContext* aCx, IDBDatabase* aDatabase,
          const nsTArray<nsString>& aObjectStoreNames,
          Mode aMode);
 
@@ -136,7 +140,7 @@ public:
 #endif
 
   void
-  SetBackgroundActor(BackgroundTransactionChild* aBackgroundActor);
+  SetBackgroundActor(indexedDB::BackgroundTransactionChild* aBackgroundActor);
 
   void
   ClearBackgroundActor()
@@ -150,38 +154,43 @@ public:
     }
   }
 
-  void
-  StartRequest(BackgroundRequestChild* aBackgroundActor,
-               const RequestParams& aParams);
+  indexedDB::BackgroundRequestChild*
+  StartRequest(IDBRequest* aRequest, const indexedDB::RequestParams& aParams);
 
   void
-  OpenCursor(BackgroundCursorChild* aBackgroundActor,
-             const OpenCursorParams& aParams);
+  OpenCursor(indexedDB::BackgroundCursorChild* aBackgroundActor,
+             const indexedDB::OpenCursorParams& aParams);
 
   void
   RefreshSpec(bool aMayDelete);
-
-  void
-  OnNewRequest();
-
-  void
-  OnRequestFinished();
 
   bool
   IsOpen() const;
 
   bool
-  IsFinished() const
+  IsCommittingOrDone() const
   {
     AssertIsOnOwningThread();
-    return mReadyState > LOADING;
+
+    return mReadyState == COMMITTING || mReadyState == DONE;
+  }
+
+  bool
+  IsDone() const
+  {
+    AssertIsOnOwningThread();
+
+    return mReadyState == DONE;
   }
 
   bool
   IsWriteAllowed() const
   {
     AssertIsOnOwningThread();
-    return mMode == READ_WRITE || mMode == VERSION_CHANGE;
+    return mMode == READ_WRITE ||
+           mMode == READ_WRITE_FLUSH ||
+           mMode == CLEANUP ||
+           mMode == VERSION_CHANGE;
   }
 
   bool
@@ -199,7 +208,8 @@ public:
   }
 
   void
-  GetCallerLocation(nsAString& aFilename, uint32_t* aLineNo) const;
+  GetCallerLocation(nsAString& aFilename, uint32_t* aLineNo,
+                    uint32_t* aColumn) const;
 
   // 'Get' prefix is to avoid name collisions with the enum
   Mode
@@ -230,13 +240,13 @@ public:
   }
 
   already_AddRefed<IDBObjectStore>
-  CreateObjectStore(const ObjectStoreSpec& aSpec);
+  CreateObjectStore(const indexedDB::ObjectStoreSpec& aSpec);
 
   void
   DeleteObjectStore(int64_t aObjectStoreId);
 
   void
-  CreateIndex(IDBObjectStore* aObjectStore, const IndexMetadata& aMetadata);
+  CreateIndex(IDBObjectStore* aObjectStore, const indexedDB::IndexMetadata& aMetadata);
 
   void
   DeleteIndex(IDBObjectStore* aObjectStore, int64_t aIndexId);
@@ -255,7 +265,7 @@ public:
     return mLoggingSerialNumber;
   }
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const;
 
   IDBTransactionMode
@@ -275,7 +285,7 @@ public:
   IMPL_EVENT_HANDLER(error)
 
   already_AddRefed<DOMStringList>
-  ObjectStoreNames();
+  ObjectStoreNames() const;
 
   void
   FireCompleteOrAbortEvents(nsresult aResult);
@@ -294,11 +304,11 @@ public:
 
   // nsWrapperCache
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // nsIDOMEventTarget
   virtual nsresult
-  PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  PreHandleEvent(EventChainPreVisitor& aVisitor) override;
 
 private:
   IDBTransaction(IDBDatabase* aDatabase,
@@ -314,10 +324,15 @@ private:
 
   void
   SendAbort(nsresult aResultCode);
+
+  void
+  OnNewRequest();
+
+  void
+  OnRequestFinished(bool aActorDestroyedNormally);
 };
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla
 
-#endif // mozilla_dom_indexeddb_idbtransaction_h__
+#endif // mozilla_dom_idbtransaction_h__

@@ -188,6 +188,35 @@ mozilla::ReadSysFile(
 
 #endif /* ReadSysFile_PRESENT */
 
+#ifdef WriteSysFile_PRESENT
+
+bool
+mozilla::WriteSysFile(
+  const char* aFilename,
+  const char* aBuf)
+{
+  size_t aBufSize = strlen(aBuf);
+  int fd = MOZ_TEMP_FAILURE_RETRY(open(aFilename, O_WRONLY));
+  if (fd < 0) {
+    return false;
+  }
+  ScopedClose autoClose(fd);
+  ssize_t bytesWritten;
+  size_t offset = 0;
+  do {
+    bytesWritten = MOZ_TEMP_FAILURE_RETRY(write(fd, aBuf + offset,
+                                                aBufSize - offset));
+    if (bytesWritten == -1) {
+      return false;
+    }
+    offset += bytesWritten;
+  } while (bytesWritten > 0 && offset < aBufSize);
+  MOZ_ASSERT(offset == aBufSize);
+  return true;
+}
+
+#endif /* WriteSysFile_PRESENT */
+
 void
 mozilla::ReadAheadLib(nsIFile* aFile)
 {
@@ -394,7 +423,11 @@ mozilla::ReadAheadLib(mozilla::pathstr_t aFilePath)
   if ((read(fd, elf.buf, bufsize) <= 0) ||
       (memcmp(elf.buf, ELFMAG, 4)) ||
       (elf.ehdr.e_ident[EI_CLASS] != ELFCLASS) ||
-      (elf.ehdr.e_phoff + elf.ehdr.e_phentsize * elf.ehdr.e_phnum >= bufsize)) {
+      // Upcast e_phentsize so the multiplication is done in the same precision
+      // as the subsequent addition, to satisfy static analyzers and avoid
+      // issues with abnormally large program header tables.
+      (elf.ehdr.e_phoff + (static_cast<Elf_Off>(elf.ehdr.e_phentsize) *
+                           elf.ehdr.e_phnum) >= bufsize)) {
     close(fd);
     return;
   }

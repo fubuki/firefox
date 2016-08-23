@@ -11,8 +11,8 @@
 #include <zlib.h>
 #include "Utils.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/RefCounted.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/UniquePtr.h"
 
 /**
  * Helper class wrapping z_stream to avoid malloc() calls during
@@ -30,7 +30,12 @@
 class zxx_stream: public z_stream
 {
 public:
-  zxx_stream() {
+  /* Forward declaration */
+  class StaticAllocator;
+
+  explicit zxx_stream(StaticAllocator *allocator_=nullptr)
+  : allocator(allocator_)
+  {
     memset(this, 0, sizeof(z_stream));
     zalloc = Alloc;
     zfree = Free;
@@ -40,67 +45,107 @@ public:
 private:
   static void *Alloc(void *data, uInt items, uInt size)
   {
-    size_t buf_size = items * size;
     zxx_stream *zStream = reinterpret_cast<zxx_stream *>(data);
-
-    if (items == 1 && buf_size <= zStream->stateBuf.size) {
-      return zStream->stateBuf.get();
-    } else if (buf_size == zStream->windowBuf.size) {
-      return zStream->windowBuf.get();
-    } else {
-      MOZ_CRASH("No ZStreamBuf for allocation");
+    if (zStream->allocator) {
+      return zStream->allocator->Alloc(items, size);
     }
+    size_t buf_size = items * size;
+    return ::operator new(buf_size);
   }
 
   static void Free(void *data, void *ptr)
   {
     zxx_stream *zStream = reinterpret_cast<zxx_stream *>(data);
-
-    if (zStream->stateBuf.Equals(ptr)) {
-      zStream->stateBuf.Release();
-    } else if (zStream->windowBuf.Equals(ptr)) {
-      zStream->windowBuf.Release();
+    if (zStream->allocator) {
+      zStream->allocator->Free(ptr);
     } else {
-      MOZ_CRASH("Pointer doesn't match a ZStreamBuf");
+      ::operator delete(ptr);
     }
   }
 
   /**
-   * Helper class for each buffer.
+   * Helper class for each buffer in StaticAllocator.
    */
   template <size_t Size>
   class ZStreamBuf
   {
   public:
-    ZStreamBuf() : buf(new char[Size]), inUse(false) { }
+    ZStreamBuf() : inUse(false) { }
 
-    char *get()
+    bool get(char*& out)
     {
       if (!inUse) {
         inUse = true;
-        return buf.get();
+        out = buf;
+        return true;
       } else {
-        MOZ_CRASH("ZStreamBuf already in use");
+        return false;
       }
     }
 
     void Release()
     {
-      memset(buf.get(), 0, Size);
+      memset(buf, 0, Size);
       inUse = false;
     }
 
-    bool Equals(const void *other) { return other == buf.get(); }
+    bool Equals(const void *other) { return other == buf; }
 
     static const size_t size = Size;
 
   private:
-    mozilla::UniquePtr<char[]> buf;
+    char buf[Size];
     bool inUse;
   };
 
-  ZStreamBuf<0x3000> stateBuf; // 0x3000 is an arbitrary size above 10K.
-  ZStreamBuf<1 << MAX_WBITS> windowBuf;
+public:
+  /**
+   * Special allocator that uses static buffers to allocate from.
+   */
+  class StaticAllocator
+  {
+  public:
+    void *Alloc(uInt items, uInt size)
+    {
+      if (items == 1 && size <= stateBuf1.size) {
+        char* res = nullptr;
+        if (stateBuf1.get(res) || stateBuf2.get(res)) {
+          return res;
+        }
+        MOZ_CRASH("ZStreamBuf already in use");
+      } else if (items * size == windowBuf1.size) {
+        char* res = nullptr;
+        if (windowBuf1.get(res) || windowBuf2.get(res)) {
+          return res;
+        }
+        MOZ_CRASH("ZStreamBuf already in use");
+      } else {
+        MOZ_CRASH("No ZStreamBuf for allocation");
+      }
+    }
+
+    void Free(void *ptr)
+    {
+      if (stateBuf1.Equals(ptr)) {
+        stateBuf1.Release();
+      } else if (stateBuf2.Equals(ptr)) {
+        stateBuf2.Release();
+      }else if (windowBuf1.Equals(ptr)) {
+        windowBuf1.Release();
+      } else if (windowBuf2.Equals(ptr)) {
+        windowBuf2.Release();
+      } else {
+        MOZ_CRASH("Pointer doesn't match a ZStreamBuf");
+      }
+    }
+
+    // 0x3000 is an arbitrary size above 10K.
+    ZStreamBuf<0x3000> stateBuf1, stateBuf2;
+    ZStreamBuf<1 << MAX_WBITS> windowBuf1, windowBuf2;
+  };
+
+private:
+  StaticAllocator *allocator;
 };
 
 /**
@@ -125,17 +170,17 @@ public:
    * Create a Zip instance for the given file name. Returns nullptr in case
    * of failure.
    */
-  static mozilla::TemporaryRef<Zip> Create(const char *filename);
+  static already_AddRefed<Zip> Create(const char *filename);
 
   /**
    * Create a Zip instance using the given buffer.
    */
-  static mozilla::TemporaryRef<Zip> Create(void *buffer, size_t size) {
+  static already_AddRefed<Zip> Create(void *buffer, size_t size) {
     return Create(nullptr, buffer, size);
   }
 
 private:
-  static mozilla::TemporaryRef<Zip> Create(const char *filename,
+  static already_AddRefed<Zip> Create(const char *filename,
                                            void *buffer, size_t size);
 
   /**
@@ -240,7 +285,7 @@ private:
      */
     bool Equals(const char *str) const
     {
-      return strncmp(str, buf, length) == 0;
+      return (strncmp(str, buf, length) == 0 && str[length] == '\0');
     }
 
   private:
@@ -304,7 +349,7 @@ private:
       return reinterpret_cast<const char *>(this) + sizeof(*this)
              + filenameSize + extraFieldSize;
     }
-    
+
     le_uint16 minVersion;
     le_uint16 generalFlag;
     le_uint16 compression;
@@ -425,7 +470,7 @@ public:
    * Get a Zip instance for the given path. If there is an existing one
    * already, return that one, otherwise create a new one.
    */
-  static mozilla::TemporaryRef<Zip> GetZip(const char *path);
+  static already_AddRefed<Zip> GetZip(const char *path);
 
 protected:
   friend class Zip;

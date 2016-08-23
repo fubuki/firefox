@@ -1,4 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +10,10 @@
 #include "mozilla/dom/VRDeviceBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/VRDevice.h"
+#include "Navigator.h"
 #include "gfxVR.h"
+#include "VRDeviceProxy.h"
+#include "VRManagerChild.h"
 #include "nsIFrame.h"
 
 using namespace mozilla::gfx;
@@ -17,19 +21,65 @@ using namespace mozilla::gfx;
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(VRFieldOfView, mParent)
-NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(VRFieldOfView, AddRef)
-NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(VRFieldOfView, Release)
+/*static*/ bool
+VRDevice::RefreshVRDevices(dom::Navigator* aNavigator)
+{
+  gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
+  return vm && vm->RefreshVRDevicesWithCallback(aNavigator);
+}
+
+/*static*/ void
+VRDevice::UpdateVRDevices(nsTArray<RefPtr<VRDevice>>& aDevices, nsISupports* aParent)
+{
+  nsTArray<RefPtr<VRDevice>> devices;
+
+  gfx::VRManagerChild* vm = gfx::VRManagerChild::Get();
+  nsTArray<RefPtr<gfx::VRDeviceProxy>> proxyDevices;
+  if (vm && vm->GetVRDevices(proxyDevices)) {
+    for (size_t i = 0; i < proxyDevices.Length(); i++) {
+      RefPtr<gfx::VRDeviceProxy> proxyDevice = proxyDevices[i];
+      bool isNewDevice = true;
+      for (size_t j = 0; j < aDevices.Length(); j++) {
+        if (aDevices[j]->GetHMD()->GetDeviceInfo() == proxyDevice->GetDeviceInfo()) {
+          devices.AppendElement(aDevices[j]);
+          isNewDevice = false;
+        }
+      }
+
+      if (isNewDevice) {
+        gfx::VRStateValidFlags sensorBits = proxyDevice->GetDeviceInfo().GetSupportedSensorStateBits();
+        devices.AppendElement(new HMDInfoVRDevice(aParent, proxyDevice));
+        if (sensorBits & (gfx::VRStateValidFlags::State_Position |
+            gfx::VRStateValidFlags::State_Orientation))
+        {
+          devices.AppendElement(new HMDPositionVRDevice(aParent, proxyDevice));
+        }
+      }
+    }
+  }
+
+  aDevices = devices;
+}
+
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(VRFieldOfViewReadOnly, mParent)
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(VRFieldOfViewReadOnly, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(VRFieldOfViewReadOnly, Release)
+
+JSObject*
+VRFieldOfViewReadOnly::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+{
+  return VRFieldOfViewReadOnlyBinding::Wrap(aCx, this, aGivenProto);
+}
 
 already_AddRefed<VRFieldOfView>
 VRFieldOfView::Constructor(const GlobalObject& aGlobal, const VRFieldOfViewInit& aParams,
                            ErrorResult& aRV)
 {
-  nsRefPtr<VRFieldOfView> obj =
+  RefPtr<VRFieldOfView> fov =
     new VRFieldOfView(aGlobal.GetAsSupports(),
                       aParams.mUpDegrees, aParams.mRightDegrees,
                       aParams.mDownDegrees, aParams.mLeftDegrees);
-  return obj.forget();
+  return fov.forget();
 }
 
 already_AddRefed<VRFieldOfView>
@@ -38,17 +88,82 @@ VRFieldOfView::Constructor(const GlobalObject& aGlobal,
                            double aDownDegrees, double aLeftDegrees,
                            ErrorResult& aRV)
 {
-  nsRefPtr<VRFieldOfView> obj =
+  RefPtr<VRFieldOfView> fov =
     new VRFieldOfView(aGlobal.GetAsSupports(),
-                      aUpDegrees, aRightDegrees,
-                      aDownDegrees, aLeftDegrees);
-  return obj.forget();
+                      aUpDegrees, aRightDegrees, aDownDegrees,
+                      aLeftDegrees);
+  return fov.forget();
 }
 
 JSObject*
-VRFieldOfView::WrapObject(JSContext* aCx)
+VRFieldOfView::WrapObject(JSContext* aCx,
+                          JS::Handle<JSObject*> aGivenProto)
 {
-  return VRFieldOfViewBinding::Wrap(aCx, this);
+  return VRFieldOfViewBinding::Wrap(aCx, this, aGivenProto);
+}
+
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(VREyeParameters, mParent, mMinFOV, mMaxFOV, mRecFOV, mCurFOV, mEyeTranslation, mRenderRect)
+NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(VREyeParameters, AddRef)
+NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(VREyeParameters, Release)
+
+VREyeParameters::VREyeParameters(nsISupports* aParent,
+                                 const gfx::VRFieldOfView& aMinFOV,
+                                 const gfx::VRFieldOfView& aMaxFOV,
+                                 const gfx::VRFieldOfView& aRecFOV,
+                                 const gfx::Point3D& aEyeTranslation,
+                                 const gfx::VRFieldOfView& aCurFOV,
+                                 const gfx::IntRect& aRenderRect)
+  : mParent(aParent)
+{
+  mMinFOV = new VRFieldOfView(aParent, aMinFOV);
+  mMaxFOV = new VRFieldOfView(aParent, aMaxFOV);
+  mRecFOV = new VRFieldOfView(aParent, aRecFOV);
+  mCurFOV = new VRFieldOfView(aParent, aCurFOV);
+
+  mEyeTranslation = new DOMPoint(aParent, aEyeTranslation.x, aEyeTranslation.y, aEyeTranslation.z, 0.0);
+  mRenderRect = new DOMRect(aParent, aRenderRect.x, aRenderRect.y, aRenderRect.width, aRenderRect.height);
+}
+
+VRFieldOfView*
+VREyeParameters::MinimumFieldOfView()
+{
+  return mMinFOV;
+}
+
+VRFieldOfView*
+VREyeParameters::MaximumFieldOfView()
+{
+  return mMaxFOV;
+}
+
+VRFieldOfView*
+VREyeParameters::RecommendedFieldOfView()
+{
+  return mRecFOV;
+}
+
+VRFieldOfView*
+VREyeParameters::CurrentFieldOfView()
+{
+  return mCurFOV;
+}
+
+DOMPoint*
+VREyeParameters::EyeTranslation()
+{
+  return mEyeTranslation;
+}
+
+DOMRect*
+VREyeParameters::RenderRect()
+{
+  return mRenderRect;
+}
+
+JSObject*
+VREyeParameters::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+{
+  return VREyeParametersBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(VRPositionState, mParent)
@@ -61,11 +176,11 @@ VRPositionState::VRPositionState(nsISupports* aParent, const gfx::VRHMDSensorSta
 {
   mTimeStamp = aState.timestamp;
 
-  if (aState.flags & gfx::VRHMDInfo::State_Position) {
+  if (aState.flags & gfx::VRStateValidFlags::State_Position) {
     mPosition = new DOMPoint(mParent, aState.position[0], aState.position[1], aState.position[2], 0.0);
   }
 
-  if (aState.flags & gfx::VRHMDInfo::State_Orientation) {
+  if (aState.flags & gfx::VRStateValidFlags::State_Orientation) {
     mOrientation = new DOMPoint(mParent, aState.orientation[0], aState.orientation[1], aState.orientation[2], aState.orientation[3]);
   }
 }
@@ -107,9 +222,9 @@ VRPositionState::GetAngularAcceleration()
 }
 
 JSObject*
-VRPositionState::WrapObject(JSContext* aCx)
+VRPositionState::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return VRPositionStateBinding::Wrap(aCx, this);
+  return VRPositionStateBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(VRDevice)
@@ -123,199 +238,129 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(VRDevice, mParent)
 
 /* virtual */ JSObject*
-HMDVRDevice::WrapObject(JSContext* aCx)
+HMDVRDevice::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HMDVRDeviceBinding::Wrap(aCx, this);
+  return HMDVRDeviceBinding::Wrap(aCx, this, aGivenProto);
 }
 
 /* virtual */ JSObject*
-PositionSensorVRDevice::WrapObject(JSContext* aCx)
+PositionSensorVRDevice::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return PositionSensorVRDeviceBinding::Wrap(aCx, this);
+  return PositionSensorVRDeviceBinding::Wrap(aCx, this, aGivenProto);
 }
 
-static void
-ReleaseHMDInfoRef(void *, nsIAtom*, void *aPropertyValue, void *)
+HMDInfoVRDevice::HMDInfoVRDevice(nsISupports* aParent, gfx::VRDeviceProxy* aHMD)
+  : HMDVRDevice(aParent, aHMD)
 {
-  if (aPropertyValue) {
-    static_cast<VRHMDInfo*>(aPropertyValue)->Release();
+  MOZ_COUNT_CTOR_INHERITED(HMDInfoVRDevice, HMDVRDevice);
+  uint64_t hmdid = aHMD->GetDeviceInfo().GetDeviceID() << 8;
+  uint64_t devid = hmdid | 0x00; // we generate a devid with low byte 0 for the HMD, 1 for the position sensor
+
+  mHWID.Truncate();
+  mHWID.AppendPrintf("0x%llx", hmdid);
+
+  mDeviceId.Truncate();
+  mDeviceId.AppendPrintf("0x%llx", devid);
+
+  mDeviceName.Truncate();
+  mDeviceName.Append(NS_ConvertASCIItoUTF16(aHMD->GetDeviceInfo().GetDeviceName()));
+  mDeviceName.AppendLiteral(" (HMD)");
+
+  mValid = true;
+}
+
+HMDInfoVRDevice::~HMDInfoVRDevice()
+{
+  MOZ_COUNT_DTOR_INHERITED(HMDInfoVRDevice, HMDVRDevice);
+}
+
+/* If a field of view that is set to all 0's is passed in,
+ * the recommended field of view for that eye is used.
+ */
+void
+HMDInfoVRDevice::SetFieldOfView(const VRFieldOfViewInit& aLeftFOV,
+                                const VRFieldOfViewInit& aRightFOV,
+                                double zNear, double zFar)
+{
+  gfx::VRFieldOfView left = gfx::VRFieldOfView(aLeftFOV.mUpDegrees, aLeftFOV.mRightDegrees,
+                                               aLeftFOV.mDownDegrees, aLeftFOV.mLeftDegrees);
+  gfx::VRFieldOfView right = gfx::VRFieldOfView(aRightFOV.mUpDegrees, aRightFOV.mRightDegrees,
+                                                aRightFOV.mDownDegrees, aRightFOV.mLeftDegrees);
+
+  if (left.IsZero()) {
+    left = mHMD->GetDeviceInfo().GetRecommendedEyeFOV(VRDeviceInfo::Eye_Left);
   }
+
+  if (right.IsZero()) {
+    right = mHMD->GetDeviceInfo().GetRecommendedEyeFOV(VRDeviceInfo::Eye_Right);
+  }
+
+  mHMD->SetFOV(left, right, zNear, zFar);
+}
+
+already_AddRefed<VREyeParameters> HMDInfoVRDevice::GetEyeParameters(VREye aEye)
+{
+  gfx::IntSize sz(mHMD->GetDeviceInfo().SuggestedEyeResolution());
+  gfx::VRDeviceInfo::Eye eye = aEye == VREye::Left ? gfx::VRDeviceInfo::Eye_Left : gfx::VRDeviceInfo::Eye_Right;
+  RefPtr<VREyeParameters> params =
+    new VREyeParameters(mParent,
+                        gfx::VRFieldOfView(15, 15, 15, 15), // XXX min?
+                        mHMD->GetDeviceInfo().GetMaximumEyeFOV(eye),
+                        mHMD->GetDeviceInfo().GetRecommendedEyeFOV(eye),
+                        mHMD->GetDeviceInfo().GetEyeTranslation(eye),
+                        mHMD->GetDeviceInfo().GetEyeFOV(eye),
+                        gfx::IntRect((aEye == VREye::Left) ? 0 : sz.width, 0, sz.width, sz.height));
+  return params.forget();
+}
+
+HMDPositionVRDevice::HMDPositionVRDevice(nsISupports* aParent, gfx::VRDeviceProxy* aHMD)
+  : PositionSensorVRDevice(aParent, aHMD)
+{
+  MOZ_COUNT_CTOR_INHERITED(HMDPositionVRDevice, PositionSensorVRDevice);
+
+  uint64_t hmdid = aHMD->GetDeviceInfo().GetDeviceID() << 8;
+  uint64_t devid = hmdid | 0x01; // we generate a devid with low byte 0 for the HMD, 1 for the position sensor
+
+  mHWID.Truncate();
+  mHWID.AppendPrintf("0x%llx", hmdid);
+
+  mDeviceId.Truncate();
+  mDeviceId.AppendPrintf("0x%llx", devid);
+
+  mDeviceName.Truncate();
+  mDeviceName.Append(NS_ConvertASCIItoUTF16(aHMD->GetDeviceInfo().GetDeviceName()));
+  mDeviceName.AppendLiteral(" (Sensor)");
+
+  mValid = true;
+}
+
+HMDPositionVRDevice::~HMDPositionVRDevice()
+{
+  MOZ_COUNT_DTOR_INHERITED(HMDPositionVRDevice, PositionSensorVRDevice);
+}
+
+already_AddRefed<VRPositionState>
+HMDPositionVRDevice::GetState()
+{
+  gfx::VRHMDSensorState state = mHMD->GetSensorState();
+  RefPtr<VRPositionState> obj = new VRPositionState(mParent, state);
+
+  return obj.forget();
+}
+
+already_AddRefed<VRPositionState>
+HMDPositionVRDevice::GetImmediateState()
+{
+  gfx::VRHMDSensorState state = mHMD->GetImmediateSensorState();
+  RefPtr<VRPositionState> obj = new VRPositionState(mParent, state);
+
+  return obj.forget();
 }
 
 void
-HMDVRDevice::XxxToggleElementVR(Element& aElement)
+HMDPositionVRDevice::ResetSensor()
 {
-  VRHMDInfo* hmdPtr = static_cast<VRHMDInfo*>(aElement.GetProperty(nsGkAtoms::vr_state));
-  if (hmdPtr) {
-    aElement.DeleteProperty(nsGkAtoms::vr_state);
-    return;
-  }
-
-  nsRefPtr<VRHMDInfo> hmdRef = mHMD;
-  aElement.SetProperty(nsGkAtoms::vr_state, hmdRef.forget().take(),
-                       ReleaseHMDInfoRef,
-                       true);
-}
-
-namespace {
-
-gfx::VRHMDInfo::Eye
-EyeToEye(const VREye& aEye)
-{
-  return aEye == VREye::Left ? gfx::VRHMDInfo::Eye_Left : gfx::VRHMDInfo::Eye_Right;
-}
-
-class HMDInfoVRDevice : public HMDVRDevice
-{
-public:
-  HMDInfoVRDevice(nsISupports* aParent, gfx::VRHMDInfo* aHMD)
-    : HMDVRDevice(aParent, aHMD)
-  {
-    // XXX TODO use real names/IDs
-    mHWID.AppendPrintf("HMDInfo-0x%llx", aHMD);
-    mDeviceId.AssignLiteral("somedevid");
-    mDeviceName.AssignLiteral("HMD Device");
-
-    mValid = true;
-  }
-
-  virtual ~HMDInfoVRDevice() { }
-
-  /* If a field of view that is set to all 0's is passed in,
-   * the recommended field of view for that eye is used.
-   */
-  virtual void SetFieldOfView(const VRFieldOfViewInit& aLeftFOV,
-                              const VRFieldOfViewInit& aRightFOV,
-                              double zNear, double zFar) MOZ_OVERRIDE
-  {
-    gfx::VRFieldOfView left = gfx::VRFieldOfView(aLeftFOV.mUpDegrees, aLeftFOV.mRightDegrees,
-                                                 aLeftFOV.mDownDegrees, aLeftFOV.mLeftDegrees);
-    gfx::VRFieldOfView right = gfx::VRFieldOfView(aRightFOV.mUpDegrees, aRightFOV.mRightDegrees,
-                                                  aRightFOV.mDownDegrees, aRightFOV.mLeftDegrees);
-
-    if (left.IsZero())
-      left = mHMD->GetRecommendedEyeFOV(VRHMDInfo::Eye_Left);
-    if (right.IsZero())
-      right = mHMD->GetRecommendedEyeFOV(VRHMDInfo::Eye_Right);
-
-    mHMD->SetFOV(left, right, zNear, zFar);
-  }
-
-  virtual already_AddRefed<DOMPoint> GetEyeTranslation(VREye aEye) MOZ_OVERRIDE
-  {
-    gfx::Point3D p = mHMD->GetEyeTranslation(EyeToEye(aEye));
-
-    nsRefPtr<DOMPoint> obj = new DOMPoint(mParent, p.x, p.y, p.z, 0.0);
-    return obj.forget();
-  }
-
-  virtual already_AddRefed<VRFieldOfView> GetCurrentEyeFieldOfView(VREye aEye) MOZ_OVERRIDE
-  {
-    return CopyFieldOfView(mHMD->GetEyeFOV(EyeToEye(aEye)));
-  }
-
-  virtual already_AddRefed<VRFieldOfView> GetRecommendedEyeFieldOfView(VREye aEye) MOZ_OVERRIDE
-  {
-    return CopyFieldOfView(mHMD->GetRecommendedEyeFOV(EyeToEye(aEye)));
-  }
-
-  virtual already_AddRefed<VRFieldOfView> GetMaximumEyeFieldOfView(VREye aEye) MOZ_OVERRIDE
-  {
-    return CopyFieldOfView(mHMD->GetMaximumEyeFOV(EyeToEye(aEye)));
-  }
-
-  virtual already_AddRefed<DOMRect> GetRecommendedEyeRenderRect(VREye aEye) MOZ_OVERRIDE
-  {
-    const IntSize& a(mHMD->SuggestedEyeResolution());
-    nsRefPtr<DOMRect> obj =
-      new DOMRect(mParent,
-                  (aEye == VREye::Left) ? 0 : a.width, 0,
-                  a.width, a.height);
-    return obj.forget();
-  }
-
-protected:
-  already_AddRefed<VRFieldOfView>
-  CopyFieldOfView(const gfx::VRFieldOfView& aSrc)
-  {
-    nsRefPtr<VRFieldOfView> obj =
-      new VRFieldOfView(mParent, aSrc.upDegrees, aSrc.rightDegrees,
-                        aSrc.downDegrees, aSrc.leftDegrees);
-    return obj.forget();
-  }
-};
-
-class HMDPositionVRDevice : public PositionSensorVRDevice
-{
-public:
-  HMDPositionVRDevice(nsISupports* aParent, gfx::VRHMDInfo* aHMD)
-    : PositionSensorVRDevice(aParent)
-    , mHMD(aHMD)
-    , mTracking(false)
-  {
-    // XXX TODO use real names/IDs
-    mHWID.AppendPrintf("HMDInfo-0x%llx", aHMD);
-    mDeviceId.AssignLiteral("somedevid");
-    mDeviceName.AssignLiteral("HMD Position Device");
-
-    mValid = true;
-  }
-
-  ~HMDPositionVRDevice()
-  {
-    if (mTracking) {
-      mHMD->StopSensorTracking();
-    }
-  }
-
-  virtual already_AddRefed<VRPositionState> GetState(double timeOffset) MOZ_OVERRIDE
-  {
-    if (!mTracking) {
-      mHMD->StartSensorTracking();
-      mTracking = true;
-    }
-
-    gfx::VRHMDSensorState state = mHMD->GetSensorState(timeOffset);
-    nsRefPtr<VRPositionState> obj = new VRPositionState(mParent, state);
-
-    return obj.forget();
-  }
-
-  virtual void ZeroSensor() MOZ_OVERRIDE
-  {
-    mHMD->ZeroSensor();
-  }
-
-protected:
-  nsRefPtr<gfx::VRHMDInfo> mHMD;
-  bool mTracking;
-};
-
-} // namespace
-
-bool
-VRDevice::CreateAllKnownVRDevices(nsISupports *aParent, nsTArray<nsRefPtr<VRDevice>>& aDevices)
-{
-  if (!gfx::VRHMDManagerOculus::Init()) {
-    NS_WARNING("Failed to initialize Oculus HMD Manager");
-    return false;
-  }
-
-  nsTArray<nsRefPtr<gfx::VRHMDInfo>> hmds;
-  gfx::VRHMDManagerOculus::GetOculusHMDs(hmds);
-
-  for (size_t i = 0; i < hmds.Length(); ++i) {
-    uint32_t sensorBits = hmds[i]->GetSupportedSensorStateBits();
-    aDevices.AppendElement(new HMDInfoVRDevice(aParent, hmds[i]));
-
-    if (sensorBits &
-        (gfx::VRHMDInfo::State_Position | gfx::VRHMDInfo::State_Orientation))
-    {
-      aDevices.AppendElement(new HMDPositionVRDevice(aParent, hmds[i]));
-    }
-  }
-
-  return true;
+  mHMD->ZeroSensor();
 }
 
 } // namespace dom

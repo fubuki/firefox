@@ -31,8 +31,8 @@ public:
   nsTArray<uint8_t> avcConfig;
 
   // MuxerOperation methods
-  nsresult Generate(uint32_t* aBoxSize) MOZ_OVERRIDE;
-  nsresult Write() MOZ_OVERRIDE;
+  nsresult Generate(uint32_t* aBoxSize) override;
+  nsresult Write() override;
 
   // AVCConfigurationBox methods
   AVCConfigurationBox(ISOControl* aControl);
@@ -44,11 +44,11 @@ public:
 class AVCSampleEntry : public VisualSampleEntry {
 public:
   // ISO BMFF members
-  nsRefPtr<AVCConfigurationBox> avcConfigBox;
+  RefPtr<AVCConfigurationBox> avcConfigBox;
 
   // MuxerOperation methods
-  nsresult Generate(uint32_t* aBoxSize) MOZ_OVERRIDE;
-  nsresult Write() MOZ_OVERRIDE;
+  nsresult Generate(uint32_t* aBoxSize) override;
+  nsresult Write() override;
 
   // VisualSampleEntry methods
   AVCSampleEntry(ISOControl* aControl);

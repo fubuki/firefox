@@ -49,6 +49,33 @@ static const char* logTag = "sdp_attr";
     semicolon = TRUE; \
   }
 
+static int find_token_enum(const char *attr_name,
+                           sdp_t *sdp_p,
+                           const char **ptr,
+                           const sdp_namearray_t *types,
+                           int type_count,
+                           int unknown_value)
+{
+    sdp_result_e  result = SDP_SUCCESS;
+    char          tmp[SDP_MAX_STRING_LEN+1];
+    int           i;
+
+    *ptr = sdp_getnextstrtok(*ptr, tmp, sizeof(tmp), " \t", &result);
+    if (result != SDP_SUCCESS) {
+        sdp_parse_error(sdp_p,
+            "%s Warning: problem parsing %s", sdp_p->debug_str, attr_name);
+        sdp_p->conf_p->num_invalid_param++;
+        return -1;
+    }
+
+    for (i=0; i < type_count; i++) {
+        if (!cpr_strncasecmp(tmp, types[i].name, types[i].strlen)) {
+            return i;
+        }
+    }
+    return unknown_value;
+}
+
 /*
  * Helper function for adding nv-pair where value is string.
  */
@@ -1701,6 +1728,31 @@ sdp_result_e sdp_parse_attr_fmtp (sdp_t *sdp_p, sdp_attr_t *attr_p,
             fmtp_p->fmtp_format = SDP_FMTP_CODEC_INFO;
             fmtp_p->max_fr = (uint32_t) strtoul_result;
             codec_info_found = TRUE;
+        } else if (cpr_strncasecmp(tmp,sdp_fmtp_codec_param[50].name,
+                                   sdp_fmtp_codec_param[50].strlen) == 0) {
+            fmtp_ptr = sdp_getnextstrtok(fmtp_ptr, tmp, sizeof(tmp), "; \t", &result1);
+            if (result1 != SDP_SUCCESS) {
+                    fmtp_ptr = sdp_getnextstrtok(fmtp_ptr, tmp, sizeof(tmp), " \t", &result1);
+                if (result1 != SDP_SUCCESS) {
+                    sdp_attr_fmtp_no_value(sdp_p, "maxplaybackrate");
+                    SDP_FREE(temp_ptr);
+                    return SDP_INVALID_PARAMETER;
+                }
+            }
+            tok = tmp;
+            tok++;
+            errno = 0;
+            strtoul_result = strtoul(tok, &strtoul_end, 10);
+
+            if (errno || tok == strtoul_end || strtoul_result == 0 || strtoul_result > UINT_MAX) {
+                sdp_attr_fmtp_invalid_value(sdp_p, "maxplaybackrate", tok);
+                SDP_FREE(temp_ptr);
+                return SDP_INVALID_PARAMETER;
+            }
+            fmtp_p->fmtp_format = SDP_FMTP_CODEC_INFO;
+            fmtp_p->maxplaybackrate = (uint32_t) strtoul_result;
+            codec_info_found = TRUE;
+
         } else if (fmtp_ptr != NULL && *fmtp_ptr == '\n') {
             temp=PL_strtok_r(tmp, ";", &strtok_state);
             if (temp) {
@@ -3391,6 +3443,69 @@ sdp_result_e sdp_build_attr_cpar (sdp_t *sdp_p, sdp_attr_t *attr_p,
     return (SDP_SUCCESS);
 }
 
+sdp_result_e sdp_parse_attr_rtcp (sdp_t *sdp_p, sdp_attr_t *attr_p,
+                                           const char *ptr)
+{
+  sdp_result_e result;
+  char nettype[SDP_MAX_STRING_LEN];
+  sdp_rtcp_t *rtcp_p = &(attr_p->attr.rtcp);
+  int enum_raw;
+
+  memset(rtcp_p, 0, sizeof(sdp_rtcp_t));
+
+  rtcp_p->port = (uint16_t)sdp_getnextnumtok(ptr, &ptr, " \t", &result);
+  if (result != SDP_SUCCESS) {
+    sdp_parse_error(sdp_p,
+                    "%s Warning: could not parse port for rtcp attribute",
+                    sdp_p->debug_str);
+    sdp_p->conf_p->num_invalid_param++;
+
+    return SDP_INVALID_PARAMETER;
+  }
+
+  /* The rest is optional, although it is all-or-nothing */
+  (void)sdp_getnextstrtok(ptr, nettype, sizeof(nettype), " \t", &result);
+  if (result == SDP_EMPTY_TOKEN) {
+    /* Nothing after the port */
+    return SDP_SUCCESS;
+  }
+
+  enum_raw = find_token_enum("Nettype", sdp_p, &ptr, sdp_nettype,
+                             SDP_MAX_NETWORK_TYPES, SDP_NT_UNSUPPORTED);
+  if (enum_raw == -1) {
+    return SDP_INVALID_PARAMETER;
+  }
+  rtcp_p->nettype = (sdp_nettype_e)enum_raw;
+
+  enum_raw = find_token_enum("Addrtype", sdp_p, &ptr, sdp_addrtype,
+                             SDP_MAX_ADDR_TYPES, SDP_AT_UNSUPPORTED);
+  if (enum_raw == -1) {
+    return SDP_INVALID_PARAMETER;
+  }
+  rtcp_p->addrtype = (sdp_addrtype_e)enum_raw;
+
+  ptr = sdp_getnextstrtok(ptr, rtcp_p->addr, sizeof(rtcp_p->addr), " \t",
+                          &result);
+  if (result != SDP_SUCCESS) {
+    sdp_parse_error(sdp_p,
+                    "%s Warning: could not parse addr for rtcp attribute",
+                    sdp_p->debug_str);
+    sdp_p->conf_p->num_invalid_param++;
+
+    return SDP_INVALID_PARAMETER;
+  }
+
+  return SDP_SUCCESS;
+}
+
+sdp_result_e sdp_build_attr_rtcp (sdp_t *sdp_p, sdp_attr_t *attr_p,
+                                           flex_string *fs)
+{
+  /* We should not be serializing SDP anyway, but we need this function until
+   * Bug 1112737 is resolved. */
+  return SDP_FAILURE;
+}
+
 sdp_result_e sdp_parse_attr_rtr (sdp_t *sdp_p, sdp_attr_t *attr_p,
                                            const char *ptr)
 {
@@ -3398,9 +3513,8 @@ sdp_result_e sdp_parse_attr_rtr (sdp_t *sdp_p, sdp_attr_t *attr_p,
     char tmp[SDP_MAX_STRING_LEN];
 
     if (sdp_p->debug_flag[SDP_DEBUG_TRACE]) {
-        SDP_PRINT("%s Parsing a=%s, %s", sdp_p->debug_str,
-                     sdp_get_attr_name(attr_p->type),
-                     tmp);
+        SDP_PRINT("%s Parsing a=%s", sdp_p->debug_str,
+                  sdp_get_attr_name(attr_p->type));
     }
     /*Default confirm to FALSE. */
     attr_p->attr.rtr.confirm = FALSE;
@@ -4101,7 +4215,7 @@ sdp_result_e sdp_parse_attr_group (sdp_t *sdp_p, sdp_attr_t *attr_p,
      */
     attr_p->attr.stream_data.num_group_id =0;
 
-    for (i=0; i<SDP_MAX_GROUP_STREAM_ID; i++) {
+    for (i=0; i<SDP_MAX_MEDIA_STREAMS; i++) {
         ptr = sdp_getnextstrtok(ptr, tmp, sizeof(tmp), " \t", &result);
 
         if (result != SDP_SUCCESS) {
@@ -4878,33 +4992,6 @@ sdp_result_e sdp_build_attr_rtcp_fb(sdp_t *sdp_p,
     return SDP_SUCCESS;
 }
 
-static int find_token_enum(const char *attr_name,
-                           sdp_t *sdp_p,
-                           const char **ptr,
-                           const sdp_namearray_t *types,
-                           int type_count,
-                           int unknown_value)
-{
-    sdp_result_e  result = SDP_SUCCESS;
-    char          tmp[SDP_MAX_STRING_LEN+1];
-    int           i;
-
-    *ptr = sdp_getnextstrtok(*ptr, tmp, sizeof(tmp), " \t", &result);
-    if (result != SDP_SUCCESS) {
-        sdp_parse_error(sdp_p,
-            "%s Warning: problem parsing %s", sdp_p->debug_str, attr_name);
-        sdp_p->conf_p->num_invalid_param++;
-        return -1;
-    }
-
-    for (i=0; i < type_count; i++) {
-        if (!cpr_strncasecmp(tmp, types[i].name, types[i].strlen)) {
-            return i;
-        }
-    }
-    return unknown_value;
-}
-
 sdp_result_e sdp_parse_attr_rtcp_fb (sdp_t *sdp_p,
                                      sdp_attr_t *attr_p,
                                      const char *ptr)
@@ -5101,13 +5188,11 @@ sdp_result_e sdp_parse_attr_setup(sdp_t *sdp_p,
             "%s Warning: Unknown setup attribute",
             sdp_p->debug_str);
         return SDP_INVALID_PARAMETER;
-        break;
     default:
         /* This is an internal error, not a parsing error */
         CSFLogError(logTag, "%s Error: Invalid setup enum (%d)",
                     sdp_p->debug_str, attr_p->attr.setup);
         return SDP_FAILURE;
-        break;
     }
 
     return SDP_SUCCESS;
@@ -5161,13 +5246,11 @@ sdp_result_e sdp_parse_attr_connection(sdp_t *sdp_p,
             "%s Warning: Unknown connection attribute",
             sdp_p->debug_str);
         return SDP_INVALID_PARAMETER;
-        break;
     default:
         /* This is an internal error, not a parsing error */
         CSFLogError(logTag, "%s Error: Invalid connection enum (%d)",
                     sdp_p->debug_str, attr_p->attr.connection);
         return SDP_FAILURE;
-        break;
     }
     return SDP_SUCCESS;
 }
@@ -5312,6 +5395,82 @@ sdp_result_e sdp_build_attr_msid(sdp_t *sdp_p,
                         attr_p->attr.msid.identifier,
                         attr_p->attr.msid.appdata[0] ? " " : "",
                         attr_p->attr.msid.appdata);
+    return SDP_SUCCESS;
+}
+
+sdp_result_e sdp_parse_attr_msid_semantic(sdp_t *sdp_p,
+                                          sdp_attr_t *attr_p,
+                                          const char *ptr)
+{
+    sdp_result_e result;
+    int i;
+
+    ptr = sdp_getnextstrtok(ptr,
+                            attr_p->attr.msid_semantic.semantic,
+                            sizeof(attr_p->attr.msid_semantic.semantic),
+                            " \t",
+                            &result);
+
+    if (result != SDP_SUCCESS) {
+        sdp_parse_error(sdp_p, "%s Warning: Bad msid-semantic attribute; "
+                        "missing semantic",
+                        sdp_p->debug_str);
+        sdp_p->conf_p->num_invalid_param++;
+        return SDP_INVALID_PARAMETER;
+    }
+
+    for (i = 0; i < SDP_MAX_MEDIA_STREAMS; ++i) {
+      /* msid-id can be up to 64 characters long, plus null terminator */
+      char temp[65];
+      ptr = sdp_getnextstrtok(ptr, temp, sizeof(temp), " \t", &result);
+
+      if (result != SDP_SUCCESS) {
+        break;
+      }
+
+      attr_p->attr.msid_semantic.msids[i] = cpr_strdup(temp);
+    }
+
+    if ((result != SDP_SUCCESS) && (result != SDP_EMPTY_TOKEN)) {
+        sdp_parse_error(sdp_p, "%s Warning: Bad msid-semantic attribute",
+                        sdp_p->debug_str);
+        sdp_p->conf_p->num_invalid_param++;
+        return SDP_INVALID_PARAMETER;
+    }
+
+    if (sdp_p->debug_flag[SDP_DEBUG_TRACE]) {
+        SDP_PRINT("%s Parsed a=msid-semantic, %s", sdp_p->debug_str,
+                  attr_p->attr.msid_semantic.semantic);
+        for (i = 0; i < SDP_MAX_MEDIA_STREAMS; ++i) {
+          if (!attr_p->attr.msid_semantic.msids[i]) {
+            break;
+          }
+
+          SDP_PRINT("%s ... msid %s", sdp_p->debug_str,
+                    attr_p->attr.msid_semantic.msids[i]);
+        }
+    }
+
+    return SDP_SUCCESS;
+}
+
+
+sdp_result_e sdp_build_attr_msid_semantic(sdp_t *sdp_p,
+                                          sdp_attr_t *attr_p,
+                                          flex_string *fs)
+{
+    int i;
+    flex_string_sprintf(fs, "a=msid-semantic:%s",
+                        attr_p->attr.msid_semantic.semantic);
+    for (i = 0; i < SDP_MAX_MEDIA_STREAMS; ++i) {
+        if (!attr_p->attr.msid_semantic.msids[i]) {
+            break;
+        }
+
+        flex_string_sprintf(fs, " %s",
+                            attr_p->attr.msid_semantic.msids[i]);
+    }
+    flex_string_sprintf(fs, "\r\n");
     return SDP_SUCCESS;
 }
 

@@ -71,7 +71,7 @@ function promiseExpirableDownloadVisit(aSourceUrl)
 /**
  * Checks the testing mechanism used to build different download lists.
  */
-add_task(function test_construction()
+add_task(function* test_construction()
 {
   let downloadListOne = yield promiseNewList();
   let downloadListTwo = yield promiseNewList();
@@ -86,7 +86,7 @@ add_task(function test_construction()
 /**
  * Checks the methods to add and retrieve items from the list.
  */
-add_task(function test_add_getAll()
+add_task(function* test_add_getAll()
 {
   let list = yield promiseNewList();
 
@@ -112,7 +112,7 @@ add_task(function test_add_getAll()
 /**
  * Checks the method to remove items from the list.
  */
-add_task(function test_remove()
+add_task(function* test_remove()
 {
   let list = yield promiseNewList();
 
@@ -134,7 +134,7 @@ add_task(function test_remove()
  * DownloadCombinedList object combine the contents of the global DownloadList
  * objects for public and private downloads.
  */
-add_task(function test_DownloadCombinedList_add_remove_getAll()
+add_task(function* test_DownloadCombinedList_add_remove_getAll()
 {
   let publicList = yield promiseNewList();
   let privateList = yield Downloads.getList(Downloads.PRIVATE);
@@ -174,7 +174,7 @@ add_task(function test_DownloadCombinedList_add_remove_getAll()
  * adding and removing views works as expected, both for a normal and a combined
  * list.
  */
-add_task(function test_notifications_add_remove()
+add_task(function* test_notifications_add_remove()
 {
   for (let isCombined of [false, true]) {
     // Force creating a new list for both the public and combined cases.
@@ -239,7 +239,7 @@ add_task(function test_notifications_add_remove()
  * Checks that views receive the download change notifications, both for a
  * normal and a combined list.
  */
-add_task(function test_notifications_change()
+add_task(function* test_notifications_change()
 {
   for (let isCombined of [false, true]) {
     // Force creating a new list for both the public and combined cases.
@@ -278,7 +278,7 @@ add_task(function test_notifications_change()
 /**
  * Checks that the reference to "this" is correct in the view callbacks.
  */
-add_task(function test_notifications_this()
+add_task(function* test_notifications_this()
 {
   let list = yield promiseNewList();
 
@@ -319,7 +319,7 @@ add_task(function test_notifications_this()
 /**
  * Checks that download is removed on history expiration.
  */
-add_task(function test_history_expiration()
+add_task(function* test_history_expiration()
 {
   mustInterruptResponses();
 
@@ -348,12 +348,12 @@ add_task(function test_history_expiration()
 
   // Work with one finished download and one canceled download.
   yield downloadOne.start();
-  downloadTwo.start();
+  downloadTwo.start().catch(() => {});
   yield downloadTwo.cancel();
 
   // We must replace the visits added while executing the downloads with visits
   // that are older than 7 days, otherwise they will not be expired.
-  yield promiseClearHistory();
+  yield PlacesTestUtils.clearHistory();
   yield promiseExpirableDownloadVisit();
   yield promiseExpirableDownloadVisit(httpUrl("interruptible.txt"));
 
@@ -374,7 +374,7 @@ add_task(function test_history_expiration()
 /**
  * Checks all downloads are removed after clearing history.
  */
-add_task(function test_history_clear()
+add_task(function* test_history_clear()
 {
   let list = yield promiseNewList();
   let downloadOne = yield promiseNewDownload();
@@ -396,7 +396,7 @@ add_task(function test_history_clear()
   yield downloadOne.start();
   yield downloadTwo.start();
 
-  yield promiseClearHistory();
+  yield PlacesTestUtils.clearHistory();
 
   // Wait for the removal notifications that may still be pending.
   yield deferred.promise;
@@ -406,7 +406,7 @@ add_task(function test_history_clear()
  * Tests the removeFinished method to ensure that it only removes
  * finished downloads.
  */
-add_task(function test_removeFinished()
+add_task(function* test_removeFinished()
 {
   let list = yield promiseNewList();
   let downloadOne = yield promiseNewDownload();
@@ -452,7 +452,7 @@ add_task(function test_removeFinished()
  * Tests the global DownloadSummary objects for the public, private, and
  * combined download lists.
  */
-add_task(function test_DownloadSummary()
+add_task(function* test_DownloadSummary()
 {
   mustInterruptResponses();
 
@@ -471,7 +471,7 @@ add_task(function test_DownloadSummary()
   // Add a public download that has been canceled midway.
   let canceledPublicDownload =
       yield promiseNewDownload(httpUrl("interruptible.txt"));
-  canceledPublicDownload.start();
+  canceledPublicDownload.start().catch(() => {});
   yield promiseDownloadMidway(canceledPublicDownload);
   yield canceledPublicDownload.cancel();
   yield publicList.add(canceledPublicDownload);
@@ -479,7 +479,7 @@ add_task(function test_DownloadSummary()
   // Add a public download that is in progress.
   let inProgressPublicDownload =
       yield promiseNewDownload(httpUrl("interruptible.txt"));
-  inProgressPublicDownload.start();
+  inProgressPublicDownload.start().catch(() => {});
   yield promiseDownloadMidway(inProgressPublicDownload);
   yield publicList.add(inProgressPublicDownload);
 
@@ -488,7 +488,7 @@ add_task(function test_DownloadSummary()
     source: { url: httpUrl("interruptible.txt"), isPrivate: true },
     target: getTempFile(TEST_TARGET_FILE_NAME).path,
   });
-  inProgressPrivateDownload.start();
+  inProgressPrivateDownload.start().catch(() => {});
   yield promiseDownloadMidway(inProgressPrivateDownload);
   yield privateList.add(inProgressPrivateDownload);
 
@@ -546,7 +546,7 @@ add_task(function test_DownloadSummary()
  * the combined summary when adding a public download, as we assume that if we
  * pass the test in this case we will also pass it in the others.
  */
-add_task(function test_DownloadSummary_notifications()
+add_task(function* test_DownloadSummary_notifications()
 {
   let list = yield promiseNewList();
   let summary = yield Downloads.getSummary(Downloads.ALL);
@@ -564,9 +564,3 @@ add_task(function test_DownloadSummary_notifications()
   yield download.start();
   do_check_true(receivedOnSummaryChanged);
 });
-
-////////////////////////////////////////////////////////////////////////////////
-//// Termination
-
-let tailFile = do_get_file("tail.js");
-Services.scriptloader.loadSubScript(NetUtil.newURI(tailFile).spec);

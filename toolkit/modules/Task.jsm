@@ -91,6 +91,10 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
 
+// For now, we're worried about add-ons using Tasks with CPOWs, so we'll
+// permit them in this scope, but this support will go away soon.
+Cu.permitCPOWsInScope(this);
+
 Cu.import("resource://gre/modules/Promise.jsm");
 
 // The following error types are considered programmer errors, which should be
@@ -100,13 +104,13 @@ const ERRORS_TO_REPORT = ["EvalError", "RangeError", "ReferenceError", "TypeErro
 /**
  * The Task currently being executed
  */
-let gCurrentTask = null;
+var gCurrentTask = null;
 
 /**
  * If `true`, capture stacks whenever entering a Task and rewrite the
  * stack any exception thrown through a Task.
  */
-let gMaintainStack = false;
+var gMaintainStack = false;
 
 
 /**
@@ -120,7 +124,7 @@ function* linesOf(string) {
   while ((match = reLine.exec(string))) {
     yield [match[0], match.index];
   }
-};
+}
 
 /**
  * Detect whether a value is a generator.
@@ -237,9 +241,10 @@ function createAsyncFunction(aTask) {
       try {
         // Let's call into the function ourselves.
         result = aTask.apply(this, arguments);
-      } catch (ex if ex instanceof Task.Result) {
-        return Promise.resolve(ex.value);
       } catch (ex) {
+        if (ex instanceof Task.Result) {
+          return Promise.resolve(ex.value);
+        }
         return Promise.reject(ex);
       }
     }
@@ -330,16 +335,18 @@ TaskImpl.prototype = {
           let yielded = aSendResolved ? this._iterator.send(aSendValue)
                                       : this._iterator.throw(aSendValue);
           this._handleResultValue(yielded);
-        } catch (ex if ex instanceof Task.Result) {
-          // The generator function threw the special exception that allows it to
-          // return a specific value on resolution.
-          this.deferred.resolve(ex.value);
-        } catch (ex if ex instanceof StopIteration) {
-          // The generator function terminated with no specific result.
-          this.deferred.resolve(undefined);
         } catch (ex) {
-          // The generator function failed with an uncaught exception.
-          this._handleException(ex);
+          if (ex instanceof Task.Result) {
+            // The generator function threw the special exception that allows it to
+            // return a specific value on resolution.
+            this.deferred.resolve(ex.value);
+          } else if (ex instanceof StopIteration) {
+            // The generator function terminated with no specific result.
+            this.deferred.resolve(undefined);
+          } else {
+            // The generator function failed with an uncaught exception.
+            this._handleException(ex);
+          }
         }
       }
     } finally {

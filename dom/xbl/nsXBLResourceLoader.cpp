@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,7 +17,8 @@
 #include "nsIDocumentObserver.h"
 #include "imgILoader.h"
 #include "imgRequestProxy.h"
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetHandle.h"
+#include "mozilla/StyleSheetHandleInlines.h"
 #include "mozilla/css/Loader.h"
 #include "nsIURI.h"
 #include "nsNetUtil.h"
@@ -119,8 +121,8 @@ nsXBLResourceLoader::LoadResources(bool* aResult)
       // Now kick off the image load...
       // Passing nullptr for pretty much everything -- cause we don't care!
       // XXX: initialDocumentURI is nullptr! 
-      nsRefPtr<imgRequestProxy> req;
-      nsContentUtils::LoadImage(url, doc, docPrincipal, docURL,
+      RefPtr<imgRequestProxy> req;
+      nsContentUtils::LoadImage(url, doc, doc, docPrincipal, docURL,
                                 doc->GetReferrerPolicy(), nullptr,
                                 nsIRequest::LOAD_BACKGROUND, EmptyString(),
                                 getter_AddRefs(req));
@@ -138,8 +140,8 @@ nsXBLResourceLoader::LoadResources(bool* aResult)
           CheckLoadURIWithPrincipal(docPrincipal, url,
                                     nsIScriptSecurityManager::ALLOW_CHROME);
         if (NS_SUCCEEDED(rv)) {
-          nsRefPtr<CSSStyleSheet> sheet;
-          rv = cssLoader->LoadSheetSync(url, getter_AddRefs(sheet));
+          StyleSheetHandle::RefPtr sheet;
+          rv = cssLoader->LoadSheetSync(url, &sheet);
           NS_ASSERTION(NS_SUCCEEDED(rv), "Load failed!!!");
           if (NS_SUCCEEDED(rv))
           {
@@ -150,7 +152,7 @@ nsXBLResourceLoader::LoadResources(bool* aResult)
       }
       else
       {
-        rv = cssLoader->LoadSheet(url, docPrincipal, EmptyCString(), this);
+        rv = cssLoader->LoadSheet(url, false, docPrincipal, EmptyCString(), this);
         if (NS_SUCCEEDED(rv))
           ++mPendingSheets;
       }
@@ -167,7 +169,7 @@ nsXBLResourceLoader::LoadResources(bool* aResult)
 
 // nsICSSLoaderObserver
 NS_IMETHODIMP
-nsXBLResourceLoader::StyleSheetLoaded(CSSStyleSheet* aSheet,
+nsXBLResourceLoader::StyleSheetLoaded(StyleSheetHandle aSheet,
                                       bool aWasAlternate,
                                       nsresult aStatus)
 {
@@ -196,9 +198,6 @@ void
 nsXBLResourceLoader::AddResource(nsIAtom* aResourceType, const nsAString& aSrc)
 {
   nsXBLResource* res = new nsXBLResource(aResourceType, aSrc);
-  if (!res)
-    return;
-
   if (!mResourceList)
     mResourceList = res;
   else
@@ -234,7 +233,7 @@ nsXBLResourceLoader::NotifyBoundElements()
     if (ready) {
       // We need the document to flush out frame construction and
       // such, so we want to use the current document.
-      nsIDocument* doc = content->GetCurrentDoc();
+      nsIDocument* doc = content->GetUncomposedDoc();
     
       if (doc) {
         // Flush first to make sure we can get the frame for content

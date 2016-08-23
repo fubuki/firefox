@@ -75,30 +75,26 @@ XULSortServiceImpl::SetSortColumnHints(nsIContent *content,
   for (nsIContent* child = content->GetFirstChild();
        child;
        child = child->GetNextSibling()) {
-    if (child->IsXUL()) {
-      nsIAtom *tag = child->Tag();
-
-      if (tag == nsGkAtoms::treecols) {
-        SetSortColumnHints(child, sortResource, sortDirection);
-      } else if (tag == nsGkAtoms::treecol) {
-        nsAutoString value;
-        child->GetAttr(kNameSpaceID_None, nsGkAtoms::sort, value);
-        // also check the resource attribute for older code
-        if (value.IsEmpty())
-          child->GetAttr(kNameSpaceID_None, nsGkAtoms::resource, value);
-        if (value == sortResource) {
-          child->SetAttr(kNameSpaceID_None, nsGkAtoms::sortActive,
-                         NS_LITERAL_STRING("true"), true);
-          child->SetAttr(kNameSpaceID_None, nsGkAtoms::sortDirection,
-                         sortDirection, true);
-          // Note: don't break out of loop; want to set/unset
-          // attribs on ALL sort columns
-        } else if (!value.IsEmpty()) {
-          child->UnsetAttr(kNameSpaceID_None, nsGkAtoms::sortActive,
-                           true);
-          child->UnsetAttr(kNameSpaceID_None, nsGkAtoms::sortDirection,
-                           true);
-        }
+    if (child->IsXULElement(nsGkAtoms::treecols)) {
+      SetSortColumnHints(child, sortResource, sortDirection);
+    } else if (child->IsXULElement(nsGkAtoms::treecol)) {
+      nsAutoString value;
+      child->GetAttr(kNameSpaceID_None, nsGkAtoms::sort, value);
+      // also check the resource attribute for older code
+      if (value.IsEmpty())
+        child->GetAttr(kNameSpaceID_None, nsGkAtoms::resource, value);
+      if (value == sortResource) {
+        child->SetAttr(kNameSpaceID_None, nsGkAtoms::sortActive,
+                       NS_LITERAL_STRING("true"), true);
+        child->SetAttr(kNameSpaceID_None, nsGkAtoms::sortDirection,
+                       sortDirection, true);
+        // Note: don't break out of loop; want to set/unset
+        // attribs on ALL sort columns
+      } else if (!value.IsEmpty()) {
+        child->UnsetAttr(kNameSpaceID_None, nsGkAtoms::sortActive,
+                         true);
+        child->UnsetAttr(kNameSpaceID_None, nsGkAtoms::sortDirection,
+                         true);
       }
     }
   }
@@ -177,7 +173,7 @@ XULSortServiceImpl::GetTemplateItemsToSort(nsIContent* aContainer,
       cinfo->content = child;
       cinfo->result = result;
     }
-    else if (aContainer->Tag() != nsGkAtoms::_template) {
+    else if (!aContainer->IsXULElement(nsGkAtoms::_template)) {
       rv = GetTemplateItemsToSort(child, aBuilder, aSortState, aSortItems);
       NS_ENSURE_SUCCESS(rv, rv);
     }
@@ -365,13 +361,13 @@ XULSortServiceImpl::InitializeSortState(nsIContent* aRootElement,
     nsAutoString sortResource, sortResource2;
     aRootElement->GetAttr(kNameSpaceID_None, nsGkAtoms::sortResource, sortResource);
     if (!sortResource.IsEmpty()) {
-      nsCOMPtr<nsIAtom> sortkeyatom = do_GetAtom(sortResource);
+      nsCOMPtr<nsIAtom> sortkeyatom = NS_Atomize(sortResource);
       aSortState->sortKeys.AppendObject(sortkeyatom);
       sort.Append(sortResource);
 
       aRootElement->GetAttr(kNameSpaceID_None, nsGkAtoms::sortResource2, sortResource2);
       if (!sortResource2.IsEmpty()) {
-        nsCOMPtr<nsIAtom> sortkeyatom2 = do_GetAtom(sortResource2);
+        nsCOMPtr<nsIAtom> sortkeyatom2 = NS_Atomize(sortResource2);
         aSortState->sortKeys.AppendObject(sortkeyatom2);
         sort.Append(' ');
         sort.Append(sortResource2);
@@ -381,7 +377,7 @@ XULSortServiceImpl::InitializeSortState(nsIContent* aRootElement,
   else {
     nsWhitespaceTokenizer tokenizer(sort);
     while (tokenizer.hasMoreTokens()) {
-      nsCOMPtr<nsIAtom> keyatom = do_GetAtom(tokenizer.nextToken());
+      nsCOMPtr<nsIAtom> keyatom = NS_Atomize(tokenizer.nextToken());
       NS_ENSURE_TRUE(keyatom, NS_ERROR_OUT_OF_MEMORY);
       aSortState->sortKeys.AppendObject(keyatom);
     }
@@ -506,9 +502,6 @@ nsresult
 NS_NewXULSortService(nsIXULSortService** sortService)
 {
   *sortService = new XULSortServiceImpl();
-  if (!*sortService)
-    return NS_ERROR_OUT_OF_MEMORY;
-
   NS_ADDREF(*sortService);
   return NS_OK;
 }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,10 +22,12 @@ namespace mozilla {
 class EventChainPreVisitor;
 namespace dom {
 
+class ImageLoadTask;
+
 class ResponsiveImageSelector;
-class HTMLImageElement MOZ_FINAL : public nsGenericHTMLElement,
-                                   public nsImageLoadingContent,
-                                   public nsIDOMHTMLImageElement
+class HTMLImageElement final : public nsGenericHTMLElement,
+                               public nsImageLoadingContent,
+                               public nsIDOMHTMLImageElement
 {
   friend class HTMLSourceElement;
   friend class HTMLPictureElement;
@@ -44,7 +47,10 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual bool Draggable() const MOZ_OVERRIDE;
+  virtual bool Draggable() const override;
+
+  // Element
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override;
 
   // nsIDOMHTMLImageElement
   NS_DECL_NSIDOMHTMLIMAGEELEMENT
@@ -52,21 +58,21 @@ public:
   NS_IMPL_FROMCONTENT_HTML_WITH_TAG(HTMLImageElement, img)
 
   // override from nsImageLoadingContent
-  CORSMode GetCORSMode() MOZ_OVERRIDE;
+  CORSMode GetCORSMode() override;
 
   // nsIContent
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsIAtom* aAttribute,
                                 const nsAString& aValue,
-                                nsAttrValue& aResult) MOZ_OVERRIDE;
+                                nsAttrValue& aResult) override;
   virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
-                                              int32_t aModType) const MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const MOZ_OVERRIDE;
-  virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const MOZ_OVERRIDE;
+                                              int32_t aModType) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
 
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
 
-  bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) MOZ_OVERRIDE;
+  bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) override;
 
   // SetAttr override.  C++ is stupid, so have to override both
   // overloaded methods.
@@ -77,15 +83,15 @@ public:
   }
   virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                            nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) MOZ_OVERRIDE;
+                           bool aNotify) override;
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
-                              bool aCompileEventHandlers) MOZ_OVERRIDE;
-  virtual void UnbindFromTree(bool aDeep, bool aNullParent) MOZ_OVERRIDE;
+                              bool aCompileEventHandlers) override;
+  virtual void UnbindFromTree(bool aDeep, bool aNullParent) override;
 
-  virtual EventStates IntrinsicState() const MOZ_OVERRIDE;
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual EventStates IntrinsicState() const override;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
   nsresult CopyInnerTo(Element* aDest);
 
@@ -185,6 +191,20 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::border, aBorder, aError);
   }
+  void SetReferrerPolicy(const nsAString& aReferrer, ErrorResult& aError)
+  {
+    SetHTMLAttr(nsGkAtoms::referrerpolicy, aReferrer, aError);
+  }
+  void GetReferrerPolicy(nsAString& aReferrer)
+  {
+    GetEnumAttr(nsGkAtoms::referrerpolicy, EmptyCString().get(), aReferrer);
+  }
+
+  net::ReferrerPolicy
+  GetImageReferrerPolicy() override
+  {
+    return GetReferrerPolicyAsEnum();
+  }
 
   int32_t X();
   int32_t Y();
@@ -200,7 +220,58 @@ public:
   void SetForm(nsIDOMHTMLFormElement* aForm);
   void ClearForm(bool aRemoveFromForm);
 
-  virtual void DestroyContent() MOZ_OVERRIDE;
+  virtual void DestroyContent() override;
+
+  void MediaFeatureValuesChanged();
+
+  /**
+   * Given a hypothetical <img> or <source> tag with the given parameters,
+   * return what URI we would attempt to use, if any.  Used by the preloader to
+   * resolve sources prior to DOM creation.
+   *
+   * @param aDocument The document this image would be for, for referencing
+   *        viewport width and DPI/zoom
+   * @param aIsSourceTag If these parameters are for a <source> tag (as in a
+   *        <picture>) rather than an <img> tag. Note that some attrs are unused
+   *        when this is true an vice versa
+   * @param aSrcAttr [ignored if aIsSourceTag] The src attr for this image.
+   * @param aSrcsetAttr The srcset attr for this image/source
+   * @param aSizesAttr The sizes attr for this image/source
+   * @param aTypeAttr [ignored if !aIsSourceTag] The type attr for this source.
+   *                  Should be a void string to differentiate no type attribute
+   *                  from an empty one.
+   * @param aMediaAttr [ignored if !aIsSourceTag] The media attr for this
+   *                   source.  Should be a void string to differentiate no
+   *                   media attribute from an empty one.
+   * @param aResult A reference to store the resulting URL spec in if we
+   *                selected a source.  This value is not guaranteed to parse to
+   *                a valid URL, merely the URL that the tag would attempt to
+   *                resolve and load (which may be the empty string).  This
+   *                parameter is not modified if return value is false.
+   * @return True if we were able to select a final source, false if further
+   *         sources would be considered.  It follows that this always returns
+   *         true if !aIsSourceTag.
+   *
+   * Note that the return value may be true with an empty string as the result,
+   * which implies that the parameters provided describe a tag that would select
+   * no source.  This is distinct from a return of false which implies that
+   * further <source> or <img> tags would be considered.
+   */
+  static bool
+    SelectSourceForTagWithAttrs(nsIDocument *aDocument,
+                                bool aIsSourceTag,
+                                const nsAString& aSrcAttr,
+                                const nsAString& aSrcsetAttr,
+                                const nsAString& aSizesAttr,
+                                const nsAString& aTypeAttr,
+                                const nsAString& aMediaAttr,
+                                nsAString& aResult);
+
+  /**
+   * If this image's src pointers to an SVG document, flush the SVG document's
+   * use counters to telemetry.  Only used for testing purposes.
+   */
+  void FlushUseCounters();
 
 protected:
   virtual ~HTMLImageElement();
@@ -211,7 +282,7 @@ protected:
   // algorithm (InResponsiveMode()) -- synchronous actions when just
   // using img.src will bypass this, and update source and kick off
   // image load synchronously.
-  void QueueImageLoadTask();
+  void QueueImageLoadTask(bool aAlwaysLoad);
 
   // True if we have a srcset attribute or a <picture> parent, regardless of if
   // any valid responsive sources were parsed from either.
@@ -223,7 +294,10 @@ protected:
 
   // Resolve and load the current mResponsiveSelector (responsive mode) or src
   // attr image.
-  nsresult LoadSelectedImage(bool aForce, bool aNotify);
+  nsresult LoadSelectedImage(bool aForce, bool aNotify, bool aAlwaysLoad);
+
+  // True if this string represents a type we would support on <source type>
+  static bool SupportedPictureSourceType(const nsAString& aType);
 
   // Update/create/destroy mResponsiveSelector
   void PictureSourceSrcsetChanged(nsIContent *aSourceNode,
@@ -249,7 +323,9 @@ protected:
   // the existing mResponsiveSelector, meaning you need to update its
   // parameters as appropriate before calling (or null it out to force
   // recreation)
-  void UpdateResponsiveSource();
+  //
+  // Returns true if the source has changed, and false otherwise.
+  bool UpdateResponsiveSource();
 
   // Given a <source> node that is a previous sibling *or* ourselves, try to
   // create a ResponsiveSelector.
@@ -262,30 +338,33 @@ protected:
                                    const nsAString *aSizes = nullptr);
 
   CSSIntPoint GetXY();
-  virtual void GetItemValueText(nsAString& text) MOZ_OVERRIDE;
-  virtual void SetItemValueText(const nsAString& text) MOZ_OVERRIDE;
-  virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
+  virtual void GetItemValueText(DOMString& text) override;
+  virtual void SetItemValueText(const nsAString& text) override;
+  virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
   void UpdateFormOwner();
 
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
-                                 bool aNotify) MOZ_OVERRIDE;
+                                 nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
 
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) MOZ_OVERRIDE;
+                                const nsAttrValue* aValue, bool aNotify) override;
 
   // This is a weak reference that this element and the HTMLFormElement
   // cooperate in maintaining.
   HTMLFormElement* mForm;
 
   // Created when we're tracking responsive image state
-  nsRefPtr<ResponsiveImageSelector> mResponsiveSelector;
+  RefPtr<ResponsiveImageSelector> mResponsiveSelector;
 
 private:
+  bool SourceElementMatches(nsIContent* aSourceNode);
+
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                     nsRuleData* aData);
 
-  nsCOMPtr<nsIRunnable> mPendingImageLoadTask;
+  bool mInDocResponsiveContent;
+  RefPtr<ImageLoadTask> mPendingImageLoadTask;
 };
 
 } // namespace dom

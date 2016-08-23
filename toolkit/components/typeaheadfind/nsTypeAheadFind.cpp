@@ -315,7 +315,11 @@ nsTypeAheadFind::FindItNow(nsIPresShell *aPresShell, bool aIsLinksOnly,
       return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<nsPresContext> presContext = presShell->GetPresContext();
+  // There could be unflushed notifications which hide textareas or other
+  // elements that we don't want to find text in.
+  presShell->FlushPendingNotifications(Flush_Layout);
+
+  RefPtr<nsPresContext> presContext = presShell->GetPresContext();
 
   if (!presContext)
     return NS_ERROR_FAILURE;
@@ -479,7 +483,7 @@ nsTypeAheadFind::FindItNow(nsIPresShell *aPresShell, bool aIsLinksOnly,
       if (!document)
         return NS_ERROR_UNEXPECTED;
 
-      nsCOMPtr<nsPIDOMWindow> window = document->GetInnerWindow();
+      nsCOMPtr<nsPIDOMWindowInner> window = document->GetInnerWindow();
       NS_ASSERTION(window, "document has no window");
       if (!window)
         return NS_ERROR_UNEXPECTED;
@@ -491,19 +495,17 @@ nsTypeAheadFind::FindItNow(nsIPresShell *aPresShell, bool aIsLinksOnly,
          * |if (focusedWindow.top == ourWindow.top)| */
         bool shouldFocusEditableElement = false;
         if (fm) {
-          nsCOMPtr<nsIDOMWindow> focusedWindow;
+          nsCOMPtr<mozIDOMWindowProxy> focusedWindow;
           nsresult rv = fm->GetFocusedWindow(getter_AddRefs(focusedWindow));
-          if (NS_SUCCEEDED(rv)) {
-            nsCOMPtr<nsPIDOMWindow> fwPI(do_QueryInterface(focusedWindow, &rv));
+          if (NS_SUCCEEDED(rv) && focusedWindow) {
+            auto* fwPI = nsPIDOMWindowOuter::From(focusedWindow);
+            nsCOMPtr<nsIDocShellTreeItem> fwTreeItem
+              (do_QueryInterface(fwPI->GetDocShell(), &rv));
             if (NS_SUCCEEDED(rv)) {
-              nsCOMPtr<nsIDocShellTreeItem> fwTreeItem
-                (do_QueryInterface(fwPI->GetDocShell(), &rv));
-              if (NS_SUCCEEDED(rv)) {
-                nsCOMPtr<nsIDocShellTreeItem> fwRootTreeItem;
-                rv = fwTreeItem->GetSameTypeRootTreeItem(getter_AddRefs(fwRootTreeItem));
-                if (NS_SUCCEEDED(rv) && fwRootTreeItem == rootContentTreeItem)
-                  shouldFocusEditableElement = true;
-              }
+              nsCOMPtr<nsIDocShellTreeItem> fwRootTreeItem;
+              rv = fwTreeItem->GetSameTypeRootTreeItem(getter_AddRefs(fwRootTreeItem));
+              if (NS_SUCCEEDED(rv) && fwRootTreeItem == rootContentTreeItem)
+                shouldFocusEditableElement = true;
             }
           }
         }
@@ -570,8 +572,8 @@ nsTypeAheadFind::FindItNow(nsIPresShell *aPresShell, bool aIsLinksOnly,
       }
 
       if (!mFoundEditable && fm) {
-        nsCOMPtr<nsIDOMWindow> win = do_QueryInterface(window);
-        fm->MoveFocus(win, nullptr, nsIFocusManager::MOVEFOCUS_CARET,
+        fm->MoveFocus(window->GetOuterWindow(),
+                      nullptr, nsIFocusManager::MOVEFOCUS_CARET,
                       nsIFocusManager::FLAG_NOSCROLL | nsIFocusManager::FLAG_NOSWITCHFRAME,
                       getter_AddRefs(mFoundLink));
       }
@@ -691,7 +693,7 @@ nsTypeAheadFind::GetFoundEditable(nsIDOMElement** aFoundEditable)
 }
 
 NS_IMETHODIMP
-nsTypeAheadFind::GetCurrentWindow(nsIDOMWindow** aCurrentWindow)
+nsTypeAheadFind::GetCurrentWindow(mozIDOMWindow** aCurrentWindow)
 {
   NS_ENSURE_ARG_POINTER(aCurrentWindow);
   *aCurrentWindow = mCurrentWindow;
@@ -720,7 +722,7 @@ nsTypeAheadFind::GetSearchContainers(nsISupports *aContainer,
 
   nsCOMPtr<nsIPresShell> presShell = docShell->GetPresShell();
 
-  nsRefPtr<nsPresContext> presContext;
+  RefPtr<nsPresContext> presContext;
   docShell->GetPresContext(getter_AddRefs(presContext));
 
   if (!presShell || !presContext)
@@ -819,11 +821,8 @@ nsTypeAheadFind::GetSearchContainers(nsISupports *aContainer,
 
   mStartPointRange->Collapse(true); // collapse to start
 
-  *aPresShell = presShell;
-  NS_ADDREF(*aPresShell);
-
-  *aPresContext = presContext;
-  NS_ADDREF(*aPresContext);
+  presShell.forget(aPresShell);
+  presContext.forget(aPresContext);
 
   return NS_OK;
 }
@@ -877,14 +876,14 @@ nsTypeAheadFind::RangeStartsInsideLink(nsIDOMRange *aRange,
   // We now have the correct start node for the range
   // Search for links, starting with startNode, and going up parent chain
 
-  nsCOMPtr<nsIAtom> tag, hrefAtom(do_GetAtom("href"));
-  nsCOMPtr<nsIAtom> typeAtom(do_GetAtom("type"));
+  nsCOMPtr<nsIAtom> tag, hrefAtom(NS_Atomize("href"));
+  nsCOMPtr<nsIAtom> typeAtom(NS_Atomize("type"));
 
   while (true) {
     // Keep testing while startContent is equal to something,
     // eventually we'll run out of ancestors
 
-    if (startContent->IsHTML()) {
+    if (startContent->IsHTMLElement()) {
       nsCOMPtr<mozilla::dom::Link> link(do_QueryInterface(startContent));
       if (link) {
         // Check to see if inside HTML link
@@ -1053,13 +1052,13 @@ nsTypeAheadFind::Find(const nsAString& aSearchString, bool aLinksOnly,
       if (!document)
         return NS_ERROR_UNEXPECTED;
 
-      nsCOMPtr<nsIDOMWindow> window = do_QueryInterface(document->GetWindow());
-
       nsCOMPtr<nsIFocusManager> fm = do_GetService(FOCUSMANAGER_CONTRACTID);
       if (fm) {
+        nsPIDOMWindowOuter* window = document->GetWindow();
         nsCOMPtr<nsIDOMElement> focusedElement;
-        nsCOMPtr<nsIDOMWindow> focusedWindow;
-        fm->GetFocusedElementForWindow(window, false, getter_AddRefs(focusedWindow),
+        nsCOMPtr<mozIDOMWindowProxy> focusedWindow;
+        fm->GetFocusedElementForWindow(window, false,
+                                       getter_AddRefs(focusedWindow),
                                        getter_AddRefs(focusedElement));
         // If the root element is focused, then it's actually the document
         // that has the focus, so ignore this.
@@ -1150,14 +1149,14 @@ nsTypeAheadFind::IsRangeVisible(nsIDOMRange *aRange,
   aRange->GetStartContainer(getter_AddRefs(node));
   nsCOMPtr<nsIDOMDocument> document;
   node->GetOwnerDocument(getter_AddRefs(document));
-  nsCOMPtr<nsIDOMWindow> window;
+  nsCOMPtr<mozIDOMWindowProxy> window;
   document->GetDefaultView(getter_AddRefs(window));
   nsCOMPtr<nsIWebNavigation> navNav (do_GetInterface(window));
   nsCOMPtr<nsIDocShell> docShell (do_GetInterface(navNav));
 
   // Set up the arguments needed to check if a range is visible.
   nsCOMPtr<nsIPresShell> presShell (docShell->GetPresShell());
-  nsRefPtr<nsPresContext> presContext = presShell->GetPresContext();
+  RefPtr<nsPresContext> presContext = presShell->GetPresContext();
   nsCOMPtr<nsIDOMRange> startPointRange = new nsRange(presShell->GetDocument());
   *aResult = IsRangeVisible(presShell, presContext, aRange,
                             aMustBeInViewPort, false,
@@ -1254,7 +1253,8 @@ nsTypeAheadFind::IsRangeVisible(nsIPresShell *aPresShell,
                             eLeaf,
                             false, // aVisual
                             false, // aLockInScrollView
-                            false     // aFollowOOFs
+                            false, // aFollowOOFs
+                            false  // aSkipPopupChecks
                             );
 
   if (!frameTraversal)

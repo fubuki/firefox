@@ -20,7 +20,7 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MobileCellInfo)
   NS_INTERFACE_MAP_ENTRY(nsIMobileCellInfo)
 NS_INTERFACE_MAP_END
 
-MobileCellInfo::MobileCellInfo(nsPIDOMWindow* aWindow)
+MobileCellInfo::MobileCellInfo(nsPIDOMWindowInner* aWindow)
   : mWindow(aWindow)
   , mGsmLocationAreaCode(-1)
   , mGsmCellId(-1)
@@ -69,9 +69,9 @@ MobileCellInfo::Update(nsIMobileCellInfo* aInfo)
 }
 
 JSObject*
-MobileCellInfo::WrapObject(JSContext* aCx)
+MobileCellInfo::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozMobileCellInfoBinding::Wrap(aCx, this);
+  return MozMobileCellInfoBinding::Wrap(aCx, this, aGivenProto);
 }
 
 // nsIMobileCellInfo

@@ -9,7 +9,7 @@ assertThrowsInstanceOf(() => { [a, b, c] = {0: 0, 1: 1, 2: 2} }, TypeError);
 var nextcalls = 0, donecalls = 0, valuecalls = 0;
 var doneafter = 0;
 var iterable = {};
-iterable[std_iterator] = function () {
+iterable[Symbol.iterator] = function () {
   return {
     next: function () {
       assertEq(arguments.length, 0, 'iterator.next() should be called with no arguments');
@@ -49,16 +49,31 @@ assertIterable([5,5,4,4],
   it => { var [,,...rest] = it; return rest; },
   [3,4]);
 
+// the iterator should be exhausted before any error is thrown
+assertIterable([5,5,4,4],
+  it => {
+    assertThrowsInstanceOf(function () {
+      "use strict";
+      [...{0: "".x}] = it;
+    }, TypeError);
+    return [];
+  },
+  []);
+
 var arraycalls = 0;
-var ArrayIterator = Array.prototype[std_iterator];
-Array.prototype[std_iterator] = function () {
+var ArrayIterator = Array.prototype[Symbol.iterator];
+Array.prototype[Symbol.iterator] = function () {
   arraycalls++;
   return ArrayIterator.apply(this, arguments);
 };
 // [...rest] should not call Array#@@iterator for the LHS
 var [...rest] = iterable;
 assertEq(arraycalls, 0, 'calls to Array#@@iterator');
-
+// [...[...rest]] should do so, since it creates an implicit array for the
+// first rest pattern, then destructures that again using @@iterator() for the
+// second rest pattern.
+var [...[...rest]] = iterable;
+assertEq(arraycalls, 1, 'calls to Array#@@iterator');
 
 // loop `fn` a few times, to get it JIT-compiled
 function loop(fn) {
@@ -67,19 +82,19 @@ function loop(fn) {
 }
 
 loop(() => { doneafter = 4; var [a] = iterable; return a; });
-loop(() => { doneafter = 4; var [a,b,...rest] = iterable; return rest; });
+loop(() => { doneafter = 4; var [a,b,...[...rest]] = iterable; return rest; });
 
 
 // destructuring assignment should always use iterators and not optimize
 // to a "group assignment"
-delete Array.prototype[std_iterator];
+delete Array.prototype[Symbol.iterator];
 assertThrowsInstanceOf(() => { var [a,b] = [1,2]; }, TypeError);
-Array.prototype[std_iterator] = ArrayIterator;
+Array.prototype[Symbol.iterator] = ArrayIterator;
 
 // observe the binding order
 a = undefined, b = undefined, c = undefined;
 var obj = {};
-obj[std_iterator] = function* () {
+obj[Symbol.iterator] = function* () {
 	// normal fields should be initialized right after |.next()|
 	yield 1;
 	assertEq(a, 1);
@@ -99,11 +114,11 @@ assertEqArray(c, [4,5]);
 
 assertThrowsValue(function () {
   try {
-    Array.prototype[std_iterator] = function () { throw 'from iterator'; };
+    Array.prototype[Symbol.iterator] = function () { throw 'from iterator'; };
     throw [1, 2];
   } catch ([x, y]) {
     throw 'not reached';
   }
 }, 'from iterator');
-Array.prototype[std_iterator] = ArrayIterator;
+Array.prototype[Symbol.iterator] = ArrayIterator;
 

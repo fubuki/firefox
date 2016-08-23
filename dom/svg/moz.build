@@ -11,6 +11,7 @@ EXPORTS += [
     'nsSVGElement.h',
     'nsSVGFeatures.h',
     'SVGAttrValueWrapper.h',
+    'SVGContentUtils.h',
     'SVGPreserveAspectRatio.h',
     'SVGStringList.h',
 ]
@@ -66,7 +67,6 @@ EXPORTS.mozilla.dom += [
     'SVGGElement.h',
     'SVGGradientElement.h',
     'SVGGraphicsElement.h',
-    'SVGIFrameElement.h',
     'SVGImageElement.h',
     'SVGIRect.h',
     'SVGLineElement.h',
@@ -193,7 +193,6 @@ UNIFIED_SOURCES += [
     'SVGGElement.cpp',
     'SVGGradientElement.cpp',
     'SVGGraphicsElement.cpp',
-    'SVGIFrameElement.cpp',
     'SVGImageElement.cpp',
     'SVGIntegerPairSMILType.cpp',
     'SVGLength.cpp',
@@ -250,8 +249,6 @@ UNIFIED_SOURCES += [
     'SVGViewElement.cpp',
     'SVGZoomEvent.cpp',
 ]
-
-FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

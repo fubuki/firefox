@@ -111,6 +111,41 @@ function isLogged(aModule)
 }
 
 /**
+ * Dumps the accessible tree into console.
+ */
+function dumpTree(aId, aMsg)
+{
+  function dumpTreeIntl(acc, indent)
+  {
+    dump(indent + prettyName(acc) + "\n");
+
+    var children = acc.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children.queryElementAt(i, nsIAccessible);
+      dumpTreeIntl(child, indent + "  ");
+    }
+  }
+
+  function dumpDOMTreeIntl(node, indent)
+  {
+    dump(indent + prettyName(node) + "\n");
+
+    var children = node.childNodes;
+    for (var i = 0; i < children.length; i++) {
+      var child = children.item(i);
+      dumpDOMTreeIntl(child, indent + "  ");
+    }
+  }
+
+  dump(aMsg + "\n");
+  var root = getAccessible(aId);
+  dumpTreeIntl(root, "  ");
+
+  dump("DOM tree:\n");
+  dumpDOMTreeIntl(getNode(aId), "  ");
+}
+
+/**
  * Invokes the given function when document is loaded and focused. Preferable
  * to mochitests 'addLoadEvent' function -- additionally ensures state of the
  * document accessible is not busy.
@@ -213,7 +248,7 @@ function getAccessible(aAccOrElmOrID, aInterfaces, aElmObj, aDoNotFailIf)
   var elm = null;
 
   if (aAccOrElmOrID instanceof nsIAccessible) {
-    elm = aAccOrElmOrID.DOMNode;
+    try { elm = aAccOrElmOrID.DOMNode; } catch(e) { }
 
   } else if (aAccOrElmOrID instanceof nsIDOMNode) {
     elm = aAccOrElmOrID;
@@ -359,18 +394,12 @@ function testAccessibleTree(aAccOrElmOrID, aAccTree, aFlags)
   var accTree = aAccTree;
 
   // Support of simplified accessible tree object.
-  var key = Object.keys(accTree)[0];
-  var roleName = "ROLE_" + key;
-  if (roleName in nsIAccessibleRole) {
-    accTree = {
-      role: nsIAccessibleRole[roleName],
-      children: accTree[key]
-    };
-  }
+  accTree = normalizeAccTreeObj(accTree);
 
   // Test accessible properties.
   for (var prop in accTree) {
-    var msg = "Wrong value of property '" + prop + "' for " + prettyName(acc) + ".";
+    var msg = "Wrong value of property '" + prop + "' for " +
+               prettyName(acc) + ".";
 
     switch (prop) {
     case "actions": {
@@ -424,9 +453,9 @@ function testAccessibleTree(aAccOrElmOrID, aAccTree, aFlags)
       for (var offset in accTree[prop]) {
         if (prevOffset !=- 1) {
           var attrs = accTree[prop][prevOffset];
-          testTextAttrs(acc, prevOffset, attrs, { }, prevOffset, offset, true);
+          testTextAttrs(acc, prevOffset, attrs, { }, prevOffset, +offset, true);
         }
-        prevOffset = offset;
+        prevOffset = +offset;
       }
 
       if (prevOffset != -1) {
@@ -451,10 +480,35 @@ function testAccessibleTree(aAccOrElmOrID, aAccTree, aFlags)
     var children = acc.children;
     var childCount = children.length;
 
-    is(childCount, accTree.children.length,
-       "Different amount of expected children of " + prettyName(acc) + ".");
+    if (accTree.children.length != childCount) {
+      for (var i = 0; i < Math.max(accTree.children.length, childCount); i++) {
+        var accChild = null, testChild = null;
+        try {
+          testChild = accTree.children[i];
+          accChild = children.queryElementAt(i, nsIAccessible);
 
-    if (accTree.children.length == childCount) {
+          if (!testChild) {
+            ok(false, prettyName(acc) + " has an extra child at index " + i +
+              " : " + prettyName(accChild));
+            continue;
+          }
+
+          testChild = normalizeAccTreeObj(testChild);
+          if (accChild.role !== testChild.role) {
+            ok(false, prettyName(accTree) + " and " + prettyName(acc) +
+              " have different children at index " + i + " : " +
+              prettyName(testChild) + ", " + prettyName(accChild));
+          }
+          info("Matching " + prettyName(accTree) + " and " + prettyName(acc) +
+               " child at index " + i + " : " + prettyName(accChild));
+
+        } catch (e) {
+          ok(false, prettyName(accTree) + " is expected to have a child at index " + i +
+             " : " + prettyName(testChild) + ", original tested: " +
+             prettyName(aAccOrElmOrID) + ", " + e);
+        }
+      }
+    } else {
       if (aFlags & kSkipTreeFullCheck) {
         for (var i = 0; i < childCount; i++) {
           var child = children.queryElementAt(i, nsIAccessible);
@@ -537,7 +591,8 @@ function testDefunctAccessible(aAcc, aNodeOrId)
     ok(!isAccessible(aNodeOrId),
        "Accessible for " + aNodeOrId + " wasn't properly shut down!");
 
-  var msg = " doesn't fail for shut down accessible " + prettyName(aNodeOrId) + "!";
+  var msg = " doesn't fail for shut down accessible " +
+             prettyName(aNodeOrId) + "!";
 
   // firstChild
   var success = false;
@@ -700,8 +755,9 @@ function prettyName(aIdentifier)
 
   if (aIdentifier instanceof nsIAccessible) {
     var acc = getAccessible(aIdentifier);
-    var msg = "[" + getNodePrettyName(acc.DOMNode);
+    var msg = "[";
     try {
+      msg += getNodePrettyName(acc.DOMNode);
       msg += ", role: " + roleToString(acc.role);
       if (acc.name)
         msg += ", name: '" + shortenString(acc.name) + "'";
@@ -718,6 +774,27 @@ function prettyName(aIdentifier)
 
   if (aIdentifier instanceof nsIDOMNode)
     return "[ " + getNodePrettyName(aIdentifier) + " ]";
+
+  if (aIdentifier && typeof aIdentifier === "object" ) {
+    var treeObj = normalizeAccTreeObj(aIdentifier);
+    if ("role" in treeObj) {
+      function stringifyTree(aObj) {
+        var text = roleToString(aObj.role) + ": [ ";
+        if ("children" in aObj) {
+          for (var i = 0; i < aObj.children.length; i++) {
+            var c = normalizeAccTreeObj(aObj.children[i]);
+            text += stringifyTree(c);
+            if (i < aObj.children.length - 1) {
+              text += ", ";
+            }
+          }
+        }
+        return text + "] ";
+      }
+      return `{ ${stringifyTree(treeObj)} }`;
+    }
+    return JSON.stringify(aIdentifier);
+  }
 
   return " '" + aIdentifier + "' ";
 }
@@ -819,4 +896,17 @@ function getTestPluginTag(aPluginName)
 
   ok(false, "Could not find plugin tag with plugin name '" + name + "'");
   return null;
+}
+
+function normalizeAccTreeObj(aObj)
+{
+  var key = Object.keys(aObj)[0];
+  var roleName = "ROLE_" + key;
+  if (roleName in nsIAccessibleRole) {
+    return {
+      role: nsIAccessibleRole[roleName],
+      children: aObj[key]
+    };
+  }
+  return aObj;
 }

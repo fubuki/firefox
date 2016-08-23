@@ -4,46 +4,46 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* 
+/*
  * Implementation of the "@mozilla.org/layout/content-policy;1" contract.
  */
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "nsISupports.h"
 #include "nsXPCOM.h"
 #include "nsContentPolicyUtils.h"
+#include "mozilla/dom/nsCSPService.h"
 #include "nsContentPolicy.h"
 #include "nsIURI.h"
+#include "nsIDocShell.h"
+#include "nsIDOMElement.h"
 #include "nsIDOMNode.h"
 #include "nsIDOMWindow.h"
 #include "nsIContent.h"
+#include "nsILoadContext.h"
 #include "nsCOMArray.h"
+#include "nsContentUtils.h"
+#include "mozilla/dom/nsMixedContentBlocker.h"
+
+using mozilla::LogLevel;
 
 NS_IMPL_ISUPPORTS(nsContentPolicy, nsIContentPolicy)
 
-#ifdef PR_LOGGING
-static PRLogModuleInfo* gConPolLog;
-#endif
+static mozilla::LazyLogModule gConPolLog("nsContentPolicy");
 
 nsresult
 NS_NewContentPolicy(nsIContentPolicy **aResult)
 {
   *aResult = new nsContentPolicy;
-  if (!*aResult)
-      return NS_ERROR_OUT_OF_MEMORY;
   NS_ADDREF(*aResult);
   return NS_OK;
 }
 
 nsContentPolicy::nsContentPolicy()
     : mPolicies(NS_CONTENTPOLICY_CATEGORY)
+    , mSimplePolicies(NS_SIMPLECONTENTPOLICY_CATEGORY)
 {
-#ifdef PR_LOGGING
-    if (! gConPolLog) {
-        gConPolLog = PR_NewLogModule("nsContentPolicy");
-    }
-#endif
 }
 
 nsContentPolicy::~nsContentPolicy()
@@ -70,7 +70,8 @@ nsContentPolicy::~nsContentPolicy()
 
 inline nsresult
 nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
-                             uint32_t          contentType,
+                             SCPMethod         simplePolicyMethod,
+                             nsContentPolicyType contentType,
                              nsIURI           *contentLocation,
                              nsIURI           *requestingLocation,
                              nsISupports      *requestingContext,
@@ -112,6 +113,15 @@ nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
         }
     }
 
+    nsContentPolicyType externalType =
+        nsContentUtils::InternalContentPolicyTypeToExternal(contentType);
+
+    nsCOMPtr<nsIContentPolicy> mixedContentBlocker =
+        do_GetService(NS_MIXEDCONTENTBLOCKER_CONTRACTID);
+
+    nsCOMPtr<nsIContentPolicy> cspService =
+      do_GetService(CSPSERVICE_CONTRACTID);
+
     /* 
      * Enumerate mPolicies and ask each of them, taking the logical AND of
      * their permissions.
@@ -122,10 +132,63 @@ nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
     int32_t count = entries.Count();
     for (int32_t i = 0; i < count; i++) {
         /* check the appropriate policy */
-        rv = (entries[i]->*policyMethod)(contentType, contentLocation,
+        // Send internal content policy type to CSP and mixed content blocker
+        nsContentPolicyType type = externalType;
+        if (mixedContentBlocker == entries[i] || cspService == entries[i]) {
+          type = contentType;
+        }
+        rv = (entries[i]->*policyMethod)(type, contentLocation,
                                          requestingLocation, requestingContext,
                                          mimeType, extra, requestPrincipal,
                                          decision);
+
+        if (NS_SUCCEEDED(rv) && NS_CP_REJECTED(*decision)) {
+            /* policy says no, no point continuing to check */
+            return NS_OK;
+        }
+    }
+
+    nsCOMPtr<nsIDOMElement> topFrameElement;
+    bool isTopLevel = true;
+    nsCOMPtr<nsPIDOMWindowOuter> window;
+    if (nsCOMPtr<nsINode> node = do_QueryInterface(requestingContext)) {
+        window = node->OwnerDoc()->GetWindow();
+    } else {
+        window = do_QueryInterface(requestingContext);
+    }
+
+    if (window) {
+        nsCOMPtr<nsIDocShell> docShell = window->GetDocShell();
+        nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
+        if (loadContext) {
+          loadContext->GetTopFrameElement(getter_AddRefs(topFrameElement));
+        }
+
+        MOZ_ASSERT(window->IsOuterWindow());
+
+        if (topFrameElement) {
+            nsCOMPtr<nsPIDOMWindowOuter> topWindow = window->GetScriptableTop();
+            isTopLevel = topWindow == window;
+        } else {
+            // If we don't have a top frame element, then requestingContext is
+            // part of the top-level XUL document. Presumably it's the <browser>
+            // element that content is being loaded into, so we call it the
+            // topFrameElement.
+            topFrameElement = do_QueryInterface(requestingContext);
+            isTopLevel = true;
+        }
+    }
+
+    nsCOMArray<nsISimpleContentPolicy> simpleEntries;
+    mSimplePolicies.GetEntries(simpleEntries);
+    count = simpleEntries.Count();
+    for (int32_t i = 0; i < count; i++) {
+        /* check the appropriate policy */
+        rv = (simpleEntries[i]->*simplePolicyMethod)(externalType, contentLocation,
+                                                     requestingLocation,
+                                                     topFrameElement, isTopLevel,
+                                                     mimeType, extra, requestPrincipal,
+                                                     decision);
 
         if (NS_SUCCEEDED(rv) && NS_CP_REJECTED(*decision)) {
             /* policy says no, no point continuing to check */
@@ -138,14 +201,12 @@ nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
     return NS_OK;
 }
 
-#ifdef PR_LOGGING
-
 //uses the parameters from ShouldXYZ to produce and log a message
 //logType must be a literal string constant
 #define LOG_CHECK(logType)                                                    \
   PR_BEGIN_MACRO                                                              \
-    /* skip all this nonsense if the call failed */                           \
-    if (NS_SUCCEEDED(rv)) {                                                   \
+    /* skip all this nonsense if the call failed or logging is disabled */    \
+    if (NS_SUCCEEDED(rv) && MOZ_LOG_TEST(gConPolLog, LogLevel::Debug)) {          \
       const char *resultName;                                                 \
       if (decision) {                                                         \
         resultName = NS_CP_ResponseName(*decision);                           \
@@ -160,18 +221,12 @@ nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
       if (requestingLocation) {                                               \
           requestingLocation->GetSpec(refSpec);                               \
       }                                                                       \
-      PR_LOG(gConPolLog, PR_LOG_DEBUG,                                        \
+      MOZ_LOG(gConPolLog, LogLevel::Debug,                                        \
              ("Content Policy: " logType ": <%s> <Ref:%s> result=%s",         \
               spec.get(), refSpec.get(), resultName)                          \
              );                                                               \
     }                                                                         \
   PR_END_MACRO
-
-#else //!defined(PR_LOGGING)
-
-#define LOG_CHECK(logType)
-
-#endif //!defined(PR_LOGGING)
 
 NS_IMETHODIMP
 nsContentPolicy::ShouldLoad(uint32_t          contentType,
@@ -185,7 +240,9 @@ nsContentPolicy::ShouldLoad(uint32_t          contentType,
 {
     // ShouldProcess does not need a content location, but we do
     NS_PRECONDITION(contentLocation, "Must provide request location");
-    nsresult rv = CheckPolicy(&nsIContentPolicy::ShouldLoad, contentType,
+    nsresult rv = CheckPolicy(&nsIContentPolicy::ShouldLoad,
+                              &nsISimpleContentPolicy::ShouldLoad,
+                              contentType,
                               contentLocation, requestingLocation,
                               requestingContext, mimeType, extra,
                               requestPrincipal, decision);
@@ -204,7 +261,9 @@ nsContentPolicy::ShouldProcess(uint32_t          contentType,
                                nsIPrincipal     *requestPrincipal,
                                int16_t          *decision)
 {
-    nsresult rv = CheckPolicy(&nsIContentPolicy::ShouldProcess, contentType,
+    nsresult rv = CheckPolicy(&nsIContentPolicy::ShouldProcess,
+                              &nsISimpleContentPolicy::ShouldProcess,
+                              contentType,
                               contentLocation, requestingLocation,
                               requestingContext, mimeType, extra,
                               requestPrincipal, decision);

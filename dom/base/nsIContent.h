@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -39,8 +40,8 @@ enum nsLinkState {
 
 // IID for the nsIContent interface
 #define NS_ICONTENT_IID \
-{ 0x697a2fe1, 0x5549, 0x48e7, \
-  { 0x9a, 0x1a, 0xc2, 0x9d, 0xab, 0x14, 0xe2, 0x39 } }
+{ 0x8e1bab9d, 0x8815, 0x4d2c, \
+  { 0xa2, 0x4d, 0x7a, 0xba, 0x52, 0x39, 0xdc, 0x22 } }
 
 /**
  * A node of content in a document's content model. This interface
@@ -73,8 +74,8 @@ public:
    * @param aDocument The new document for the content node.  May not be null
    *                  if aParent is null.  Must match the current document of
    *                  aParent, if aParent is not null (note that
-   *                  aParent->GetCurrentDoc() can be null, in which case this
-   *                  must also be null).
+   *                  aParent->GetUncomposedDoc() can be null, in which case
+   *                  this must also be null).
    * @param aParent The new parent for the content node.  May be null if the
    *                node is being bound as a direct child of the document.
    * @param aBindingParent The new binding parent for the content node.
@@ -228,7 +229,7 @@ public:
   bool IsInAnonymousSubtree() const
   {
     NS_ASSERTION(!IsInNativeAnonymousSubtree() || GetBindingParent() ||
-                 (!IsInDoc() &&
+                 (!IsInUncomposedDoc() &&
                   static_cast<nsIContent*>(SubtreeRoot())->IsInNativeAnonymousSubtree()),
                  "Must have binding parent when in native anonymous subtree which is in document.\n"
                  "Native anonymous subtree which is not in document must have native anonymous root.");
@@ -250,60 +251,69 @@ public:
     return mNodeInfo->NamespaceID();
   }
 
-  /**
-   * Get the NodeInfo for this element
-   * @return the nodes node info
-   */
-  inline mozilla::dom::NodeInfo* NodeInfo() const
-  {
-    return mNodeInfo;
-  }
-
-  inline bool IsInNamespace(int32_t aNamespace) const
-  {
-    return mNodeInfo->NamespaceID() == aNamespace;
-  }
-
-  inline bool IsHTML() const
+  inline bool IsHTMLElement() const
   {
     return IsInNamespace(kNameSpaceID_XHTML);
   }
 
-  inline bool IsHTML(nsIAtom* aTag) const
+  inline bool IsHTMLElement(nsIAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_XHTML);
   }
 
-  inline bool IsSVG() const
+  template<typename First, typename... Args>
+  inline bool IsAnyOfHTMLElements(First aFirst, Args... aArgs) const
+  {
+    return IsHTMLElement() && IsNodeInternal(aFirst, aArgs...);
+  }
+
+  inline bool IsSVGElement() const
   {
     return IsInNamespace(kNameSpaceID_SVG);
   }
 
-  inline bool IsSVG(nsIAtom* aTag) const
+  inline bool IsSVGElement(nsIAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_SVG);
   }
 
-  inline bool IsXUL() const
+  template<typename First, typename... Args>
+  inline bool IsAnyOfSVGElements(First aFirst, Args... aArgs) const
+  {
+    return IsSVGElement() && IsNodeInternal(aFirst, aArgs...);
+  }
+
+  inline bool IsXULElement() const
   {
     return IsInNamespace(kNameSpaceID_XUL);
   }
 
-  inline bool IsXUL(nsIAtom* aTag) const
+  inline bool IsXULElement(nsIAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_XUL);
   }
 
-  inline bool IsMathML() const
+  template<typename First, typename... Args>
+  inline bool IsAnyOfXULElements(First aFirst, Args... aArgs) const
+  {
+    return IsXULElement() && IsNodeInternal(aFirst, aArgs...);
+  }
+
+  inline bool IsMathMLElement() const
   {
     return IsInNamespace(kNameSpaceID_MathML);
   }
 
-  inline bool IsMathML(nsIAtom* aTag) const
+  inline bool IsMathMLElement(nsIAtom* aTag) const
   {
     return mNodeInfo->Equals(aTag, kNameSpaceID_MathML);
   }
 
+  template<typename First, typename... Args>
+  inline bool IsAnyOfMathMLElements(First aFirst, Args... aArgs) const
+  {
+    return IsMathMLElement() && IsNodeInternal(aFirst, aArgs...);
+  }
   inline bool IsActiveChildrenElement() const
   {
     return mNodeInfo->Equals(nsGkAtoms::children, kNameSpaceID_XBL) &&
@@ -536,8 +546,8 @@ public:
    * Append the text content to aResult.
    * NOTE: This asserts and returns for elements
    */
-  virtual bool AppendTextTo(nsAString& aResult,
-                            const mozilla::fallible_t&) NS_WARN_UNUSED_RESULT = 0;
+  MOZ_WARN_UNUSED_RESULT
+  virtual bool AppendTextTo(nsAString& aResult, const mozilla::fallible_t&) = 0;
 
   /**
    * Check if this content is focusable and in the current tab order.
@@ -571,10 +581,12 @@ public:
    * @param aKeyCausesActivation - if true then element should be activated
    * @param aIsTrustedEvent - if true then event that is cause of accesskey
    *                          execution is trusted.
+   * @return true if the focus was changed.
    */
-  virtual void PerformAccesskey(bool aKeyCausesActivation,
+  virtual bool PerformAccesskey(bool aKeyCausesActivation,
                                 bool aIsTrustedEvent)
   {
+    return false;
   }
 
   /*
@@ -853,7 +865,9 @@ public:
    * Destroy this node and its children. Ideally this shouldn't be needed
    * but for now we need to do it to break cycles.
    */
-  virtual void DestroyContent() = 0;
+  virtual void DestroyContent()
+  {
+  }
 
   /**
    * Saves the form state of this node and its children.
@@ -873,10 +887,10 @@ public:
    */
   nsIFrame* GetPrimaryFrame() const
   {
-    return (IsInDoc() || IsInShadowTree()) ? mPrimaryFrame : nullptr;
+    return (IsInUncomposedDoc() || IsInShadowTree()) ? mPrimaryFrame : nullptr;
   }
   void SetPrimaryFrame(nsIFrame* aFrame) {
-    MOZ_ASSERT(IsInDoc() || IsInShadowTree(), "This will end badly!");
+    MOZ_ASSERT(IsInUncomposedDoc() || IsInShadowTree(), "This will end badly!");
     NS_PRECONDITION(!aFrame || !mPrimaryFrame || aFrame == mPrimaryFrame,
                     "Losing track of existing primary frame");
     mPrimaryFrame = aFrame;
@@ -899,35 +913,37 @@ public:
   mozilla::dom::Element* GetEditingHost();
 
   /**
-   * Determing language. Look at the nearest ancestor element that has a lang
+   * Determining language. Look at the nearest ancestor element that has a lang
    * attribute in the XML namespace or is an HTML/SVG element and has a lang in
-   * no namespace attribute.
+   * no namespace attribute.  Returns false if no language was specified.
    */
-  void GetLang(nsAString& aResult) const {
+  bool GetLang(nsAString& aResult) const {
     for (const nsIContent* content = this; content; content = content->GetParent()) {
       if (content->GetAttrCount() > 0) {
         // xml:lang has precedence over lang on HTML elements (see
         // XHTML1 section C.7).
         bool hasAttr = content->GetAttr(kNameSpaceID_XML, nsGkAtoms::lang,
                                           aResult);
-        if (!hasAttr && (content->IsHTML() || content->IsSVG())) {
+        if (!hasAttr && (content->IsHTMLElement() || content->IsSVGElement() ||
+            content->IsXULElement())) {
           hasAttr = content->GetAttr(kNameSpaceID_None, nsGkAtoms::lang,
                                      aResult);
         }
         NS_ASSERTION(hasAttr || aResult.IsEmpty(),
                      "GetAttr that returns false should not make string non-empty");
         if (hasAttr) {
-          return;
+          return true;
         }
       }
     }
+    return false;
   }
 
   // Overloaded from nsINode
-  virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const MOZ_OVERRIDE;
+  virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
 
   virtual nsresult PreHandleEvent(
-                     mozilla::EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+                     mozilla::EventChainPreVisitor& aVisitor) override;
 
   virtual bool IsPurple() = 0;
   virtual void RemovePurple() = 0;

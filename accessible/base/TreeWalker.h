@@ -22,7 +22,7 @@ class DocAccessible;
 /**
  * This class is used to walk the DOM tree to create accessible tree.
  */
-class TreeWalker MOZ_FINAL
+class TreeWalker final
 {
 public:
   enum {
@@ -33,24 +33,40 @@ public:
   };
 
   /**
-   * Constructor
+   * Used to navigate and create if needed the accessible children.
+   */
+  explicit TreeWalker(Accessible* aContext);
+
+  /**
+   * Used to navigate the accessible children relative to the anchor.
    *
    * @param aContext [in] container accessible for the given node, used to
    *                   define accessible context
-   * @param aNode    [in] the node the search will be prepared relative to
+   * @param aAnchorNode [in] the node the search will be prepared relative to
    * @param aFlags   [in] flags (see enum above)
    */
-  TreeWalker(Accessible* aContext, nsIContent* aNode, uint32_t aFlags = 0);
+  TreeWalker(Accessible* aContext, nsIContent* aAnchorNode, uint32_t aFlags = eWalkCache);
+
   ~TreeWalker();
 
   /**
-   * Return the next child accessible.
+   * Clears the tree walker state and resets it to the given child within
+   * the anchor.
+   */
+  bool Seek(nsIContent* aChildNode);
+
+  /**
+   * Return the next/prev accessible.
    *
    * @note Returned accessible is bound to the document, if the accessible is
    *       rejected during tree creation then the caller should be unbind it
    *       from the document.
    */
-  Accessible* NextChild();
+  Accessible* Next(nsIContent* aStopNode = nullptr);
+  Accessible* Prev();
+
+  Accessible* Context() const { return mContext; }
+  DocAccessible* Document() const { return mDoc; }
 
 private:
   TreeWalker();
@@ -58,15 +74,29 @@ private:
   TreeWalker& operator =(const TreeWalker&);
 
   /**
-   * Create new state for the given node and push it on top of stack.
+   * Return an accessible for the given node if any.
+   */
+  Accessible* AccessibleFor(nsIContent* aNode, uint32_t aFlags,
+                            bool* aSkipSubtree);
+
+  /**
+   * Create new state for the given node and push it on top of stack / at bottom
+   * of stack.
    *
    * @note State stack is used to navigate up/down the DOM subtree during
    *        accessible children search.
    */
-  dom::AllChildrenIterator* PushState(nsIContent* aContent)
+  dom::AllChildrenIterator* PushState(nsIContent* aContent,
+                                      bool aStartAtBeginning)
   {
-    return mStateStack.AppendElement(dom::AllChildrenIterator(aContent,
-                                                              mChildFilter));
+    return mStateStack.AppendElement(
+      dom::AllChildrenIterator(aContent, mChildFilter, aStartAtBeginning));
+  }
+  dom::AllChildrenIterator* PrependState(nsIContent* aContent,
+                                         bool aStartAtBeginning)
+  {
+    return mStateStack.InsertElementAt(0,
+      dom::AllChildrenIterator(aContent, mChildFilter, aStartAtBeginning));
   }
 
   /**
@@ -77,9 +107,20 @@ private:
   DocAccessible* mDoc;
   Accessible* mContext;
   nsIContent* mAnchorNode;
-  nsAutoTArray<dom::AllChildrenIterator, 20> mStateStack;
+
+  AutoTArray<dom::AllChildrenIterator, 20> mStateStack;
+  uint32_t mARIAOwnsIdx;
+
   int32_t mChildFilter;
   uint32_t mFlags;
+
+  enum Phase {
+    eAtStart,
+    eAtDOM,
+    eAtARIAOwns,
+    eAtEnd
+  };
+  Phase mPhase;
 };
 
 } // namespace a11y

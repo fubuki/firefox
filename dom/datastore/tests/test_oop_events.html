@@ -117,9 +117,7 @@
         SpecialPowers.Cu.import("resource://gre/modules/DataStoreChangeNotifier.jsm");
       }
 
-      SpecialPowers.setAllAppsLaunchable(true);
-      SpecialPowers.setBoolPref("dom.mozBrowserFramesEnabled", true);
-      runTest();
+      SpecialPowers.pushPrefEnv({"set":[["dom.mozBrowserFramesEnabled", true]]}, runTest);
     },
 
     // No confirmation needed when an app is installed

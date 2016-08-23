@@ -27,36 +27,36 @@ public:
 
   friend nsIFrame* NS_NewBRFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
-  virtual ContentOffsets CalcContentOffsetsFromFramePoint(nsPoint aPoint) MOZ_OVERRIDE;
+  virtual ContentOffsets CalcContentOffsetsFromFramePoint(nsPoint aPoint) override;
 
-  virtual FrameSearchResult PeekOffsetNoAmount(bool aForward, int32_t* aOffset) MOZ_OVERRIDE;
+  virtual FrameSearchResult PeekOffsetNoAmount(bool aForward, int32_t* aOffset) override;
   virtual FrameSearchResult PeekOffsetCharacter(bool aForward, int32_t* aOffset,
-                                     bool aRespectClusters = true) MOZ_OVERRIDE;
+                                     bool aRespectClusters = true) override;
   virtual FrameSearchResult PeekOffsetWord(bool aForward, bool aWordSelectEatSpace,
                               bool aIsKeyboardSelect, int32_t* aOffset,
-                              PeekWordState* aState) MOZ_OVERRIDE;
+                              PeekWordState* aState) override;
 
   virtual void Reflow(nsPresContext* aPresContext,
                           nsHTMLReflowMetrics& aDesiredSize,
                           const nsHTMLReflowState& aReflowState,
-                          nsReflowStatus& aStatus) MOZ_OVERRIDE;
+                          nsReflowStatus& aStatus) override;
   virtual void AddInlineMinISize(nsRenderingContext *aRenderingContext,
-                                 InlineMinISizeData *aData) MOZ_OVERRIDE;
+                                 InlineMinISizeData *aData) override;
   virtual void AddInlinePrefISize(nsRenderingContext *aRenderingContext,
-                                  InlinePrefISizeData *aData) MOZ_OVERRIDE;
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
-  virtual nsIAtom* GetType() const MOZ_OVERRIDE;
-  virtual nscoord GetLogicalBaseline(mozilla::WritingMode aWritingMode) const MOZ_OVERRIDE;
+                                  InlinePrefISizeData *aData) override;
+  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
+  virtual nsIAtom* GetType() const override;
+  virtual nscoord GetLogicalBaseline(mozilla::WritingMode aWritingMode) const override;
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE
+  virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
     return nsFrame::IsFrameOfType(aFlags & ~(nsIFrame::eReplaced |
                                              nsIFrame::eLineParticipant));
   }
 
 #ifdef ACCESSIBILITY
-  virtual mozilla::a11y::AccType AccessibleType() MOZ_OVERRIDE;
+  virtual mozilla::a11y::AccType AccessibleType() override;
 #endif
 
 protected:
@@ -84,6 +84,7 @@ BRFrame::Reflow(nsPresContext* aPresContext,
                 const nsHTMLReflowState& aReflowState,
                 nsReflowStatus& aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("BRFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
   WritingMode wm = aReflowState.GetWritingMode();
@@ -95,9 +96,13 @@ BRFrame::Reflow(nsPresContext* aPresContext,
   aMetrics.SetBlockStartAscent(0);
 
   // Only when the BR is operating in a line-layout situation will it
-  // behave like a BR. BR is suppressed when it is inside ruby frames.
+  // behave like a BR. Additionally, we suppress breaks from BR inside
+  // of ruby frames. To determine if we're inside ruby, we have to rely
+  // on the *parent's* ShouldSuppressLineBreak() method, instead of our
+  // own, because we may have custom "display" value that makes our
+  // ShouldSuppressLineBreak() return false.
   nsLineLayout* ll = aReflowState.mLineLayout;
-  if (ll && !StyleContext()->IsInlineDescendantOfRuby()) {
+  if (ll && !GetParent()->StyleContext()->ShouldSuppressLineBreak()) {
     // Note that the compatibility mode check excludes AlmostStandards
     // mode, since this is the inline box model.  See bug 161691.
     if ( ll->LineIsEmpty() ||
@@ -116,9 +121,8 @@ BRFrame::Reflow(nsPresContext* aPresContext,
       // We also do this in strict mode because BR should act like a
       // normal inline frame.  That line-height is used is important
       // here for cases where the line-height is less than 1.
-      nsRefPtr<nsFontMetrics> fm;
-      nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
-        nsLayoutUtils::FontSizeInflationFor(this));
+      RefPtr<nsFontMetrics> fm =
+        nsLayoutUtils::GetInflatedFontMetricsForFrame(this);
       if (fm) {
         nscoord logicalHeight = aReflowState.CalcLineHeight();
         finalSize.BSize(wm) = logicalHeight;
@@ -139,7 +143,7 @@ BRFrame::Reflow(nsPresContext* aPresContext,
     }
 
     // Return our reflow status
-    uint32_t breakType = aReflowState.mStyleDisplay->mBreakType;
+    uint32_t breakType = aReflowState.mStyleDisplay->PhysicalBreakType(wm);
     if (NS_STYLE_CLEAR_NONE == breakType) {
       breakType = NS_STYLE_CLEAR_LINE;
     }
@@ -164,14 +168,18 @@ BRFrame::Reflow(nsPresContext* aPresContext,
 BRFrame::AddInlineMinISize(nsRenderingContext *aRenderingContext,
                            nsIFrame::InlineMinISizeData *aData)
 {
-  aData->ForceBreak(aRenderingContext);
+  if (!GetParent()->StyleContext()->ShouldSuppressLineBreak()) {
+    aData->ForceBreak();
+  }
 }
 
 /* virtual */ void
 BRFrame::AddInlinePrefISize(nsRenderingContext *aRenderingContext,
                             nsIFrame::InlinePrefISizeData *aData)
 {
-  aData->ForceBreak(aRenderingContext);
+  if (!GetParent()->StyleContext()->ShouldSuppressLineBreak()) {
+    aData->ForceBreak();
+  }
 }
 
 /* virtual */ nscoord
@@ -255,6 +263,13 @@ BRFrame::AccessibleType()
       parent->GetChildCount() == 1) {
     // This <br> is the only node in a text control, therefore it is the hacky
     // "bogus node" used when there is no text in the control
+    return a11y::eNoType;
+  }
+
+  // Trailing HTML br element don't play any difference. We don't need to expose
+  // it to AT (see bug https://bugzilla.mozilla.org/show_bug.cgi?id=899433#c16
+  // for details).
+  if (!mContent->GetNextSibling() && !GetNextSibling()) {
     return a11y::eNoType;
   }
 

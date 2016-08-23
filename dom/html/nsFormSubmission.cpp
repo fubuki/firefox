@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -18,7 +18,6 @@
 #include "nsAttrValueInlines.h"
 #include "nsISaveAsCharset.h"
 #include "nsIFile.h"
-#include "nsIDOMFile.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsStringStream.h"
 #include "nsIURI.h"
@@ -38,9 +37,12 @@
 #include "nsContentUtils.h"
 
 #include "mozilla/dom/EncodingUtils.h"
+#include "mozilla/dom/File.h"
 
 using namespace mozilla;
+using mozilla::dom::Blob;
 using mozilla::dom::EncodingUtils;
+using mozilla::dom::File;
 
 static void
 SendJSWarning(nsIDocument* aDocument,
@@ -52,6 +54,19 @@ SendJSWarning(nsIDocument* aDocument,
                                   nsContentUtils::eFORMS_PROPERTIES,
                                   aWarningName,
                                   aWarningArgs, aWarningArgsLen);
+}
+
+static void
+RetrieveFileName(Blob* aBlob, nsAString& aFilename)
+{
+  if (!aBlob) {
+    return;
+  }
+
+  RefPtr<File> file = aBlob->ToFile();
+  if (file) {
+    file->GetName(aFilename);
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -76,19 +91,19 @@ public:
   }
 
   virtual nsresult AddNameValuePair(const nsAString& aName,
-                                    const nsAString& aValue);
-  virtual nsresult AddNameFilePair(const nsAString& aName,
-                                   nsIDOMBlob* aBlob,
-                                   const nsString& aFilename);
+                                    const nsAString& aValue) override;
+  virtual nsresult AddNameBlobOrNullPair(const nsAString& aName,
+                                         Blob* aBlob) override;
   virtual nsresult GetEncodedSubmission(nsIURI* aURI,
-                                        nsIInputStream** aPostDataStream);
+                                        nsIInputStream** aPostDataStream)
+                                                                       override;
 
-  virtual bool SupportsIsindexSubmission()
+  virtual bool SupportsIsindexSubmission() override
   {
     return true;
   }
 
-  virtual nsresult AddIsindex(const nsAString& aValue);
+  virtual nsresult AddIsindex(const nsAString& aValue) override;
 
 protected:
 
@@ -164,9 +179,8 @@ nsFSURLEncoded::AddIsindex(const nsAString& aValue)
 }
 
 nsresult
-nsFSURLEncoded::AddNameFilePair(const nsAString& aName,
-                                nsIDOMBlob* aBlob,
-                                const nsString& aFilename)
+nsFSURLEncoded::AddNameBlobOrNullPair(const nsAString& aName,
+                                      Blob* aBlob)
 {
   if (!mWarnedFileControl) {
     SendJSWarning(mDocument, "ForgotFileEnctypeWarning", nullptr, 0);
@@ -174,11 +188,7 @@ nsFSURLEncoded::AddNameFilePair(const nsAString& aName,
   }
 
   nsAutoString filename;
-  nsCOMPtr<nsIDOMFile> file = do_QueryInterface(aBlob);
-  if (file) {
-    file->GetName(filename);
-  }
-
+  RetrieveFileName(aBlob, filename);
   return AddNameValuePair(aName, filename);
 }
 
@@ -362,7 +372,7 @@ nsFSURLEncoded::URLEncode(const nsAString& aStr, nsCString& aEncoded)
 
   nsAutoCString encodedBuf;
   nsresult rv = EncodeVal(nsDependentString(convertedBuf), encodedBuf, false);
-  nsMemory::Free(convertedBuf);
+  free(convertedBuf);
   NS_ENSURE_SUCCESS(rv, rv);
 
   char* escapedBuf = nsEscape(encodedBuf.get(), url_XPAlphas);
@@ -428,7 +438,7 @@ nsFSMultipartFormData::AddNameValuePair(const nsAString& aName,
   // Make MIME block for name/value pair
 
   // XXX: name parameter should be encoded per RFC 2231
-  // RFC 2388 specifies that RFC 2047 be used, but I think it's not 
+  // RFC 2388 specifies that RFC 2047 be used, but I think it's not
   // consistent with MIME standard.
   mPostDataChunk += NS_LITERAL_CSTRING("--") + mBoundary
                  + NS_LITERAL_CSTRING(CRLF)
@@ -440,61 +450,58 @@ nsFSMultipartFormData::AddNameValuePair(const nsAString& aName,
 }
 
 nsresult
-nsFSMultipartFormData::AddNameFilePair(const nsAString& aName,
-                                       nsIDOMBlob* aBlob,
-                                       const nsString& aFilename)
+nsFSMultipartFormData::AddNameBlobOrNullPair(const nsAString& aName,
+                                             Blob* aBlob)
 {
   // Encode the control name
   nsAutoCString nameStr;
   nsresult rv = EncodeVal(aName, nameStr, true);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCString filename, contentType;
+  nsAutoCString filename;
+  nsAutoCString contentType;
   nsCOMPtr<nsIInputStream> fileStream;
+
   if (aBlob) {
-    // We prefer the explicitly passed filename
-    if (!aFilename.IsVoid()) {
-      rv = EncodeVal(aFilename, filename, true);
-      NS_ENSURE_SUCCESS(rv, rv);
-    } else {
-      // Get and encode the filename
-      nsAutoString filename16;
-      nsCOMPtr<nsIDOMFile> file = do_QueryInterface(aBlob);
-      if (file) {
-        rv = file->GetName(filename16);
-        NS_ENSURE_SUCCESS(rv, rv);
-      }
+    nsAutoString filename16;
+    RetrieveFileName(aBlob, filename16);
 
-      if (filename16.IsEmpty()) {
-        filename16.AssignLiteral("blob");
-      } else {
-        nsAutoString filepath16;
-        rv = file->GetPath(filepath16);
-        NS_ENSURE_SUCCESS(rv, rv);
-        if (!filepath16.IsEmpty()) {
-          // File.path includes trailing "/"
-          filename16 = filepath16 + filename16;
-        }
+    ErrorResult error;
+    nsAutoString filepath16;
+    RefPtr<File> file = aBlob->ToFile();
+    if (file) {
+      file->GetPath(filepath16, error);
+      if (NS_WARN_IF(error.Failed())) {
+        return error.StealNSResult();
       }
-
-      rv = EncodeVal(filename16, filename, true);
-      NS_ENSURE_SUCCESS(rv, rv);
     }
+
+    if (!filepath16.IsEmpty()) {
+      // File.path includes trailing "/"
+      filename16 = filepath16 + filename16;
+    }
+
+    rv = EncodeVal(filename16, filename, true);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     // Get content type
     nsAutoString contentType16;
-    rv = aBlob->GetType(contentType16);
-    if (NS_FAILED(rv) || contentType16.IsEmpty()) {
+    aBlob->GetType(contentType16);
+    if (contentType16.IsEmpty()) {
       contentType16.AssignLiteral("application/octet-stream");
     }
+
     contentType.Adopt(nsLinebreakConverter::
                       ConvertLineBreaks(NS_ConvertUTF16toUTF8(contentType16).get(),
                                         nsLinebreakConverter::eLinebreakAny,
                                         nsLinebreakConverter::eLinebreakSpace));
 
     // Get input stream
-    rv = aBlob->GetInternalStream(getter_AddRefs(fileStream));
-    NS_ENSURE_SUCCESS(rv, rv);
+    aBlob->GetInternalStream(getter_AddRefs(fileStream), error);
+    if (NS_WARN_IF(error.Failed())) {
+      return error.StealNSResult();
+    }
+
     if (fileStream) {
       // Create buffered stream (for efficiency)
       nsCOMPtr<nsIInputStream> bufferedStream;
@@ -504,8 +511,7 @@ nsFSMultipartFormData::AddNameFilePair(const nsAString& aName,
 
       fileStream = bufferedStream;
     }
-  }
-  else {
+  } else {
     contentType.AssignLiteral("application/octet-stream");
   }
 
@@ -516,7 +522,7 @@ nsFSMultipartFormData::AddNameFilePair(const nsAString& aName,
   mPostDataChunk += NS_LITERAL_CSTRING("--") + mBoundary
                  + NS_LITERAL_CSTRING(CRLF);
   // XXX: name/filename parameter should be encoded per RFC 2231
-  // RFC 2388 specifies that RFC 2047 be used, but I think it's not 
+  // RFC 2388 specifies that RFC 2047 be used, but I think it's not
   // consistent with the MIME standard.
   mPostDataChunk +=
          NS_LITERAL_CSTRING("Content-Disposition: form-data; name=\"")
@@ -527,14 +533,19 @@ nsFSMultipartFormData::AddNameFilePair(const nsAString& aName,
 
   // We should not try to append an invalid stream. That will happen for example
   // if we try to update a file that actually do not exist.
-  uint64_t size;
-  if (fileStream && NS_SUCCEEDED(aBlob->GetSize(&size))) {
-    // We need to dump the data up to this point into the POST data stream here,
-    // since we're about to add the file input stream
-    AddPostDataStream();
+  if (fileStream) {
+    ErrorResult error;
+    uint64_t size = aBlob->GetSize(error);
+    if (error.Failed()) {
+      error.SuppressException();
+    } else {
+      // We need to dump the data up to this point into the POST data stream
+      // here, since we're about to add the file input stream
+      AddPostDataStream();
 
-    mPostDataStream->AppendStream(fileStream);
-    mTotalLength += size;
+      mPostDataStream->AppendStream(fileStream);
+      mTotalLength += size;
+    }
   }
 
   // CRLF after file
@@ -570,7 +581,7 @@ nsresult
 nsFSMultipartFormData::AddPostDataStream()
 {
   nsresult rv = NS_OK;
-  
+
   nsCOMPtr<nsIInputStream> postDataChunkStream;
   rv = NS_NewCStringInputStream(getter_AddRefs(postDataChunkStream),
                                 mPostDataChunk);
@@ -596,12 +607,12 @@ public:
   }
 
   virtual nsresult AddNameValuePair(const nsAString& aName,
-                                    const nsAString& aValue);
-  virtual nsresult AddNameFilePair(const nsAString& aName,
-                                   nsIDOMBlob* aBlob,
-                                   const nsString& aFilename);
+                                    const nsAString& aValue) override;
+  virtual nsresult AddNameBlobOrNullPair(const nsAString& aName,
+                                         Blob* aBlob) override;
   virtual nsresult GetEncodedSubmission(nsIURI* aURI,
-                                        nsIInputStream** aPostDataStream);
+                                        nsIInputStream** aPostDataStream)
+                                                                       override;
 
 private:
   nsString mBody;
@@ -621,16 +632,11 @@ nsFSTextPlain::AddNameValuePair(const nsAString& aName,
 }
 
 nsresult
-nsFSTextPlain::AddNameFilePair(const nsAString& aName,
-                               nsIDOMBlob* aBlob,
-                               const nsString& aFilename)
+nsFSTextPlain::AddNameBlobOrNullPair(const nsAString& aName,
+                                     Blob* aBlob)
 {
   nsAutoString filename;
-  nsCOMPtr<nsIDOMFile> file = do_QueryInterface(aBlob);
-  if (file) {
-    file->GetName(filename);
-  }
-
+  RetrieveFileName(aBlob, filename);
   AddNameValuePair(aName, filename);
   return NS_OK;
 }
@@ -702,34 +708,16 @@ nsFSTextPlain::GetEncodedSubmission(nsIURI* aURI,
 nsEncodingFormSubmission::nsEncodingFormSubmission(const nsACString& aCharset,
                                                    nsIContent* aOriginatingElement)
   : nsFormSubmission(aCharset, aOriginatingElement)
+  , mEncoder(aCharset)
 {
-  nsAutoCString charset(aCharset);
-  // canonical name is passed so that we just have to check against
-  // *our* canonical names listed in charsetaliases.properties
-  if (charset.EqualsLiteral("ISO-8859-1")) {
-    charset.AssignLiteral("windows-1252");
-  }
-
-  if (!(charset.EqualsLiteral("UTF-8") || charset.EqualsLiteral("gb18030"))) {
-    NS_ConvertUTF8toUTF16 charsetUtf16(charset);
+  if (!(aCharset.EqualsLiteral("UTF-8") || aCharset.EqualsLiteral("gb18030"))) {
+    NS_ConvertUTF8toUTF16 charsetUtf16(aCharset);
     const char16_t* charsetPtr = charsetUtf16.get();
     SendJSWarning(aOriginatingElement ? aOriginatingElement->GetOwnerDocument()
                                       : nullptr,
                   "CannotEncodeAllUnicode",
                   &charsetPtr,
                   1);
-  }
-
-  mEncoder = do_CreateInstance(NS_SAVEASCHARSET_CONTRACTID);
-  if (mEncoder) {
-    nsresult rv =
-      mEncoder->Init(charset.get(),
-                     (nsISaveAsCharset::attr_EntityAfterCharsetConv + 
-                      nsISaveAsCharset::attr_FallbackDecimalNCR),
-                     0);
-    if (NS_FAILED(rv)) {
-      mEncoder = nullptr;
-    }
   }
 }
 
@@ -742,15 +730,8 @@ nsresult
 nsEncodingFormSubmission::EncodeVal(const nsAString& aStr, nsCString& aOut,
                                     bool aHeaderEncode)
 {
-  if (mEncoder && !aStr.IsEmpty()) {
-    aOut.Truncate();
-    nsresult rv = mEncoder->Convert(PromiseFlatString(aStr).get(),
-                                    getter_Copies(aOut));
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-  else {
-    // fall back to UTF-8
-    CopyUTF16toUTF8(aStr, aOut);
+  if (!mEncoder.Encode(aStr, aOut)) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
 
   if (aHeaderEncode) {
@@ -881,7 +862,6 @@ GetSubmissionFromForm(nsGenericHTMLElement* aForm,
     *aFormSubmission = new nsFSURLEncoded(charset, method, doc,
                                           aOriginatingElement);
   }
-  NS_ENSURE_TRUE(*aFormSubmission, NS_ERROR_OUT_OF_MEMORY);
 
   return NS_OK;
 }

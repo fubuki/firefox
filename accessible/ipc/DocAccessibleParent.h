@@ -17,6 +17,8 @@
 namespace mozilla {
 namespace a11y {
 
+class xpcAccessibleGeneric;
+
 /*
  * These objects live in the main process and comunicate with and represent
  * an accessible document in a content process.
@@ -26,38 +28,74 @@ class DocAccessibleParent : public ProxyAccessible,
 {
 public:
   DocAccessibleParent() :
-    ProxyAccessible(this), mParentDoc(nullptr)
+    ProxyAccessible(this), mParentDoc(nullptr),
+    mTopLevel(false), mShutdown(false)
   { MOZ_COUNT_CTOR_INHERITED(DocAccessibleParent, ProxyAccessible); }
   ~DocAccessibleParent()
   {
     MOZ_COUNT_DTOR_INHERITED(DocAccessibleParent, ProxyAccessible);
     MOZ_ASSERT(mChildDocs.Length() == 0);
-    MOZ_ASSERT(!mParentDoc);
+    MOZ_ASSERT(!ParentDoc());
   }
+
+  void SetTopLevel() { mTopLevel = true; }
+  bool IsTopLevel() const { return mTopLevel; }
 
   /*
    * Called when a message from a document in a child process notifies the main
    * process it is firing an event.
    */
   virtual bool RecvEvent(const uint64_t& aID, const uint32_t& aType)
-    MOZ_OVERRIDE;
+    override;
 
-  virtual bool RecvShowEvent(const ShowEventData& aData) MOZ_OVERRIDE;
-  virtual bool RecvHideEvent(const uint64_t& aRootID) MOZ_OVERRIDE;
+  virtual bool RecvShowEvent(const ShowEventData& aData, const bool& aFromUser)
+    override;
+  virtual bool RecvHideEvent(const uint64_t& aRootID, const bool& aFromUser)
+    override;
+  virtual bool RecvStateChangeEvent(const uint64_t& aID,
+                                    const uint64_t& aState,
+                                    const bool& aEnabled) override final;
 
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
+  virtual bool RecvCaretMoveEvent(const uint64_t& aID, const int32_t& aOffset)
+    override final;
+
+  virtual bool RecvTextChangeEvent(const uint64_t& aID, const nsString& aStr,
+                                   const int32_t& aStart, const uint32_t& aLen,
+                                   const bool& aIsInsert,
+                                   const bool& aFromUser) override;
+
+  virtual bool RecvBindChildDoc(PDocAccessibleParent* aChildDoc, const uint64_t& aID) override;
+  void Unbind()
+  {
+    mParent = nullptr;
+    if (DocAccessibleParent* parent = ParentDoc()) {
+      parent->mChildDocs.RemoveElement(this);
+    }
+
+    mParentDoc = nullptr;
+  }
+
+  virtual bool RecvShutdown() override;
+  void Destroy();
+  virtual void ActorDestroy(ActorDestroyReason aWhy) override
+  {
+    MOZ_DIAGNOSTIC_ASSERT(CheckDocTree());
+    if (!mShutdown)
+      Destroy();
+  }
 
   /*
    * Return the main processes representation of the parent document (if any)
    * of the document this object represents.
    */
-  DocAccessibleParent* Parent() const { return mParentDoc; }
+  DocAccessibleParent* ParentDoc() const { return mParentDoc; }
 
   /*
    * Called when a document in a content process notifies the main process of a
    * new child document.
    */
-  bool AddChildDoc(DocAccessibleParent* aChildDoc, uint64_t aParentID);
+  bool AddChildDoc(DocAccessibleParent* aChildDoc, uint64_t aParentID,
+                   bool aCreating = true);
 
   /*
    * Called when the document in the content process this object represents
@@ -65,7 +103,7 @@ public:
    */
   void RemoveChildDoc(DocAccessibleParent* aChildDoc)
   {
-    aChildDoc->mParent->SetChildDoc(nullptr);
+    aChildDoc->Parent()->SetChildDoc(nullptr);
     mChildDocs.RemoveElement(aChildDoc);
     aChildDoc->mParentDoc = nullptr;
     MOZ_ASSERT(aChildDoc->mChildDocs.Length() == 0);
@@ -73,9 +111,28 @@ public:
 
   void RemoveAccessible(ProxyAccessible* aAccessible)
   {
-    MOZ_ASSERT(mAccessibles.GetEntry(aAccessible->ID()));
+    MOZ_DIAGNOSTIC_ASSERT(mAccessibles.GetEntry(aAccessible->ID()));
     mAccessibles.RemoveEntry(aAccessible->ID());
   }
+
+  /**
+   * Return the accessible for given id.
+   */
+  ProxyAccessible* GetAccessible(uintptr_t aID)
+  {
+    if (!aID)
+      return this;
+
+    ProxyEntry* e = mAccessibles.GetEntry(aID);
+    return e ? e->mProxy : nullptr;
+  }
+
+  const ProxyAccessible* GetAccessible(uintptr_t aID) const
+    { return const_cast<DocAccessibleParent*>(this)->GetAccessible(aID); }
+
+  size_t ChildDocCount() const { return mChildDocs.Length(); }
+  const DocAccessibleParent* ChildDocAt(size_t aIdx) const
+    { return mChildDocs[aIdx]; }
 
 private:
 
@@ -105,7 +162,8 @@ private:
   uint32_t AddSubtree(ProxyAccessible* aParent,
                       const nsTArray<AccessibleData>& aNewTree, uint32_t aIdx,
                       uint32_t aIdxInParent);
-  static PLDHashOperator ShutdownAccessibles(ProxyEntry* entry, void* unused);
+  MOZ_WARN_UNUSED_RESULT bool CheckDocTree() const;
+  xpcAccessibleGeneric* GetXPCAccessible(ProxyAccessible* aProxy);
 
   nsTArray<DocAccessibleParent*> mChildDocs;
   DocAccessibleParent* mParentDoc;
@@ -115,6 +173,8 @@ private:
    * proxy object so we can't use a real map.
    */
   nsTHashtable<ProxyEntry> mAccessibles;
+  bool mTopLevel;
+  bool mShutdown;
 };
 
 }

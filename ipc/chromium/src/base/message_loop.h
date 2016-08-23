@@ -27,6 +27,8 @@
 
 #include "nsAutoPtr.h"
 
+class nsIThread;
+
 namespace mozilla {
 namespace ipc {
 
@@ -115,51 +117,12 @@ public:
   void PostDelayedTask(
       const tracked_objects::Location& from_here, Task* task, int delay_ms);
 
-  void PostNonNestableTask(
-      const tracked_objects::Location& from_here, Task* task);
-
-  void PostNonNestableDelayedTask(
-      const tracked_objects::Location& from_here, Task* task, int delay_ms);
-
   // PostIdleTask is not thread safe and should be called on this thread
   void PostIdleTask(
       const tracked_objects::Location& from_here, Task* task);
 
-  // A variant on PostTask that deletes the given object.  This is useful
-  // if the object needs to live until the next run of the MessageLoop (for
-  // example, deleting a RenderProcessHost from within an IPC callback is not
-  // good).
-  //
-  // NOTE: This method may be called on any thread.  The object will be deleted
-  // on the thread that executes MessageLoop::Run().  If this is not the same
-  // as the thread that calls PostDelayedTask(FROM_HERE, ), then T MUST inherit
-  // from RefCountedThreadSafe<T>!
-  template <class T>
-  void DeleteSoon(const tracked_objects::Location& from_here, T* object) {
-    PostNonNestableTask(from_here, new DeleteTask<T>(object));
-  }
-
-  // A variant on PostTask that releases the given reference counted object
-  // (by calling its Release method).  This is useful if the object needs to
-  // live until the next run of the MessageLoop, or if the object needs to be
-  // released on a particular thread.
-  //
-  // NOTE: This method may be called on any thread.  The object will be
-  // released (and thus possibly deleted) on the thread that executes
-  // MessageLoop::Run().  If this is not the same as the thread that calls
-  // PostDelayedTask(FROM_HERE, ), then T MUST inherit from
-  // RefCountedThreadSafe<T>!
-  template <class T>
-  void ReleaseSoon(const tracked_objects::Location& from_here, T* object) {
-    PostNonNestableTask(from_here, new ReleaseTask<T>(object));
-  }
-
   // Run the message loop.
   void Run();
-
-  // Process all pending tasks, windows messages, etc., but don't wait/sleep.
-  // Return as soon as all items that can be run are taken care of.
-  void RunAllPending();
 
   // Signals the Run method to return after it is done processing all pending
   // messages.  This method may only be called on the same thread that called
@@ -176,7 +139,7 @@ public:
   // arbitrary MessageLoop to Quit.
   class QuitTask : public Task {
    public:
-    virtual void Run() {
+    virtual void Run() override {
       MessageLoop::current()->Quit();
     }
   };
@@ -199,7 +162,7 @@ public:
   //   This type of ML is used in Mozilla child processes which initialize
   //   XPCOM and use the gecko event loop.
   //
-  // TYPE_MOZILLA_UI
+  // TYPE_MOZILLA_PARENT
   //   This type of ML is used in Mozilla parent processes which initialize
   //   XPCOM and use the gecko event loop.
   //
@@ -216,14 +179,14 @@ public:
     TYPE_UI,
     TYPE_IO,
     TYPE_MOZILLA_CHILD,
-    TYPE_MOZILLA_UI,
+    TYPE_MOZILLA_PARENT,
     TYPE_MOZILLA_NONMAINTHREAD,
     TYPE_MOZILLA_NONMAINUITHREAD
   };
 
   // Normally, it is not necessary to instantiate a MessageLoop.  Instead, it
   // is typical to make use of the current thread's MessageLoop instance.
-  explicit MessageLoop(Type type = TYPE_DEFAULT);
+  explicit MessageLoop(Type type = TYPE_DEFAULT, nsIThread* aThread = nullptr);
   ~MessageLoop();
 
   // Returns the type passed to the constructor.
@@ -233,9 +196,9 @@ public:
   int32_t id() const { return id_; }
 
   // Optional call to connect the thread name with this loop.
-  void set_thread_name(const std::string& thread_name) {
+  void set_thread_name(const std::string& aThreadName) {
     DCHECK(thread_name_.empty()) << "Should not rename this thread!";
-    thread_name_ = thread_name;
+    thread_name_ = aThreadName;
   }
   const std::string& thread_name() const { return thread_name_; }
 
@@ -324,8 +287,8 @@ public:
     int sequence_num;                  // Secondary sort key for run time.
     bool nestable;                     // OK to dispatch from a nested loop.
 
-    PendingTask(Task* task, bool nestable)
-        : task(task), sequence_num(0), nestable(nestable) {
+    PendingTask(Task* aTask, bool aNestable)
+        : task(aTask), sequence_num(0), nestable(aNestable) {
     }
 
     // Used to support sorting.
@@ -393,12 +356,12 @@ public:
 
   // Post a task to our incomming queue.
   void PostTask_Helper(const tracked_objects::Location& from_here, Task* task,
-                       int delay_ms, bool nestable);
+                       int delay_ms);
 
   // base::MessagePump::Delegate methods:
-  virtual bool DoWork();
-  virtual bool DoDelayedWork(base::TimeTicks* next_delayed_work_time);
-  virtual bool DoIdleWork();
+  virtual bool DoWork() override;
+  virtual bool DoDelayedWork(base::TimeTicks* next_delayed_work_time) override;
+  virtual bool DoIdleWork() override;
 
   Type type_;
   int32_t id_;
@@ -415,7 +378,7 @@ public:
   // once we're out of nested message loops.
   TaskQueue deferred_non_nestable_work_queue_;
 
-  nsRefPtr<base::MessagePump> pump_;
+  RefPtr<base::MessagePump> pump_;
 
   base::ObserverList<DestructionObserver> destruction_observers_;
 
@@ -463,7 +426,7 @@ public:
 //
 class MessageLoopForUI : public MessageLoop {
  public:
-  explicit MessageLoopForUI(Type type=TYPE_UI) : MessageLoop(type) {
+  explicit MessageLoopForUI(Type aType=TYPE_UI) : MessageLoop(aType) {
   }
 
   // Returns the MessageLoopForUI of the current thread.
@@ -473,7 +436,7 @@ class MessageLoopForUI : public MessageLoop {
       return NULL;
     Type type = loop->type();
     DCHECK(type == MessageLoop::TYPE_UI ||
-           type == MessageLoop::TYPE_MOZILLA_UI ||
+           type == MessageLoop::TYPE_MOZILLA_PARENT ||
            type == MessageLoop::TYPE_MOZILLA_CHILD);
     return static_cast<MessageLoopForUI*>(loop);
   }

@@ -20,25 +20,25 @@
 namespace mozilla {
 namespace ipc {
 
-class SharedMemoryBasic MOZ_FINAL : public SharedMemory
+class SharedMemoryBasic final : public SharedMemoryCommon<base::FileDescriptor>
 {
 public:
-  typedef base::FileDescriptor Handle;
-
   SharedMemoryBasic();
 
-  SharedMemoryBasic(const Handle& aHandle);
+  virtual bool SetHandle(const Handle& aHandle) override;
 
-  virtual bool Create(size_t aNbytes) MOZ_OVERRIDE;
+  virtual bool Create(size_t aNbytes) override;
 
-  virtual bool Map(size_t nBytes) MOZ_OVERRIDE;
+  virtual bool Map(size_t nBytes) override;
 
-  virtual void* memory() const MOZ_OVERRIDE
+  virtual void CloseHandle() override;
+
+  virtual void* memory() const override
   {
     return mMemory;
   }
 
-  virtual SharedMemoryType Type() const MOZ_OVERRIDE
+  virtual SharedMemoryType Type() const override
   {
     return TYPE_BASIC;
   }
@@ -48,19 +48,18 @@ public:
     return Handle();
   }
 
-  static bool IsHandleValid(const Handle &aHandle)
+  virtual bool IsHandleValid(const Handle &aHandle) const override
   {
     return aHandle.fd >= 0;
   }
 
-  bool ShareToProcess(base::ProcessHandle aProcess,
-                      Handle* aNewHandle);
+  virtual bool ShareToProcess(base::ProcessId aProcessId,
+                              Handle* aNewHandle) override;
 
 private:
   ~SharedMemoryBasic();
 
   void Unmap();
-  void Destroy();
 
   // The /dev/ashmem fd we allocate.
   int mShmFd;

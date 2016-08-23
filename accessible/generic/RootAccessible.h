@@ -22,18 +22,17 @@ class RootAccessible : public DocAccessibleWrap,
   NS_DECL_ISUPPORTS_INHERITED
 
 public:
-  RootAccessible(nsIDocument* aDocument, nsIContent* aRootContent,
-                 nsIPresShell* aPresShell);
+  RootAccessible(nsIDocument* aDocument, nsIPresShell* aPresShell);
 
   // nsIDOMEventListener
-  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) MOZ_OVERRIDE;
+  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) override;
 
   // Accessible
-  virtual void Shutdown() MOZ_OVERRIDE;
-  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName) MOZ_OVERRIDE;
-  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
-  virtual mozilla::a11y::role NativeRole() MOZ_OVERRIDE;
-  virtual uint64_t NativeState() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
+  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName) override;
+  virtual Relation RelationByType(RelationType aType) override;
+  virtual mozilla::a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
 
   // RootAccessible
 
@@ -42,14 +41,19 @@ public:
    */
   virtual void DocumentActivated(DocAccessible* aDocument);
 
+  /**
+   * Return the primary remote top level document if any.
+   */
+  ProxyAccessible* GetPrimaryRemoteTopLevelContentDoc() const;
+
 protected:
   virtual ~RootAccessible();
 
   /**
    * Add/remove DOM event listeners.
    */
-  virtual nsresult AddEventListeners() MOZ_OVERRIDE;
-  virtual nsresult RemoveEventListeners() MOZ_OVERRIDE;
+  virtual nsresult AddEventListeners() override;
+  virtual nsresult RemoveEventListeners() override;
 
   /**
    * Process the DOM event.

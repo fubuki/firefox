@@ -370,6 +370,11 @@ static const struct mechanismList mechanisms[] = {
      {CKM_SEED_MAC,		{16, 16, CKF_SN_VR},		PR_TRUE},
      {CKM_SEED_MAC_GENERAL,	{16, 16, CKF_SN_VR},		PR_TRUE},
      {CKM_SEED_CBC_PAD,		{16, 16, CKF_EN_DE_WR_UN},	PR_TRUE},
+#ifndef NSS_DISABLE_CHACHAPOLY
+     /* ------------------------- ChaCha20 Operations ---------------------- */
+     {CKM_NSS_CHACHA20_KEY_GEN,	{32, 32, CKF_GENERATE},		PR_TRUE},
+     {CKM_NSS_CHACHA20_POLY1305,{32, 32, CKF_EN_DE},		PR_TRUE},
+#endif /* NSS_DISABLE_CHACHAPOLY */
      /* ------------------------- Hashing Operations ----------------------- */
      {CKM_MD2,			{0,   0, CKF_DIGEST},		PR_FALSE},
      {CKM_MD2_HMAC,		{1, 128, CKF_SN_VR},		PR_TRUE},
@@ -393,6 +398,7 @@ static const struct mechanismList mechanisms[] = {
      {CKM_SHA512_HMAC,		{1, 128, CKF_SN_VR},		PR_TRUE},
      {CKM_SHA512_HMAC_GENERAL,	{1, 128, CKF_SN_VR},		PR_TRUE},
      {CKM_TLS_PRF_GENERAL,	{0, 512, CKF_SN_VR},		PR_FALSE},
+     {CKM_TLS_MAC,		{0, 512, CKF_SN_VR},		PR_FALSE},
      {CKM_NSS_TLS_PRF_GENERAL_SHA256,
 				{0, 512, CKF_SN_VR},		PR_FALSE},
      /* ------------------------- HKDF Operations -------------------------- */
@@ -462,14 +468,21 @@ static const struct mechanismList mechanisms[] = {
      {CKM_SHA384_KEY_DERIVATION,	{ 0, 48, CKF_DERIVE},   PR_FALSE}, 
      {CKM_SHA512_KEY_DERIVATION,	{ 0, 64, CKF_DERIVE},   PR_FALSE}, 
      {CKM_TLS_MASTER_KEY_DERIVE,	{48, 48, CKF_DERIVE},   PR_FALSE}, 
+     {CKM_TLS12_MASTER_KEY_DERIVE,	{48, 48, CKF_DERIVE},   PR_FALSE}, 
      {CKM_NSS_TLS_MASTER_KEY_DERIVE_SHA256,
 					{48, 48, CKF_DERIVE},	PR_FALSE},
      {CKM_TLS_MASTER_KEY_DERIVE_DH,	{8, 128, CKF_DERIVE},   PR_FALSE}, 
+     {CKM_TLS12_MASTER_KEY_DERIVE_DH,	{8, 128, CKF_DERIVE},   PR_FALSE}, 
      {CKM_NSS_TLS_MASTER_KEY_DERIVE_DH_SHA256,
 					{8, 128, CKF_DERIVE},	PR_FALSE},
      {CKM_TLS_KEY_AND_MAC_DERIVE,	{48, 48, CKF_DERIVE},   PR_FALSE}, 
+     {CKM_TLS12_KEY_AND_MAC_DERIVE,	{48, 48, CKF_DERIVE},   PR_FALSE}, 
      {CKM_NSS_TLS_KEY_AND_MAC_DERIVE_SHA256,
 					{48, 48, CKF_DERIVE},	PR_FALSE},
+     {CKM_NSS_TLS_EXTENDED_MASTER_KEY_DERIVE,
+                                        {48,128, CKF_DERIVE},   PR_FALSE},
+     {CKM_NSS_TLS_EXTENDED_MASTER_KEY_DERIVE_DH,
+                                        {48,128, CKF_DERIVE},   PR_FALSE},
      /* ---------------------- PBE Key Derivations  ------------------------ */
      {CKM_PBE_MD2_DES_CBC,		{8, 8, CKF_DERIVE},   PR_TRUE},
      {CKM_PBE_MD5_DES_CBC,		{8, 8, CKF_DERIVE},   PR_TRUE},
@@ -1742,7 +1755,7 @@ NSSLOWKEYPublicKey *sftk_GetPubKey(SFTKObject *object,CK_KEY_TYPE key_type,
 	crv = sftk_Attribute2SSecItem(arena,&pubKey->u.ec.publicValue,
 	                              object,CKA_EC_POINT);
 	if (crv == CKR_OK) {
-	    int keyLen,curveLen;
+	    unsigned int keyLen,curveLen;
 
 	    curveLen = (pubKey->u.ec.ecParams.fieldID.size +7)/8;
 	    keyLen = (2*curveLen)+1;
@@ -2217,7 +2230,7 @@ CK_RV C_GetFunctionList(CK_FUNCTION_LIST_PTR *pFunctionList)
 static PLHashNumber
 sftk_HashNumber(const void *key)
 {
-    return (PLHashNumber) key;
+    return (PLHashNumber)((char *)key - (char *)NULL);
 }
 
 /*
@@ -2273,7 +2286,7 @@ static CK_SLOT_ID_PTR nscSlotList[2] = {NULL, NULL};
 static CK_ULONG nscSlotListSize[2] = {0, 0};
 static PLHashTable *nscSlotHashTable[2] = {NULL, NULL};
 
-static int
+static unsigned int
 sftk_GetModuleIndex(CK_SLOT_ID slotID)
 {
     if ((slotID == FIPS_SLOT_ID) || (slotID >= SFTK_MIN_FIPS_USER_SLOT_ID)) {
@@ -2317,7 +2330,7 @@ static CK_RV
 sftk_RegisterSlot(SFTKSlot *slot, int moduleIndex)
 {
     PLHashEntry *entry;
-    int index;
+    unsigned int index;
 
     index = sftk_GetModuleIndex(slot->slotID);
 
@@ -2444,7 +2457,12 @@ SFTK_SlotReInit(SFTKSlot *slot, char *configdir, char *updatedir,
 	if ((slot->minimumPinLen == 0) && (params->pwRequired)) {
 	    slot->minimumPinLen = 1;
 	}
-	if ((moduleIndex == NSC_FIPS_MODULE) &&
+	/* Make sure the pin len is set to the Minimum allowed value for fips
+  	 * when in FIPS mode. NOTE: we don't set it if the database has not
+  	 * been initialized yet so that we can init into level1 mode if needed
+  	 */
+	if ((sftkdb_HasPasswordSet(slot->keyDB) == SECSuccess) && 
+		(moduleIndex == NSC_FIPS_MODULE) &&
 		(slot->minimumPinLen < FIPS_MIN_PIN)) {
 	    slot->minimumPinLen = FIPS_MIN_PIN;
 	}
@@ -2598,7 +2616,7 @@ CK_RV sftk_CloseAllSessions(SFTKSlot *slot, PRBool logout)
 		--slot->sessionCount;
 		SKIP_AFTER_FORK(PZ_Unlock(slot->slotLock));
 		if (session->info.flags & CKF_RW_SESSION) {
-		    PR_ATOMIC_DECREMENT(&slot->rwSessionCount);
+		    (void)PR_ATOMIC_DECREMENT(&slot->rwSessionCount);
 		}
 	    } else {
 		SKIP_AFTER_FORK(PZ_Unlock(lock));
@@ -2753,7 +2771,7 @@ NSC_ModuleDBFunc(unsigned long function,char *parameters, void *args)
     case SECMOD_MODULE_DB_FUNCTION_FIND:
 	if (secmod == NULL) {
 	    PORT_SetError(SEC_ERROR_INVALID_ARGS);
-	    return NULL;
+	    goto loser;
 	}
 	if (rw && (dbType != NSS_DB_TYPE_LEGACY) && 
 	    (dbType != NSS_DB_TYPE_MULTIACCESS)) {
@@ -2796,7 +2814,7 @@ NSC_ModuleDBFunc(unsigned long function,char *parameters, void *args)
     case SECMOD_MODULE_DB_FUNCTION_ADD:
 	if (secmod == NULL) {
 	    PORT_SetError(SEC_ERROR_INVALID_ARGS);
-	    return NULL;
+	    goto loser;
 	}
 	rvstr = (sftkdbCall_AddSecmodDB(appName,filename,secmod,
 			(char *)args,rw) == SECSuccess) ? &success: NULL;
@@ -2804,7 +2822,7 @@ NSC_ModuleDBFunc(unsigned long function,char *parameters, void *args)
     case SECMOD_MODULE_DB_FUNCTION_DEL:
 	if (secmod == NULL) {
 	    PORT_SetError(SEC_ERROR_INVALID_ARGS);
-	    return NULL;
+	    goto loser;
 	}
 	rvstr = (sftkdbCall_DeleteSecmodDB(appName,filename,secmod,
 			(char *)args,rw) == SECSuccess) ? &success: NULL;
@@ -2814,6 +2832,8 @@ NSC_ModuleDBFunc(unsigned long function,char *parameters, void *args)
 			(char **)args,rw) == SECSuccess) ? &success: NULL;
 	break;
     }
+
+loser:
     if (secmod) PR_smprintf_free(secmod);
     if (appName) PORT_Free(appName);
     if (filename) PORT_Free(filename);
@@ -3135,17 +3155,16 @@ CK_RV NSC_Finalize (CK_VOID_PTR pReserved)
     return crv;
 }
 
-extern const char __nss_softokn_rcsid[];
-extern const char __nss_softokn_sccsid[];
+extern const char __nss_softokn_version[];
 
 /* NSC_GetInfo returns general information about Cryptoki. */
 CK_RV  NSC_GetInfo(CK_INFO_PTR pInfo)
 {
-    volatile char c; /* force a reference that won't get optimized away */
+#define NSS_VERSION_VARIABLE __nss_softokn_version
+#include "verref.h"
 
     CHECK_FORK();
     
-    c = __nss_softokn_rcsid[0] + __nss_softokn_sccsid[0]; 
     pInfo->cryptokiVersion.major = 2;
     pInfo->cryptokiVersion.minor = 20;
     PORT_Memcpy(pInfo->manufacturerID,manufacturerID,32);
@@ -3576,6 +3595,14 @@ CK_RV NSC_InitPIN(CK_SESSION_HANDLE hSession,
     /* Now update our local copy of the pin */
     if (rv == SECSuccess) {
 	if (ulPinLen == 0) slot->needLogin = PR_FALSE;
+	/* database has been initialized, now force min password in FIPS
+  	 * mode. NOTE: if we are in level1, we may not have a password, but
+  	 * forcing it now will prevent an insufficient password from being set.
+  	 */
+	if ((sftk_GetModuleIndex(slot->slotID) == NSC_FIPS_MODULE) &&
+		(slot->minimumPinLen < FIPS_MIN_PIN)) {
+	    slot->minimumPinLen = FIPS_MIN_PIN;
+	}
 	return CKR_OK;
     }
     crv = CKR_PIN_INCORRECT;
@@ -3716,7 +3743,7 @@ CK_RV NSC_OpenSession(CK_SLOT_ID slotID, CK_FLAGS flags,
     ++slot->sessionCount;
     PZ_Unlock(slot->slotLock);
     if (session->info.flags & CKF_RW_SESSION) {
-	PR_ATOMIC_INCREMENT(&slot->rwSessionCount);
+	(void)PR_ATOMIC_INCREMENT(&slot->rwSessionCount);
     }
 
     do {
@@ -3784,7 +3811,7 @@ CK_RV NSC_CloseSession(CK_SESSION_HANDLE hSession)
 	    sftk_freeDB(handle);
 	}
 	if (session->info.flags & CKF_RW_SESSION) {
-	    PR_ATOMIC_DECREMENT(&slot->rwSessionCount);
+	    (void)PR_ATOMIC_DECREMENT(&slot->rwSessionCount);
 	}
     }
 
@@ -4002,7 +4029,7 @@ static CK_RV sftk_CreateNewSlot(SFTKSlot *slot, CK_OBJECT_CLASS class,
     PRBool isValidFIPSUserSlot = PR_FALSE;
     PRBool isValidSlot = PR_FALSE;
     PRBool isFIPS = PR_FALSE;
-    unsigned long moduleIndex;
+    unsigned long moduleIndex = NSC_NON_FIPS_MODULE;
     SFTKAttribute *attribute;
     sftk_parameters paramStrings;
     char *paramString;
@@ -4511,7 +4538,7 @@ sftk_emailhack(SFTKSlot *slot, SFTKDBHandle *handle,
 {
     PRBool isCert = PR_FALSE;
     int emailIndex = -1;
-    int i;
+    unsigned int i;
     SFTKSearchResults smime_search;
     CK_ATTRIBUTE smime_template[2];
     CK_OBJECT_CLASS smime_class = CKO_NETSCAPE_SMIME;

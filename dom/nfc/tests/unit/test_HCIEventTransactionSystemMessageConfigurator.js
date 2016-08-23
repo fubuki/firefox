@@ -3,13 +3,7 @@
 
 "use strict";
 
-/* globals run_next_test, add_test, ok, equal, Components, XPCOMUtils */
-/* exported run_test */
-
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
-
 Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 const MANIFEST_URL = "app://system.gaiamobile.org/manifest.webapp";
 // secure element access rule format: <secure element name>/<hex string aid>
@@ -23,6 +17,7 @@ const MANIFEST = {
     "*/a0*"
   ]
 };
+const APPID = 1111;
 const PAGE_URL = "app://system.gaiamobile.org/index.html";
 const TYPE = "nfc-hci-event-transaction";
 
@@ -38,16 +33,30 @@ const TEST_MESSAGES = [
     origin: "SIM1", expectedResult: true }
 ];
 
-let HCIEvtTransactionConfigurator = null;
+var HCIEvtTransactionConfigurator = null;
+var aceAccessAllowed = true;
 
-function setMockAppService(manifest) {
-  XPCOMUtils.defineLazyServiceGetter = (obj) => {
-    obj.appsService = {
-      getManifestFor: (manifestURL) => {
-        equal(manifestURL, MANIFEST_URL, "should pass proper manifestUrl");
-        return Promise.resolve(manifest);
-      }
-    };
+function setMockServices(manifest) {
+  XPCOMUtils.defineLazyServiceGetter = (obj, service) => {
+    if (service === "appsService") {
+      obj.appsService = {
+        getManifestFor: (manifestURL) => {
+          equal(manifestURL, MANIFEST_URL, "should pass proper manifestUrl");
+          return Promise.resolve(manifest);
+        },
+        getAppLocalIdByManifestURL: (manifestURL) => {
+          equal(manifestURL, MANIFEST_URL, "should pass proper manifestUrl");
+          return APPID;
+        },
+      };
+    }
+    else if (service === "aceService") {
+      obj.aceService = {
+        isAccessAllowed: () => {
+          return Promise.resolve(aceAccessAllowed);
+        }
+      };
+    }
   };
 }
 
@@ -62,7 +71,7 @@ function handleRejectedPromise() {
 }
 
 function run_test() {
-  setMockAppService(MANIFEST);
+  setMockServices(MANIFEST);
   HCIEvtTransactionConfigurator = getSystemMessageConfigurator();
 
   ok(!!HCIEvtTransactionConfigurator, "Configurator should be instantiated");
@@ -92,6 +101,24 @@ add_test(function test_shouldDispatch_general_rule_validation() {
     results.forEach((result, idx) => {
       ok(result === TEST_MESSAGES[idx].expectedResult, "tested message: " + JSON.stringify(TEST_MESSAGES[idx]));
     });
+  })
+  .catch(handleRejectedPromise)
+  .then(run_next_test);
+});
+
+add_test(function test_shouldDispatch_aceIsAccessAllowed() {
+  var testAccessAllowed = () => {
+    return HCIEvtTransactionConfigurator
+    .shouldDispatch(MANIFEST_URL, PAGE_URL, TYPE, TEST_MESSAGES[1])
+    .then((result) => {
+      ok(result === aceAccessAllowed, "Should be equal to ACE access decision");
+    });
+  };
+
+  aceAccessAllowed = false;
+  testAccessAllowed().then(() => {
+    aceAccessAllowed = true;
+    return testAccessAllowed();
   })
   .catch(handleRejectedPromise)
   .then(run_next_test);

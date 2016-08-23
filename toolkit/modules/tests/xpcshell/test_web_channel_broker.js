@@ -3,7 +3,7 @@
 
 "use strict";
 
-const Cu = Components.utils;
+var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/WebChannel.jsm");
@@ -61,6 +61,7 @@ add_task(function test_web_channel_broker_listener() {
       deliver: function(data, sender) {
         do_check_eq(data.id, VALID_WEB_CHANNEL_ID);
         do_check_eq(data.message.command, "hello");
+        do_check_neq(sender, undefined);
         WebChannelBroker.unregisterChannel(channel);
         resolve();
       }
@@ -77,7 +78,9 @@ add_task(function test_web_channel_broker_listener() {
       },
       principal: {
         origin: URL_STRING
-      }
+      },
+      objects: {
+      },
     };
 
     WebChannelBroker._listener(mockEvent);

@@ -27,7 +27,7 @@ NS_NewSVGFilterFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGFilterFrame)
 
-class MOZ_STACK_CLASS nsSVGFilterFrame::AutoFilterReferencer
+class MOZ_RAII nsSVGFilterFrame::AutoFilterReferencer
 {
 public:
   explicit AutoFilterReferencer(nsSVGFilterFrame *aFrame MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
@@ -36,7 +36,7 @@ public:
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     // Reference loops should normally be detected in advance and handled, so
     // we're not expecting to encounter them here
-    NS_ABORT_IF_FALSE(!mFrame->mLoopFlag, "Undetected reference loop!");
+    MOZ_ASSERT(!mFrame->mLoopFlag, "Undetected reference loop!");
     mFrame->mLoopFlag = true;
   }
   ~AutoFilterReferencer() {
@@ -86,7 +86,7 @@ nsSVGFilterFrame::GetFilterContent(nsIContent *aDefault)
   for (nsIContent* child = mContent->GetFirstChild();
        child;
        child = child->GetNextSibling()) {
-    nsRefPtr<nsSVGFE> primitive;
+    RefPtr<nsSVGFE> primitive;
     CallQueryInterface(child, (nsSVGFE**)getter_AddRefs(primitive));
     if (primitive) {
       return static_cast<SVGFilterElement *>(mContent);
@@ -123,7 +123,7 @@ nsSVGFilterFrame::GetReferencedFilter()
     nsCOMPtr<nsIURI> targetURI;
     nsCOMPtr<nsIURI> base = mContent->GetBaseURI();
     nsContentUtils::NewURIWithDocumentCharset(getter_AddRefs(targetURI), href,
-                                              mContent->GetCurrentDoc(), base);
+                                              mContent->GetUncomposedDoc(), base);
 
     property =
       nsSVGEffects::GetPaintingProperty(targetURI, this, nsSVGEffects::HrefProperty());
@@ -179,8 +179,8 @@ nsSVGFilterFrame::AttributeChanged(int32_t  aNameSpaceID,
     // And update whoever references us
     nsSVGEffects::InvalidateDirectRenderingObservers(this);
   }
-  return nsSVGFilterFrameBase::AttributeChanged(aNameSpaceID,
-                                                aAttribute, aModType);
+  return nsSVGContainerFrame::AttributeChanged(aNameSpaceID,
+                                               aAttribute, aModType);
 }
 
 #ifdef DEBUG
@@ -189,10 +189,10 @@ nsSVGFilterFrame::Init(nsIContent*       aContent,
                        nsContainerFrame* aParent,
                        nsIFrame*         aPrevInFlow)
 {
-  NS_ASSERTION(aContent->IsSVG(nsGkAtoms::filter),
+  NS_ASSERTION(aContent->IsSVGElement(nsGkAtoms::filter),
                "Content is not an SVG filter");
 
-  nsSVGFilterFrameBase::Init(aContent, aParent, aPrevInFlow);
+  nsSVGContainerFrame::Init(aContent, aParent, aPrevInFlow);
 }
 #endif /* DEBUG */
 

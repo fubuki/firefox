@@ -18,8 +18,8 @@ namespace dom {
 
 class AudioContext;
 
-class OscillatorNode : public AudioNode,
-                       public MainThreadMediaStreamListener
+class OscillatorNode final : public AudioNode,
+                             public MainThreadMediaStreamListener
 {
 public:
   explicit OscillatorNode(AudioContext* aContext);
@@ -27,16 +27,11 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(OscillatorNode, AudioNode)
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual void DestroyMediaStream() MOZ_OVERRIDE
-  {
-    if (mStream) {
-      mStream->RemoveMainThreadListener(this);
-    }
-    AudioNode::DestroyMediaStream();
-  }
-  virtual uint16_t NumberOfInputs() const MOZ_FINAL MOZ_OVERRIDE
+  void DestroyMediaStream() override;
+
+  uint16_t NumberOfInputs() const final override
   {
     return 0;
   }
@@ -78,36 +73,33 @@ public:
 
   IMPL_EVENT_HANDLER(ended)
 
-  virtual void NotifyMainThreadStateChanged() MOZ_OVERRIDE;
+  void NotifyMainThreadStreamFinished() override;
 
-  virtual const char* NodeType() const MOZ_OVERRIDE
+  const char* NodeType() const override
   {
     return "OscillatorNode";
   }
 
-  virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
-  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override;
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override;
 
 protected:
   virtual ~OscillatorNode();
 
 private:
-  static void SendFrequencyToStream(AudioNode* aNode);
-  static void SendDetuneToStream(AudioNode* aNode);
   void SendTypeToStream();
   void SendPeriodicWaveToStream();
 
 private:
   OscillatorType mType;
-  nsRefPtr<PeriodicWave> mPeriodicWave;
-  nsRefPtr<AudioParam> mFrequency;
-  nsRefPtr<AudioParam> mDetune;
+  RefPtr<PeriodicWave> mPeriodicWave;
+  RefPtr<AudioParam> mFrequency;
+  RefPtr<AudioParam> mDetune;
   bool mStartCalled;
-  bool mStopped;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

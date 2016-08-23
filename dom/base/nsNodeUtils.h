@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,16 +7,21 @@
 #ifndef nsNodeUtils_h___
 #define nsNodeUtils_h___
 
+#include "mozilla/Maybe.h"
+#include "mozilla/NonOwningAnimationTarget.h"
 #include "nsIContent.h"          // for use in inline function (ParentChainChanged)
 #include "nsIMutationObserver.h" // for use in inline function (ParentChainChanged)
 #include "js/TypeDecls.h"
 #include "nsCOMArray.h"
 
 struct CharacterDataChangeInfo;
-class nsIVariant;
-class nsIDOMNode;
 template<class E> class nsCOMArray;
 class nsCycleCollectionTraversalCallback;
+namespace mozilla {
+namespace dom {
+class Animation;
+} // namespace dom
+} // namespace mozilla
 
 class nsNodeUtils
 {
@@ -44,12 +50,15 @@ public:
    * @param aNameSpaceID  Namespace of changing attribute
    * @param aAttribute    Local-name of changing attribute
    * @param aModType      Type of change (add/change/removal)
+   * @param aNewValue     The parsed new value, but only if BeforeSetAttr
+   *                      preparsed it!!!
    * @see nsIMutationObserver::AttributeWillChange
    */
   static void AttributeWillChange(mozilla::dom::Element* aElement,
                                   int32_t aNameSpaceID,
                                   nsIAtom* aAttribute,
-                                  int32_t aModType);
+                                  int32_t aModType,
+                                  const nsAttrValue* aNewValue);
 
   /**
    * Send AttributeChanged notifications to nsIMutationObservers.
@@ -57,12 +66,16 @@ public:
    * @param aNameSpaceID  Namespace of changed attribute
    * @param aAttribute    Local-name of changed attribute
    * @param aModType      Type of change (add/change/removal)
+   * @param aOldValue     If the old value was StoresOwnData() (or absent),
+   *                      that value, otherwise null
    * @see nsIMutationObserver::AttributeChanged
    */
   static void AttributeChanged(mozilla::dom::Element* aElement,
                                int32_t aNameSpaceID,
                                nsIAtom* aAttribute,
-                               int32_t aModType);
+                               int32_t aModType,
+                               const nsAttrValue* aOldValue);
+
   /**
    * Send AttributeSetToCurrentValue notifications to nsIMutationObservers.
    * @param aElement      Element whose data changed
@@ -84,6 +97,15 @@ public:
   static void ContentAppended(nsIContent* aContainer,
                               nsIContent* aFirstNewContent,
                               int32_t aNewIndexInContainer);
+
+  /**
+   * Send NativeAnonymousChildList notifications to nsIMutationObservers
+   * @param aContent             Anonymous node that's been added or removed
+   * @param aIsRemove            True if it's a removal, false if an addition
+   * @see nsIMutationObserver::NativeAnonymousChildListChange
+   */
+  static void NativeAnonymousChildListChange(nsIContent* aContent,
+                                             bool aIsRemove);
 
   /**
    * Send ContentInserted notifications to nsIMutationObservers
@@ -123,6 +145,22 @@ public:
   }
 
   /**
+   * Utility function to get the target (pseudo-)element associated with an
+   * animation.
+   * @param aAnimation The animation whose target is what we want.
+   */
+  static mozilla::Maybe<mozilla::NonOwningAnimationTarget>
+    GetTargetForAnimation(const mozilla::dom::Animation* aAnimation);
+
+  /**
+   * Notify that an animation is added/changed/removed.
+   * @param aAnimation The animation we added/changed/removed.
+   */
+  static void AnimationAdded(mozilla::dom::Animation* aAnimation);
+  static void AnimationChanged(mozilla::dom::Animation* aAnimation);
+  static void AnimationRemoved(mozilla::dom::Animation* aAnimation);
+
+  /**
    * To be called when reference count of aNode drops to zero.
    * @param aNode The node which is going to be deleted.
    */
@@ -152,7 +190,7 @@ public:
                         nsINode **aResult)
   {
     return CloneAndAdopt(aNode, true, aDeep, aNewNodeInfoManager,
-                         JS::NullPtr(), aNodesWithProperties, nullptr, aResult);
+                         nullptr, aNodesWithProperties, nullptr, aResult);
   }
 
   /**
@@ -161,7 +199,7 @@ public:
   static nsresult Clone(nsINode *aNode, bool aDeep, nsINode **aResult)
   {
     nsCOMArray<nsINode> dummyNodeWithProperties;
-    return CloneAndAdopt(aNode, true, aDeep, nullptr, JS::NullPtr(),
+    return CloneAndAdopt(aNode, true, aDeep, nullptr, nullptr,
                          dummyNodeWithProperties, aNode->GetParent(), aResult);
   }
 
@@ -273,6 +311,22 @@ private:
                                 JS::Handle<JSObject*> aReparentScope,
                                 nsCOMArray<nsINode> &aNodesWithProperties,
                                 nsINode *aParent, nsINode **aResult);
+
+  enum class AnimationMutationType
+  {
+    Added,
+    Changed,
+    Removed
+  };
+  /**
+   * Notify the observers of the target of an animation
+   * @param aAnimation The mutated animation.
+   * @param aMutationType The mutation type of this animation. It could be
+   *                      Added, Changed, or Removed.
+   */
+  static void AnimationMutated(mozilla::dom::Animation* aAnimation,
+                               AnimationMutationType aMutatedType);
+
 };
 
 #endif // nsNodeUtils_h___

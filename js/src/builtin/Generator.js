@@ -15,7 +15,7 @@ function StarGeneratorNext(val) {
             return { value: undefined, done: true };
 
         if (GeneratorIsRunning(this))
-            ThrowError(JSMSG_NESTING_GENERATOR);
+            ThrowTypeError(JSMSG_NESTING_GENERATOR);
     }
 
     try {
@@ -36,11 +36,33 @@ function StarGeneratorThrow(val) {
             throw val;
 
         if (GeneratorIsRunning(this))
-            ThrowError(JSMSG_NESTING_GENERATOR);
+            ThrowTypeError(JSMSG_NESTING_GENERATOR);
     }
 
     try {
         return resumeGenerator(this, val, 'throw');
+    } catch (e) {
+        if (!StarGeneratorObjectIsClosed(this))
+            GeneratorSetClosed(this);
+        throw e;
+    }
+}
+
+function StarGeneratorReturn(val) {
+    if (!IsSuspendedStarGenerator(this)) {
+        if (!IsObject(this) || !IsStarGeneratorObject(this))
+            return callFunction(CallStarGeneratorMethodIfWrapped, this, val, "StarGeneratorReturn");
+
+        if (StarGeneratorObjectIsClosed(this))
+            return { value: val, done: true };
+
+        if (GeneratorIsRunning(this))
+            ThrowTypeError(JSMSG_NESTING_GENERATOR);
+    }
+
+    try {
+        var rval = { value: val, done: true };
+        return resumeGenerator(this, rval, 'close');
     } catch (e) {
         if (!StarGeneratorObjectIsClosed(this))
             GeneratorSetClosed(this);
@@ -56,7 +78,7 @@ function LegacyGeneratorNext(val) {
         ThrowStopIteration();
 
     if (GeneratorIsRunning(this))
-        ThrowError(JSMSG_NESTING_GENERATOR);
+        ThrowTypeError(JSMSG_NESTING_GENERATOR);
 
     try {
         return resumeGenerator(this, val, 'next');
@@ -66,6 +88,7 @@ function LegacyGeneratorNext(val) {
         throw e;
     }
 }
+_SetCanonicalName(LegacyGeneratorNext, "next");
 
 function LegacyGeneratorThrow(val) {
     if (!IsObject(this) || !IsLegacyGeneratorObject(this))
@@ -75,7 +98,7 @@ function LegacyGeneratorThrow(val) {
         throw val;
 
     if (GeneratorIsRunning(this))
-        ThrowError(JSMSG_NESTING_GENERATOR);
+        ThrowTypeError(JSMSG_NESTING_GENERATOR);
 
     try {
         return resumeGenerator(this, val, 'throw');
@@ -93,7 +116,7 @@ function LegacyGeneratorCloseInternal() {
     assert(!LegacyGeneratorObjectIsClosed(this), "Already closed: " + ToString(this));
 
     if (GeneratorIsRunning(this))
-        ThrowError(JSMSG_NESTING_GENERATOR);
+        ThrowTypeError(JSMSG_NESTING_GENERATOR);
 
     resumeGenerator(this, undefined, 'close');
     if (!LegacyGeneratorObjectIsClosed(this))

@@ -1,0 +1,76 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set sw=2 ts=8 et ft=cpp : */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+include protocol PContent;
+include protocol PPresentationRequest;
+
+include InputStreamParams;
+
+namespace mozilla {
+namespace dom {
+
+struct StartSessionRequest
+{
+  nsString url;
+  nsString sessionId;
+  nsString origin;
+  nsString deviceId;
+};
+
+struct SendSessionMessageRequest
+{
+  nsString sessionId;
+  nsString data;
+};
+
+struct CloseSessionRequest
+{
+  nsString sessionId;
+};
+
+struct TerminateSessionRequest
+{
+  nsString sessionId;
+};
+
+union PresentationIPCRequest
+{
+  StartSessionRequest;
+  SendSessionMessageRequest;
+  CloseSessionRequest;
+  TerminateSessionRequest;
+};
+
+sync protocol PPresentation
+{
+  manager PContent;
+  manages PPresentationRequest;
+
+child:
+  async NotifyAvailableChange(bool aAvailable);
+  async NotifySessionStateChange(nsString aSessionId, uint16_t aState);
+  async NotifyMessage(nsString aSessionId, nsCString aData);
+  async NotifySessionConnect(uint64_t aWindowId, nsString aSessionId);
+
+parent:
+  async __delete__();
+
+  async RegisterAvailabilityHandler();
+  async UnregisterAvailabilityHandler();
+
+  async RegisterSessionHandler(nsString aSessionId);
+  async UnregisterSessionHandler(nsString aSessionId);
+
+  async RegisterRespondingHandler(uint64_t aWindowId);
+  async UnregisterRespondingHandler(uint64_t aWindowId);
+
+  async PPresentationRequest(PresentationIPCRequest aRequest);
+
+  async NotifyReceiverReady(nsString aSessionId);
+};
+
+} // namespace dom
+} // namespace mozilla

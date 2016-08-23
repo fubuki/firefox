@@ -10,7 +10,7 @@
 
 // Disable automatic network detection, so tests work correctly when
 // not connected to a network.
-let ios = Cc["@mozilla.org/network/io-service;1"]
+var ios = Cc["@mozilla.org/network/io-service;1"]
           .getService(Ci.nsIIOService2);
 ios.manageOfflineStatus = false;
 ios.offline = false;
@@ -44,19 +44,21 @@ function makeTagFunc(tagName)
   {
     var startChildren = 0;
     var response = "";
-    
+
     // write the start tag and attributes
     response += "<" + tagName;
     // if attr is an object, write attributes
     if (attrs && typeof attrs == 'object') {
       startChildren = 1;
-      for (var [key,value] in attrs) {
+
+      for (let key in attrs) {
+        const value = attrs[key];
         var val = "" + value;
         response += " " + key + '="' + val.replace('"','&quot;') + '"';
       }
     }
     response += ">";
-    
+
     // iterate through the rest of the args
     for (var i = startChildren; i < arguments.length; i++) {
       if (typeof arguments[i] == 'function') {
@@ -209,6 +211,7 @@ function createMochitestServer(serverBasePath)
   server.registerDirectory("/", serverBasePath);
   server.registerPathHandler("/server/shutdown", serverShutdown);
   server.registerPathHandler("/server/debug", serverDebug);
+  server.registerPathHandler("/nested_oop", nestedTest);
   server.registerContentType("sjs", "sjs"); // .sjs == CGI-like functionality
   server.registerContentType("jar", "application/x-jar");
   server.registerContentType("ogg", "application/ogg");
@@ -311,7 +314,6 @@ function processLocations(server)
   }
   while (more);
 }
-
 
 // PATH HANDLERS
 
@@ -462,7 +464,8 @@ function linksToListItems(links)
 {
   var response = "";
   var children = "";
-  for (var [link, value] in links) {
+  for (let link in links) {
+    const value = links[link];
     var classVal = (!isTest(link) && !(value instanceof Object))
       ? "non-test invisible"
       : "test";
@@ -495,7 +498,8 @@ function linksToListItems(links)
 function linksToTableRows(links, recursionLevel)
 {
   var response = "";
-  for (var [link, value] in links) {
+  for (let link in links) {
+    const value = links[link];
     var classVal = (!isTest(link) && ((value instanceof Object) && ('test' in value)))
       ? "non-test invisible"
       : "";
@@ -537,7 +541,8 @@ function linksToTableRows(links, recursionLevel)
 }
 
 function arrayOfTestFiles(linkArray, fileArray, testPattern) {
-  for (var [link, value] in Iterator(linkArray)) {
+  for (let link in linkArray) {
+    const value = linkArray[link];
     if ((value instanceof Object) && !('test' in value)) {
       arrayOfTestFiles(value, fileArray, testPattern);
     } else if (isTest(link, testPattern) && (value instanceof Object)) {
@@ -603,6 +608,31 @@ function convertManifestToTestLinks(root, manifest)
 }
 
 /**
+ * Produce a test harness page that has one remote iframe
+ */
+function nestedTest(metadata, response)
+{
+  response.setStatusLine("1.1", 200, "OK");
+  response.setHeader("Content-type", "text/html;charset=utf-8", false);
+  response.write(
+    HTML(
+      HEAD(
+        TITLE("Mochitest | ", metadata.path),
+        LINK({rel: "stylesheet",
+              type: "text/css", href: "/static/harness.css"}),
+        SCRIPT({type: "text/javascript",
+                src: "/nested_setup.js"}),
+        SCRIPT({type: "text/javascript"},
+               "window.onload = addPermissions; gTestURL = '/tests?" + metadata.queryString + "';")
+        ),
+      BODY(
+        DIV({class: "container"},
+          DIV({class: "frameholder", id: "holder-div"})
+        )
+        )));
+}
+
+/**
  * Produce a test harness page containing all the test cases
  * below it, recursively.
  */
@@ -638,6 +668,8 @@ function testListing(metadata, response)
         LINK({rel: "stylesheet",
               type: "text/css", href: "/static/harness.css"}
         ),
+        SCRIPT({type: "text/javascript",
+                 src: "/tests/SimpleTest/StructuredLog.jsm"}),
         SCRIPT({type: "text/javascript",
                  src: "/tests/SimpleTest/LogController.js"}),
         SCRIPT({type: "text/javascript",

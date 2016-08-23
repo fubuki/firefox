@@ -16,144 +16,132 @@
 #include "nsCOMPtr.h"
 #include "nsIThread.h"
 #include "nsThreadUtils.h"
-#include "nsITimer.h"
-#include "nsClassHashtable.h"
-#include "nsDataHashtable.h"
-#include "mozilla/Atomics.h"
+#include "nsPIDOMWindow.h"
+#include "nsIDocument.h"
+#include "nsIWeakReference.h"
+#include "mozilla/AbstractThread.h"
 
 template <class> struct already_AddRefed;
 
 namespace mozilla {
+
+extern LogModule* GetGMPLog();
+
 namespace gmp {
 
-class GMPParent;
+class GetGMPContentParentCallback;
 
 #define GMP_DEFAULT_ASYNC_SHUTDONW_TIMEOUT 3000
 
-class GeckoMediaPluginService MOZ_FINAL : public mozIGeckoMediaPluginService
-                                        , public nsIObserver
+class GeckoMediaPluginService : public mozIGeckoMediaPluginService
+                              , public nsIObserver
 {
 public:
   static already_AddRefed<GeckoMediaPluginService> GetGeckoMediaPluginService();
 
-  GeckoMediaPluginService();
-  nsresult Init();
+  virtual nsresult Init();
 
   NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_MOZIGECKOMEDIAPLUGINSERVICE
-  NS_DECL_NSIOBSERVER
 
-  void AsyncShutdownNeeded(GMPParent* aParent);
-  void AsyncShutdownComplete(GMPParent* aParent);
-  void AbortAsyncShutdown();
+  // mozIGeckoMediaPluginService
+  NS_IMETHOD GetThread(nsIThread** aThread) override;
+  NS_IMETHOD HasPluginForAPI(const nsACString& aAPI, nsTArray<nsCString>* aTags,
+                             bool *aRetVal) override;
+  NS_IMETHOD GetGMPVideoDecoder(nsTArray<nsCString>* aTags,
+                                const nsACString& aNodeId,
+                                UniquePtr<GetGMPVideoDecoderCallback>&& aCallback)
+    override;
+  NS_IMETHOD GetGMPVideoEncoder(nsTArray<nsCString>* aTags,
+                                const nsACString& aNodeId,
+                                UniquePtr<GetGMPVideoEncoderCallback>&& aCallback)
+    override;
+  NS_IMETHOD GetGMPAudioDecoder(nsTArray<nsCString>* aTags,
+                                const nsACString& aNodeId,
+                                UniquePtr<GetGMPAudioDecoderCallback>&& aCallback)
+    override;
+  NS_IMETHOD GetGMPDecryptor(nsTArray<nsCString>* aTags,
+                             const nsACString& aNodeId,
+                             UniquePtr<GetGMPDecryptorCallback>&& aCallback)
+    override;
 
   int32_t AsyncShutdownTimeoutMs();
 
-private:
-  ~GeckoMediaPluginService();
+  NS_IMETHOD RunPluginCrashCallbacks(uint32_t aPluginId,
+                                     const nsACString& aPluginName) override;
 
-  nsresult GMPDispatch(nsIRunnable* event, uint32_t flags = NS_DISPATCH_NORMAL);
+  // Sets the window to which 'PluginCrashed' chromeonly event is dispatched.
+  // Note: if the plugin has crashed before the target window has been set,
+  // the 'PluginCrashed' event is dispatched as soon as a target window is set.
+  void AddPluginCrashedEventTarget(const uint32_t aPluginId,
+                                   nsPIDOMWindowInner* aParentWindow);
 
-  void ClearStorage();
-
-  GMPParent* SelectPluginForAPI(const nsACString& aNodeId,
-                                const nsCString& aAPI,
-                                const nsTArray<nsCString>& aTags);
-  GMPParent* FindPluginForAPIFrom(size_t aSearchStartIndex,
-                                  const nsCString& aAPI,
-                                  const nsTArray<nsCString>& aTags,
-                                  size_t* aOutPluginIndex);
-
-  void UnloadPlugins();
-  void CrashPlugins();
-  void SetAsyncShutdownComplete();
-
-  void LoadFromEnvironment();
-  void ProcessPossiblePlugin(nsIFile* aDir);
-
-  void AddOnGMPThread(const nsAString& aSearchDir);
-  void RemoveOnGMPThread(const nsAString& aSearchDir);
-
-  nsresult SetAsyncShutdownTimeout();
-
-  struct DirectoryFilter {
-    virtual bool operator()(nsIFile* aPath) = 0;
-    ~DirectoryFilter() {}
-  };
-  void ClearNodeIdAndPlugin(DirectoryFilter& aFilter);
-
-  void ForgetThisSiteOnGMPThread(const nsACString& aOrigin);
-  void ClearRecentHistoryOnGMPThread(PRTime aSince);
+  RefPtr<AbstractThread> GetAbstractGMPThread();
 
 protected:
-  friend class GMPParent;
-  void ReAddOnGMPThread(nsRefPtr<GMPParent>& aOld);
-private:
-  GMPParent* ClonePlugin(const GMPParent* aOriginal);
-  nsresult EnsurePluginsOnDiskScanned();
+  GeckoMediaPluginService();
+  virtual ~GeckoMediaPluginService();
 
-  class PathRunnable : public nsRunnable
-  {
-  public:
-    PathRunnable(GeckoMediaPluginService* service, const nsAString& path,
-                 bool add)
-      : mService(service)
-      , mPath(path)
-      , mAdd(add)
-    { }
+  void RemoveObsoletePluginCrashCallbacks(); // Called from add/run.
 
-    NS_DECL_NSIRUNNABLE
+  virtual void InitializePlugins(AbstractThread* aAbstractGMPThread) = 0;
+  virtual bool GetContentParentFrom(const nsACString& aNodeId,
+                                    const nsCString& aAPI,
+                                    const nsTArray<nsCString>& aTags,
+                                    UniquePtr<GetGMPContentParentCallback>&& aCallback) = 0;
 
-  private:
-    nsRefPtr<GeckoMediaPluginService> mService;
-    nsString mPath;
-    bool mAdd;
-  };
+  nsresult GMPDispatch(nsIRunnable* event, uint32_t flags = NS_DISPATCH_NORMAL);
+  void ShutdownGMPThread();
 
-  Mutex mMutex; // Protects mGMPThread and mShuttingDown and mPlugins
-  nsTArray<nsRefPtr<GMPParent>> mPlugins;
+  Mutex mMutex; // Protects mGMPThread, mAbstractGMPThread and
+                // mGMPThreadShutdown and some members in derived classes.
   nsCOMPtr<nsIThread> mGMPThread;
-  bool mShuttingDown;
+  RefPtr<AbstractThread> mAbstractGMPThread;
+  bool mGMPThreadShutdown;
   bool mShuttingDownOnGMPThread;
 
-  // True if we've inspected MOZ_GMP_PATH on the GMP thread and loaded any
-  // plugins found there into mPlugins.
-  Atomic<bool> mScannedPluginOnDisk;
-
-  template<typename T>
-  class MainThreadOnly {
+  class GMPCrashCallback
+  {
   public:
-    MOZ_IMPLICIT MainThreadOnly(T aValue)
-      : mValue(aValue)
-    {}
-    operator T&() {
-      MOZ_ASSERT(NS_IsMainThread());
-      return mValue;
-    }
+    NS_INLINE_DECL_REFCOUNTING(GMPCrashCallback)
 
+    GMPCrashCallback(const uint32_t aPluginId,
+                     nsPIDOMWindowInner* aParentWindow,
+                     nsIDocument* aDocument);
+    void Run(const nsACString& aPluginName);
+    bool IsStillValid();
+    uint32_t GetPluginId() const { return mPluginId; }
   private:
-    T mValue;
+    virtual ~GMPCrashCallback() { MOZ_ASSERT(NS_IsMainThread()); }
+
+    bool GetParentWindowAndDocumentIfValid(nsCOMPtr<nsPIDOMWindowInner>& parentWindow,
+                                           nsCOMPtr<nsIDocument>& document);
+    const uint32_t mPluginId;
+    nsWeakPtr mParentWindowWeakPtr;
+    nsWeakPtr mDocumentWeakPtr;
   };
 
-  MainThreadOnly<bool> mWaitingForPluginsAsyncShutdown;
+  struct PluginCrash
+  {
+    PluginCrash(uint32_t aPluginId,
+                const nsACString& aPluginName)
+      : mPluginId(aPluginId)
+      , mPluginName(aPluginName)
+    {
+    }
+    uint32_t mPluginId;
+    nsCString mPluginName;
 
-  nsTArray<nsRefPtr<GMPParent>> mAsyncShutdownPlugins; // GMP Thread only.
+    bool operator==(const PluginCrash& aOther) const {
+      return mPluginId == aOther.mPluginId &&
+             mPluginName == aOther.mPluginName;
+    }
+  };
 
-#ifndef MOZ_WIDGET_GONK
-  nsCOMPtr<nsIFile> mStorageBaseDir;
-#endif
+  static const size_t MAX_PLUGIN_CRASHES = 100;
+  nsTArray<PluginCrash> mPluginCrashes;
 
-  // Hashes of (origin,topLevelOrigin) to the node id for
-  // non-persistent sessions.
-  nsClassHashtable<nsUint32HashKey, nsCString> mTempNodeIds;
-
-  // Hashes node id to whether that node id is allowed to store data
-  // persistently on disk.
-  nsDataHashtable<nsCStringHashKey, bool> mPersistentStorageAllowed;
+  nsTArray<RefPtr<GMPCrashCallback>> mPluginCrashCallbacks;
 };
-
-nsresult ReadSalt(nsIFile* aPath, nsACString& aOutData);
-bool MatchOrigin(nsIFile* aPath, const nsACString& aOrigin);
 
 } // namespace gmp
 } // namespace mozilla

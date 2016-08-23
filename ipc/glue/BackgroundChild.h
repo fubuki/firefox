@@ -15,6 +15,7 @@ class nsIIPCBackgroundChildCreateCallback;
 namespace mozilla {
 namespace dom {
 
+class BlobImpl;
 class ContentChild;
 class ContentParent;
 class PBlobChild;
@@ -46,7 +47,7 @@ class PBackgroundChild;
 //
 // The PBackgroundChild actor and all its sub-protocol actors will be
 // automatically destroyed when its designated thread completes.
-class BackgroundChild MOZ_FINAL
+class BackgroundChild final
 {
   friend class mozilla::dom::ContentChild;
   friend class mozilla::dom::ContentParent;
@@ -66,6 +67,10 @@ public:
   static mozilla::dom::PBlobChild*
   GetOrCreateActorForBlob(PBackgroundChild* aBackgroundActor,
                           nsIDOMBlob* aBlob);
+
+  static mozilla::dom::PBlobChild*
+  GetOrCreateActorForBlobImpl(PBackgroundChild* aBackgroundActor,
+                              mozilla::dom::BlobImpl* aBlobImpl);
 
   // See above.
   static void

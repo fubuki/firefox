@@ -24,7 +24,7 @@ class HyperTextAccessible;
 /**
  * A text point (hyper text + offset), represents a boundary of text range.
  */
-struct TextPoint MOZ_FINAL
+struct TextPoint final
 {
   TextPoint(HyperTextAccessible* aContainer, int32_t aOffset) :
     mContainer(aContainer), mOffset(aOffset) { }
@@ -42,7 +42,7 @@ struct TextPoint MOZ_FINAL
 /**
  * Represents a text range within the text control or document.
  */
-class TextRange MOZ_FINAL
+class TextRange final
 {
 public:
   TextRange(HyperTextAccessible* aRoot,
@@ -130,6 +130,12 @@ public:
    * Move the range points to the closest unit boundaries.
    */
   void Normalize(ETextUnit aUnit);
+
+  /**
+   * Crops the range if it overlaps the given accessible element boundaries,
+   * returns true if the range was cropped successfully.
+   */
+  bool Crop(Accessible* aContainer);
 
   enum EDirection {
     eBackward,
@@ -243,9 +249,17 @@ private:
                     HyperTextAccessible* aStopContainer = nullptr,
                     int32_t aStopOffset = 0);
 
-  nsRefPtr<HyperTextAccessible> mRoot;
-  nsRefPtr<HyperTextAccessible> mStartContainer;
-  nsRefPtr<HyperTextAccessible> mEndContainer;
+  /**
+   * A helper method returning a common parent for two given accessible
+   * elements.
+   */
+  Accessible* CommonParent(Accessible* aAcc1, Accessible* aAcc2,
+                           nsTArray<Accessible*>* aParents1, uint32_t* aPos1,
+                           nsTArray<Accessible*>* aParents2, uint32_t* aPos2) const;
+
+  RefPtr<HyperTextAccessible> mRoot;
+  RefPtr<HyperTextAccessible> mStartContainer;
+  RefPtr<HyperTextAccessible> mEndContainer;
   int32_t mStartOffset;
   int32_t mEndOffset;
 };

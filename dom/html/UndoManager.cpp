@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -56,7 +57,6 @@ protected:
   virtual ~UndoTxn() {}
 };
 
-/* void doTransaction (); */
 NS_IMETHODIMP
 UndoTxn::DoTransaction()
 {
@@ -65,21 +65,18 @@ UndoTxn::DoTransaction()
   return NS_OK;
 }
 
-/* void doTransaction (); */
 NS_IMETHODIMP
 UndoTxn::RedoTransaction()
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-/* void doTransaction (); */
 NS_IMETHODIMP
 UndoTxn::UndoTransaction()
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-/* readonly attribute boolean isTransient; */
 NS_IMETHODIMP
 UndoTxn::GetIsTransient(bool* aIsTransient)
 {
@@ -87,7 +84,6 @@ UndoTxn::GetIsTransient(bool* aIsTransient)
   return NS_OK;
 }
 
-/* boolean merge (in nsITransaction aTransaction); */
 NS_IMETHODIMP
 UndoTxn::Merge(nsITransaction* aTransaction, bool* aResult)
 {
@@ -105,8 +101,8 @@ UndoTxn::Merge(nsITransaction* aTransaction, bool* aResult)
 class UndoAttrChanged : public UndoTxn {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(UndoAttrChanged)
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD UndoTransaction() MOZ_OVERRIDE;
+  NS_IMETHOD RedoTransaction() override;
+  NS_IMETHOD UndoTransaction() override;
   nsresult Init();
   UndoAttrChanged(mozilla::dom::Element* aElement, int32_t aNameSpaceID,
                   nsIAtom* aAttribute, int32_t aModType);
@@ -216,8 +212,8 @@ struct UndoCharacterChangedData {
 class UndoTextChanged : public UndoTxn {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(UndoTextChanged)
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD UndoTransaction() MOZ_OVERRIDE;
+  NS_IMETHOD RedoTransaction() override;
+  NS_IMETHOD UndoTransaction() override;
   UndoTextChanged(nsIContent* aContent,
                   CharacterDataChangeInfo* aChange);
 protected:
@@ -331,8 +327,8 @@ class UndoContentAppend : public UndoTxn {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(UndoContentAppend)
   nsresult Init(int32_t aFirstIndex);
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD UndoTransaction() MOZ_OVERRIDE;
+  NS_IMETHOD RedoTransaction() override;
+  NS_IMETHOD UndoTransaction() override;
   explicit UndoContentAppend(nsIContent* aContent);
 protected:
   ~UndoContentAppend() {}
@@ -383,7 +379,7 @@ UndoContentAppend::UndoTransaction()
 {
   for (int32_t i = mChildren.Count() - 1; i >= 0; i--) {
     if (mChildren[i]->GetParentNode() == mContent) {
-      ErrorResult error;
+      IgnoredErrorResult error;
       mContent->RemoveChild(*mChildren[i], error);
     }
   }
@@ -401,8 +397,8 @@ UndoContentAppend::UndoTransaction()
 class UndoContentInsert : public UndoTxn {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(UndoContentInsert)
-  NS_IMETHOD UndoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
+  NS_IMETHOD UndoTransaction() override;
+  NS_IMETHOD RedoTransaction() override;
   UndoContentInsert(nsIContent* aContent, nsIContent* aChild,
                     int32_t aInsertIndex);
 protected:
@@ -447,7 +443,7 @@ UndoContentInsert::RedoTransaction()
     return NS_OK;
   }
 
-  ErrorResult error;
+  IgnoredErrorResult error;
   mContent->InsertBefore(*mChild, mNextNode, error);
   return NS_OK;
 }
@@ -474,7 +470,7 @@ UndoContentInsert::UndoTransaction()
     return NS_OK;
   }
 
-  ErrorResult error;
+  IgnoredErrorResult error;
   mContent->RemoveChild(*mChild, error);
   return NS_OK;
 }
@@ -489,8 +485,8 @@ UndoContentInsert::UndoTransaction()
 class UndoContentRemove : public UndoTxn {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(UndoContentRemove)
-  NS_IMETHOD UndoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
+  NS_IMETHOD UndoTransaction() override;
+  NS_IMETHOD RedoTransaction() override;
   nsresult Init(int32_t aInsertIndex);
   UndoContentRemove(nsIContent* aContent, nsIContent* aChild,
                     int32_t aInsertIndex);
@@ -541,7 +537,7 @@ UndoContentRemove::UndoTransaction()
     return NS_OK;
   }
 
-  ErrorResult error;
+  IgnoredErrorResult error;
   mContent->InsertBefore(*mChild, mNextNode, error);
   return NS_OK;
 }
@@ -568,7 +564,7 @@ UndoContentRemove::RedoTransaction()
     return NS_OK;
   }
 
-  ErrorResult error;
+  IgnoredErrorResult error;
   mContent->RemoveChild(*mChild, error);
   return NS_OK;
 }
@@ -610,7 +606,7 @@ bool
 UndoMutationObserver::IsManagerForMutation(nsIContent* aContent)
 {
   nsCOMPtr<nsINode> currentNode = aContent;
-  nsRefPtr<UndoManager> undoManager;
+  RefPtr<UndoManager> undoManager;
 
   // Get the UndoManager of nearest ancestor with an UndoManager.
   while (currentNode && !undoManager) {
@@ -646,13 +642,14 @@ UndoMutationObserver::AttributeWillChange(nsIDocument* aDocument,
                                           mozilla::dom::Element* aElement,
                                           int32_t aNameSpaceID,
                                           nsIAtom* aAttribute,
-                                          int32_t aModType)
+                                          int32_t aModType,
+                                          const nsAttrValue* aNewValue)
 {
   if (!IsManagerForMutation(aElement)) {
     return;
   }
 
-  nsRefPtr<UndoAttrChanged> undoTxn = new UndoAttrChanged(aElement,
+  RefPtr<UndoAttrChanged> undoTxn = new UndoAttrChanged(aElement,
                                                           aNameSpaceID,
                                                           aAttribute,
                                                           aModType);
@@ -670,7 +667,7 @@ UndoMutationObserver::CharacterDataWillChange(nsIDocument* aDocument,
     return;
   }
 
-  nsRefPtr<UndoTextChanged> undoTxn = new UndoTextChanged(aContent, aInfo);
+  RefPtr<UndoTextChanged> undoTxn = new UndoTextChanged(aContent, aInfo);
   mTxnManager->DoTransaction(undoTxn);
 }
 
@@ -684,7 +681,7 @@ UndoMutationObserver::ContentAppended(nsIDocument* aDocument,
     return;
   }
 
-  nsRefPtr<UndoContentAppend> txn = new UndoContentAppend(aContainer);
+  RefPtr<UndoContentAppend> txn = new UndoContentAppend(aContainer);
   if (NS_SUCCEEDED(txn->Init(aNewIndexInContainer))) {
     mTxnManager->DoTransaction(txn);
   }
@@ -700,7 +697,7 @@ UndoMutationObserver::ContentInserted(nsIDocument* aDocument,
     return;
   }
 
-  nsRefPtr<UndoContentInsert> txn = new UndoContentInsert(aContainer, aChild,
+  RefPtr<UndoContentInsert> txn = new UndoContentInsert(aContainer, aChild,
                                                           aIndexInContainer);
   mTxnManager->DoTransaction(txn);
 }
@@ -716,7 +713,7 @@ UndoMutationObserver::ContentRemoved(nsIDocument *aDocument,
     return;
   }
 
-  nsRefPtr<UndoContentRemove> txn = new UndoContentRemove(aContainer, aChild,
+  RefPtr<UndoContentRemove> txn = new UndoContentRemove(aContainer, aChild,
                                                           aIndexInContainer);
   mTxnManager->DoTransaction(txn);
 }
@@ -737,8 +734,8 @@ class FunctionCallTxn : public UndoTxn {
   static const uint32_t CALL_ON_REDO = 1;
   static const uint32_t CALL_ON_UNDO = 2;
 
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD UndoTransaction() MOZ_OVERRIDE;
+  NS_IMETHOD RedoTransaction() override;
+  NS_IMETHOD UndoTransaction() override;
   FunctionCallTxn(DOMTransaction* aTransaction, uint32_t aFlags);
 protected:
   ~FunctionCallTxn() {}
@@ -746,7 +743,7 @@ protected:
    * Call a function member on the transaction object with the
    * specified function name.
    */
-  nsRefPtr<DOMTransaction> mTransaction;
+  RefPtr<DOMTransaction> mTransaction;
   uint32_t mFlags;
 };
 
@@ -771,13 +768,13 @@ FunctionCallTxn::RedoTransaction()
     return NS_OK;
   }
 
-  ErrorResult rv;
-  nsRefPtr<DOMTransactionCallback> redo = mTransaction->GetRedo(rv);
+  // We ignore rv because we want to avoid the rollback behavior of the
+  // nsITransactionManager.
+  IgnoredErrorResult rv;
+  RefPtr<DOMTransactionCallback> redo = mTransaction->GetRedo(rv);
   if (!rv.Failed() && redo) {
     redo->Call(mTransaction.get(), rv);
   }
-  // We ignore rv because we want to avoid the rollback behavior of the
-  // nsITransactionManager.
 
   return NS_OK;
 }
@@ -789,13 +786,13 @@ FunctionCallTxn::UndoTransaction()
     return NS_OK;
   }
 
-  ErrorResult rv;
-  nsRefPtr<DOMTransactionCallback> undo = mTransaction->GetUndo(rv);
+  // We ignore rv because we want to avoid the rollback behavior of the
+  // nsITransactionManager.
+  IgnoredErrorResult rv;
+  RefPtr<DOMTransactionCallback> undo = mTransaction->GetUndo(rv);
   if (!rv.Failed() && undo) {
     undo->Call(mTransaction.get(), rv);
   }
-  // We ignore rv because we want to avoid the rollback behavior of the
-  // nsITransactionManager.
 
   return NS_OK;
 }
@@ -859,7 +856,7 @@ UndoManager::Transact(JSContext* aCx, DOMTransaction& aTransaction,
 
   // First try executing an automatic transaction.
 
-  nsRefPtr<DOMTransactionCallback> executeAutomatic =
+  RefPtr<DOMTransactionCallback> executeAutomatic =
     aTransaction.GetExecuteAutomatic(aRv);
   if (aRv.Failed()) {
     return;
@@ -900,12 +897,12 @@ UndoManager::AutomaticTransact(DOMTransaction* aTransaction,
 
   // Transaction to call the "undo" method after the automatic transaction
   // has been undone.
-  nsRefPtr<FunctionCallTxn> undoTxn = new FunctionCallTxn(aTransaction,
+  RefPtr<FunctionCallTxn> undoTxn = new FunctionCallTxn(aTransaction,
       FunctionCallTxn::CALL_ON_UNDO);
 
   // Transaction to call the "redo" method after the automatic transaction
   // has been redone.
-  nsRefPtr<FunctionCallTxn> redoTxn = new FunctionCallTxn(aTransaction,
+  RefPtr<FunctionCallTxn> redoTxn = new FunctionCallTxn(aTransaction,
       FunctionCallTxn::CALL_ON_REDO);
 
   mTxnManager->BeginBatch(aTransaction);
@@ -927,10 +924,10 @@ void
 UndoManager::ManualTransact(DOMTransaction* aTransaction,
                             ErrorResult& aRv)
 {
-  nsRefPtr<FunctionCallTxn> txn = new FunctionCallTxn(aTransaction,
+  RefPtr<FunctionCallTxn> txn = new FunctionCallTxn(aTransaction,
       FunctionCallTxn::CALL_ON_REDO | FunctionCallTxn::CALL_ON_UNDO);
 
-  nsRefPtr<DOMTransactionCallback> execute = aTransaction->GetExecute(aRv);
+  RefPtr<DOMTransactionCallback> execute = aTransaction->GetExecute(aRv);
   if (!aRv.Failed() && execute) {
     execute->Call(aTransaction, aRv);
   }
@@ -1028,12 +1025,12 @@ UndoManager::ItemInternal(uint32_t aIndex,
     aItems.AppendElement(static_cast<DOMTransaction*>(listData[i]));
     NS_RELEASE(listData[i]);
   }
-  NS_Free(listData);
+  free(listData);
 }
 
 void
 UndoManager::Item(uint32_t aIndex,
-                  Nullable<nsTArray<nsRefPtr<DOMTransaction> > >& aItems,
+                  Nullable<nsTArray<RefPtr<DOMTransaction> > >& aItems,
                   ErrorResult& aRv)
 {
   int32_t numRedo;
@@ -1064,7 +1061,7 @@ UndoManager::Item(uint32_t aIndex,
     return;
   }
 
-  nsTArray<nsRefPtr<DOMTransaction> >& items = aItems.SetValue();
+  nsTArray<RefPtr<DOMTransaction> >& items = aItems.SetValue();
   for (uint32_t i = 0; i < transactions.Length(); i++) {
     items.AppendElement(transactions[i]);
   }
@@ -1160,7 +1157,7 @@ UndoManager::DispatchTransactionEvent(JSContext* aCx, const nsAString& aType,
   init.mCancelable = false;
   init.mTransactions = array;
 
-  nsRefPtr<DOMTransactionEvent> event =
+  RefPtr<DOMTransactionEvent> event =
     DOMTransactionEvent::Constructor(mHostNode, aType, init);
 
   event->SetTrusted(true);

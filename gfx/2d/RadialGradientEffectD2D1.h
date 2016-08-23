@@ -38,8 +38,8 @@ enum {
   RADIAL_PROP_TRANSFORM
 };
 
-class RadialGradientEffectD2D1 MOZ_FINAL : public ID2D1EffectImpl
-                                         , public ID2D1DrawTransform
+class RadialGradientEffectD2D1 final : public ID2D1EffectImpl
+                                     , public ID2D1DrawTransform
 {
 public:
   // ID2D1EffectImpl
@@ -79,7 +79,7 @@ public:
   IUnknown *GetStopCollection() const { return mStopCollection; }
 
 private:
-  TemporaryRef<ID2D1ResourceTexture> CreateGradientTexture();
+  already_AddRefed<ID2D1ResourceTexture> CreateGradientTexture();
 
   RadialGradientEffectD2D1();
 

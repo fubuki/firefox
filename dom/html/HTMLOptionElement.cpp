@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -144,8 +144,7 @@ HTMLOptionElement::Index()
   }
 
   int32_t index = defaultIndex;
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-    options->GetOptionIndex(this, 0, true, &index)));
+  MOZ_ALWAYS_SUCCEEDS(options->GetOptionIndex(this, 0, true, &index));
   return index;
 }
 
@@ -182,7 +181,7 @@ HTMLOptionElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
 
 nsresult
 HTMLOptionElement::BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
+                                 nsAttrValueOrString* aValue,
                                  bool aNotify)
 {
   nsresult rv = nsGenericHTMLElement::BeforeSetAttr(aNamespaceID, aName,
@@ -273,7 +272,8 @@ HTMLOptionElement::GetText(nsAString& aText)
         child->NodeType() == nsIDOMNode::CDATA_SECTION_NODE) {
       child->AppendTextTo(text);
     }
-    if (child->IsHTML(nsGkAtoms::script) || child->IsSVG(nsGkAtoms::script)) {
+    if (child->IsHTMLElement(nsGkAtoms::script) ||
+        child->IsSVGElement(nsGkAtoms::script)) {
       child = child->GetNextNonChildNode(this);
     } else {
       child = child->GetNextNode(this);
@@ -336,7 +336,7 @@ HTMLOptionElement::IntrinsicState() const
     state &= ~NS_EVENT_STATE_ENABLED;
   } else {
     nsIContent* parent = GetParent();
-    if (parent && parent->IsHTML(nsGkAtoms::optgroup) &&
+    if (parent && parent->IsHTMLElement(nsGkAtoms::optgroup) &&
         parent->HasAttr(kNameSpaceID_None, nsGkAtoms::disabled)) {
       state |= NS_EVENT_STATE_DISABLED;
       state &= ~NS_EVENT_STATE_ENABLED;
@@ -353,19 +353,21 @@ HTMLOptionElement::IntrinsicState() const
 HTMLSelectElement*
 HTMLOptionElement::GetSelect()
 {
-  nsIContent* parent = this;
-  while ((parent = parent->GetParent()) &&
-         parent->IsHTML()) {
-    HTMLSelectElement* select = HTMLSelectElement::FromContent(parent);
-    if (select) {
-      return select;
-    }
-    if (parent->Tag() != nsGkAtoms::optgroup) {
-      break;
-    }
+  nsIContent* parent = GetParent();
+  if (!parent) {
+    return nullptr;
   }
 
-  return nullptr;
+  HTMLSelectElement* select = HTMLSelectElement::FromContent(parent);
+  if (select) {
+    return select;
+  }
+
+  if (!parent->IsHTMLElement(nsGkAtoms::optgroup)) {
+    return nullptr;
+  }
+
+  return HTMLSelectElement::FromContentOrNull(parent->GetParent());
 }
 
 already_AddRefed<HTMLOptionElement>
@@ -375,7 +377,7 @@ HTMLOptionElement::Option(const GlobalObject& aGlobal,
                           const Optional<bool>& aDefaultSelected,
                           const Optional<bool>& aSelected, ErrorResult& aError)
 {
-  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aGlobal.GetAsSupports());
   nsIDocument* doc;
   if (!win || !(doc = win->GetExtantDoc())) {
     aError.Throw(NS_ERROR_FAILURE);
@@ -387,11 +389,11 @@ HTMLOptionElement::Option(const GlobalObject& aGlobal,
                                         kNameSpaceID_XHTML,
                                         nsIDOMNode::ELEMENT_NODE);
 
-  nsRefPtr<HTMLOptionElement> option = new HTMLOptionElement(nodeInfo);
+  RefPtr<HTMLOptionElement> option = new HTMLOptionElement(nodeInfo);
 
   if (aText.WasPassed()) {
     // Create a new text node and append it to the option
-    nsRefPtr<nsTextNode> textContent =
+    RefPtr<nsTextNode> textContent =
       new nsTextNode(option->NodeInfo()->NodeInfoManager());
 
     textContent->SetText(aText.Value(), false);
@@ -447,9 +449,9 @@ HTMLOptionElement::CopyInnerTo(Element* aDest)
 }
 
 JSObject*
-HTMLOptionElement::WrapNode(JSContext* aCx)
+HTMLOptionElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLOptionElementBinding::Wrap(aCx, this);
+  return HTMLOptionElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

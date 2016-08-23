@@ -3,7 +3,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-const { 'classes': Cc, 'interfaces': Ci, 'utils': Cu } = Components;
+var { 'classes': Cc, 'interfaces': Ci, 'utils': Cu } = Components;
 
 if (!("self" in this)) {
   this.self = this;
@@ -11,16 +11,18 @@ if (!("self" in this)) {
 
 const DOMException = Ci.nsIDOMDOMException;
 
+var bufferCache = [];
+
 function is(a, b, msg) {
   do_check_eq(a, b, Components.stack.caller);
 }
 
 function ok(cond, msg) {
-  do_check_true(!!cond, Components.stack.caller); 
+  do_check_true(!!cond, Components.stack.caller);
 }
 
 function isnot(a, b, msg) {
-  do_check_neq(a, b, Components.stack.caller); 
+  do_check_neq(a, b, Components.stack.caller);
 }
 
 function executeSoon(fun) {
@@ -50,7 +52,7 @@ if (!this.runTest) {
       enableExperimental();
     }
 
-    Cu.importGlobalProperties(["indexedDB", "Blob", "File"]);
+    Cu.importGlobalProperties(["indexedDB", "Blob", "File", "FileReader"]);
 
     do_test_pending();
     testGenerator.next();
@@ -66,6 +68,8 @@ function finishTest()
     SpecialPowers.notifyObserversInParentProcess(null, "disk-space-watcher",
                                                  "free");
   }
+
+  SpecialPowers.removeFiles();
 
   do_execute_soon(function(){
     testGenerator.close();
@@ -148,12 +152,12 @@ function compareKeys(k1, k2) {
     if (!(k2 instanceof Array) ||
         k1.length != k2.length)
       return false;
-    
+
     for (let i = 0; i < k1.length; ++i) {
       if (!compareKeys(k1[i], k2[i]))
         return false;
     }
-    
+
     return true;
   }
 
@@ -229,8 +233,8 @@ function resetOrClearAllDatabases(callback, clear) {
     throw new Error("clearAllDatabases not implemented for child processes!");
   }
 
-  let quotaManager = Cc["@mozilla.org/dom/quota/manager;1"]
-                       .getService(Ci.nsIQuotaManager);
+  let quotaManagerService = Cc["@mozilla.org/dom/quota-manager-service;1"]
+                              .getService(Ci.nsIQuotaManagerService);
 
   const quotaPref = "dom.quotaManager.testing";
 
@@ -241,11 +245,13 @@ function resetOrClearAllDatabases(callback, clear) {
 
   SpecialPowers.setBoolPref(quotaPref, true);
 
+  let request;
+
   try {
     if (clear) {
-      quotaManager.clear();
+      request = quotaManagerService.clear();
     } else {
-      quotaManager.reset();
+      request = quotaManagerService.reset();
     }
   } catch(e) {
     if (oldPrefValue !== undefined) {
@@ -256,12 +262,7 @@ function resetOrClearAllDatabases(callback, clear) {
     throw e;
   }
 
-  let uri = Cc["@mozilla.org/network/io-service;1"]
-              .getService(Ci.nsIIOService)
-              .newURI("http://foo.com", null, null);
-  quotaManager.getUsageForURI(uri, function(usage, fileUsage) {
-    callback();
-  });
+  request.callback = callback;
 }
 
 function resetAllDatabases(callback) {
@@ -328,6 +329,132 @@ function installPackagedProfile(packageName)
   }
 
   zipReader.close();
+}
+
+function getView(size)
+{
+  let buffer = new ArrayBuffer(size);
+  let view = new Uint8Array(buffer);
+  is(buffer.byteLength, size, "Correct byte length");
+  return view;
+}
+
+function getRandomView(size)
+{
+  let view = getView(size);
+  for (let i = 0; i < size; i++) {
+    view[i] = parseInt(Math.random() * 255)
+  }
+  return view;
+}
+
+function getBlob(str)
+{
+  return new Blob([str], {type: "type/text"});
+}
+
+function getFile(name, type, str)
+{
+  return new File([str], name, {type: type});
+}
+
+function compareBuffers(buffer1, buffer2)
+{
+  if (buffer1.byteLength != buffer2.byteLength) {
+    return false;
+  }
+  let view1 = new Uint8Array(buffer1);
+  let view2 = new Uint8Array(buffer2);
+  for (let i = 0; i < buffer1.byteLength; i++) {
+    if (view1[i] != view2[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function verifyBuffers(buffer1, buffer2)
+{
+  ok(compareBuffers(buffer1, buffer2), "Correct blob data");
+}
+
+function verifyBlob(blob1, blob2)
+{
+  is(blob1 instanceof Components.interfaces.nsIDOMBlob, true,
+     "Instance of nsIDOMBlob");
+  is(blob1 instanceof File, blob2 instanceof File,
+     "Instance of DOM File");
+  is(blob1.size, blob2.size, "Correct size");
+  is(blob1.type, blob2.type, "Correct type");
+  if (blob2 instanceof File) {
+    is(blob1.name, blob2.name, "Correct name");
+  }
+
+  let buffer1;
+  let buffer2;
+
+  for (let i = 0; i < bufferCache.length; i++) {
+    if (bufferCache[i].blob == blob2) {
+      buffer2 = bufferCache[i].buffer;
+      break;
+    }
+  }
+
+  if (!buffer2) {
+    let reader = new FileReader();
+    reader.readAsArrayBuffer(blob2);
+    reader.onload = function(event) {
+      buffer2 = event.target.result;
+      bufferCache.push({ blob: blob2, buffer: buffer2 });
+      if (buffer1) {
+        verifyBuffers(buffer1, buffer2);
+        testGenerator.next();
+      }
+    }
+  }
+
+  let reader = new FileReader();
+  reader.readAsArrayBuffer(blob1);
+  reader.onload = function(event) {
+    buffer1 = event.target.result;
+    if (buffer2) {
+      verifyBuffers(buffer1, buffer2);
+      testGenerator.next();
+    }
+  }
+}
+
+function verifyMutableFile(mutableFile1, file2)
+{
+  is(mutableFile1 instanceof IDBMutableFile, true,
+     "Instance of IDBMutableFile");
+  is(mutableFile1.name, file2.name, "Correct name");
+  is(mutableFile1.type, file2.type, "Correct type");
+  executeSoon(function() {
+    testGenerator.next();
+  });
+}
+
+function setTemporaryStorageLimit(limit)
+{
+  const pref = "dom.quotaManager.temporaryStorage.fixedLimit";
+  if (limit) {
+    info("Setting temporary storage limit to " + limit);
+    SpecialPowers.setIntPref(pref, limit);
+  } else {
+    info("Removing temporary storage limit");
+    SpecialPowers.clearUserPref(pref);
+  }
+}
+
+function getPrincipal(url)
+{
+  let uri = Cc["@mozilla.org/network/io-service;1"]
+              .getService(Ci.nsIIOService)
+              .newURI(url, null, null);
+  let ssm = Cc["@mozilla.org/scriptsecuritymanager;1"]
+              .getService(Ci.nsIScriptSecurityManager);
+  return ssm.createCodebasePrincipal(uri, {});
 }
 
 var SpecialPowers = {
@@ -398,7 +525,46 @@ var SpecialPowers = {
     return Cu;
   },
 
-  createDOMFile: function(file, options) {
-    return new File(file, options);
+  // Based on SpecialPowersObserver.prototype.receiveMessage
+  createFiles: function(requests, callback) {
+    let dirSvc = Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
+    let filePaths = new Array;
+    if (!this._createdFiles) {
+      this._createdFiles = new Array;
+    }
+    let createdFiles = this._createdFiles;
+    requests.forEach(function(request) {
+      const filePerms = 0o666;
+      let testFile = dirSvc.get("ProfD", Ci.nsIFile);
+      if (request.name) {
+        testFile.append(request.name);
+      } else {
+        testFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, filePerms);
+      }
+        let outStream = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(Ci.nsIFileOutputStream);
+        outStream.init(testFile, 0x02 | 0x08 | 0x20, // PR_WRONLY | PR_CREATE_FILE | PR_TRUNCATE
+                       filePerms, 0);
+        if (request.data) {
+          outStream.write(request.data, request.data.length);
+          outStream.close();
+        }
+        filePaths.push(new File(testFile.path, request.options));
+        createdFiles.push(testFile);
+    });
+
+    setTimeout(function () {
+      callback(filePaths);
+    }, 0);
+  },
+
+  removeFiles: function() {
+    if (this._createdFiles) {
+      this._createdFiles.forEach(function (testFile) {
+        try {
+          testFile.remove(false);
+        } catch (e) {}
+      });
+      this._createdFiles = null;
+    }
   },
 };

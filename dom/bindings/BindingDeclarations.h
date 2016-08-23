@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-*/
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,15 +13,18 @@
 #ifndef mozilla_dom_BindingDeclarations_h__
 #define mozilla_dom_BindingDeclarations_h__
 
-#include "nsStringGlue.h"
-#include "js/Value.h"
 #include "js/RootingAPI.h"
+#include "js/Value.h"
+
 #include "mozilla/Maybe.h"
-#include "nsCOMPtr.h"
-#include "nsTArray.h"
-#include "nsAutoPtr.h" // for nsRefPtr member variables
+#include "mozilla/OwningNonNull.h"
+
 #include "mozilla/dom/DOMString.h"
-#include "mozilla/dom/OwningNonNull.h"
+
+#include "nsAutoPtr.h" // for nsRefPtr member variables
+#include "nsCOMPtr.h"
+#include "nsStringGlue.h"
+#include "nsTArray.h"
 
 class nsWrapperCache;
 
@@ -37,13 +40,29 @@ protected:
                  JS::MutableHandle<JS::Value> aVal);
 
   bool StringifyToJSON(JSContext* aCx,
-                       JS::MutableHandle<JS::Value> aValue,
+                       JS::Handle<JSObject*> aObj,
                        nsAString& aJSON) const;
+
+  // Struct used as a way to force a dictionary constructor to not init the
+  // dictionary (via constructing from a pointer to this class).  We're putting
+  // it here so that all the dictionaries will have access to it, but outside
+  // code will not.
+  struct FastDictionaryInitializer {
+  };
+
+  bool mIsAnyMemberPresent = false;
+
 private:
   // aString is expected to actually be an nsAString*.  Should only be
   // called from StringifyToJSON.
   static bool AppendJSONToString(const char16_t* aJSONData,
                                  uint32_t aDataLength, void* aString);
+
+public:
+  bool IsAnyMemberPresent() const
+  {
+    return mIsAnyMemberPresent;
+  }
 };
 
 // Struct that serves as a base class for all typed arrays and array buffers and
@@ -111,6 +130,11 @@ public:
     mImpl.emplace(aValue);
   }
 
+  bool operator==(const Optional_base<T, InternalType>& aOther) const
+  {
+    return mImpl == aOther.mImpl;
+  }
+
   template<typename T1, typename T2>
   explicit Optional_base(const T1& aValue1, const T2& aValue2)
   {
@@ -123,23 +147,10 @@ public:
   }
 
   // Return InternalType here so we can work with it usefully.
-  InternalType& Construct()
+  template<typename... Args>
+  InternalType& Construct(Args&&... aArgs)
   {
-    mImpl.emplace();
-    return *mImpl;
-  }
-
-  template <class T1>
-  InternalType& Construct(const T1 &t1)
-  {
-    mImpl.emplace(t1);
-    return *mImpl;
-  }
-
-  template <class T1, class T2>
-  InternalType& Construct(const T1 &t1, const T2 &t2)
-  {
-    mImpl.emplace(t1, t2);
+    mImpl.emplace(Forward<Args>(aArgs)...);
     return *mImpl;
   }
 
@@ -461,16 +472,16 @@ GetWrapperCache(const SmartPtr<T>& aObject)
   return GetWrapperCache(aObject.get());
 }
 
-struct ParentObject {
+struct MOZ_STACK_CLASS ParentObject {
   template<class T>
-  ParentObject(T* aObject) :
+  MOZ_IMPLICIT ParentObject(T* aObject) :
     mObject(aObject),
     mWrapperCache(GetWrapperCache(aObject)),
     mUseXBLScope(false)
   {}
 
   template<class T, template<typename> class SmartPtr>
-  ParentObject(const SmartPtr<T>& aObject) :
+  MOZ_IMPLICIT ParentObject(const SmartPtr<T>& aObject) :
     mObject(aObject.get()),
     mWrapperCache(GetWrapperCache(aObject.get())),
     mUseXBLScope(false)
@@ -482,7 +493,9 @@ struct ParentObject {
     mUseXBLScope(false)
   {}
 
-  nsISupports* const mObject;
+  // We don't want to make this an nsCOMPtr because of performance reasons, but
+  // it's safe because ParentObject is a stack class.
+  nsISupports* const MOZ_NON_OWNING_REF mObject;
   nsWrapperCache* const mWrapperCache;
   bool mUseXBLScope;
 };

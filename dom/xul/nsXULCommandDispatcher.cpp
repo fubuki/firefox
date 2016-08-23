@@ -25,7 +25,7 @@
 #include "nsPIWindowRoot.h"
 #include "nsRDFCID.h"
 #include "nsXULCommandDispatcher.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsContentUtils.h"
 #include "nsReadableUtils.h"
 #include "nsCRT.h"
@@ -37,20 +37,13 @@
 
 using namespace mozilla;
 
-#ifdef PR_LOGGING
-static PRLogModuleInfo* gCommandLog;
-#endif
+static LazyLogModule gCommandLog("nsXULCommandDispatcher");
 
 ////////////////////////////////////////////////////////////////////////
 
 nsXULCommandDispatcher::nsXULCommandDispatcher(nsIDocument* aDocument)
     : mDocument(aDocument), mUpdaters(nullptr)
 {
-
-#ifdef PR_LOGGING
-  if (! gCommandLog)
-    gCommandLog = PR_NewLogModule("nsXULCommandDispatcher");
-#endif
 }
 
 nsXULCommandDispatcher::~nsXULCommandDispatcher()
@@ -100,8 +93,7 @@ already_AddRefed<nsPIWindowRoot>
 nsXULCommandDispatcher::GetWindowRoot()
 {
   if (mDocument) {
-    nsCOMPtr<nsPIDOMWindow> window(mDocument->GetWindow());
-    if (window) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocument->GetWindow()) {
       return window->GetTopWindowRoot();
     }
   }
@@ -110,17 +102,17 @@ nsXULCommandDispatcher::GetWindowRoot()
 }
 
 nsIContent*
-nsXULCommandDispatcher::GetRootFocusedContentAndWindow(nsPIDOMWindow** aWindow)
+nsXULCommandDispatcher::GetRootFocusedContentAndWindow(nsPIDOMWindowOuter** aWindow)
 {
   *aWindow = nullptr;
 
-  if (mDocument) {
-    nsCOMPtr<nsPIDOMWindow> win = mDocument->GetWindow();
-    if (win) {
-      nsCOMPtr<nsPIDOMWindow> rootWindow = win->GetPrivateRoot();
-      if (rootWindow) {
-        return nsFocusManager::GetFocusedDescendant(rootWindow, true, aWindow);
-      }
+  if (!mDocument) {
+    return nullptr;
+  }
+
+  if (nsCOMPtr<nsPIDOMWindowOuter> win = mDocument->GetWindow()) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> rootWindow = win->GetPrivateRoot()) {
+      return nsFocusManager::GetFocusedDescendant(rootWindow, true, aWindow);
     }
   }
 
@@ -132,14 +124,15 @@ nsXULCommandDispatcher::GetFocusedElement(nsIDOMElement** aElement)
 {
   *aElement = nullptr;
 
-  nsCOMPtr<nsPIDOMWindow> focusedWindow;
+  nsCOMPtr<nsPIDOMWindowOuter> focusedWindow;
   nsIContent* focusedContent =
     GetRootFocusedContentAndWindow(getter_AddRefs(focusedWindow));
   if (focusedContent) {
     CallQueryInterface(focusedContent, aElement);
 
     // Make sure the caller can access the focused element.
-    if (!nsContentUtils::CanCallerAccess(*aElement)) {
+    nsCOMPtr<nsINode> node = do_QueryInterface(*aElement);
+    if (!node || !nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller()->Subsumes(node->NodePrincipal())) {
       // XXX This might want to return null, but we use that return value
       // to mean "there is no focused element," so to be clear, throw an
       // exception.
@@ -152,27 +145,25 @@ nsXULCommandDispatcher::GetFocusedElement(nsIDOMElement** aElement)
 }
 
 NS_IMETHODIMP
-nsXULCommandDispatcher::GetFocusedWindow(nsIDOMWindow** aWindow)
+nsXULCommandDispatcher::GetFocusedWindow(mozIDOMWindowProxy** aWindow)
 {
   *aWindow = nullptr;
 
-  nsCOMPtr<nsPIDOMWindow> window;
+  nsCOMPtr<nsPIDOMWindowOuter> window;
   GetRootFocusedContentAndWindow(getter_AddRefs(window));
   if (!window)
     return NS_OK;
 
   // Make sure the caller can access this window. The caller can access this
   // window iff it can access the document.
-  nsCOMPtr<nsIDOMDocument> domdoc;
-  nsresult rv = window->GetDocument(getter_AddRefs(domdoc));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDocument> doc = window->GetDoc();
 
   // Note: If there is no document, then this window has been cleared and
   // there's nothing left to protect, so let the window pass through.
-  if (domdoc && !nsContentUtils::CanCallerAccess(domdoc))
+  if (doc && !nsContentUtils::CanCallerAccess(doc))
     return NS_ERROR_DOM_SECURITY_ERR;
 
-  CallQueryInterface(window, aWindow);
+  window.forget(aWindow);
   return NS_OK;
 }
 
@@ -186,17 +177,17 @@ nsXULCommandDispatcher::SetFocusedElement(nsIDOMElement* aElement)
     return fm->SetFocus(aElement, 0);
 
   // if aElement is null, clear the focus in the currently focused child window
-  nsCOMPtr<nsPIDOMWindow> focusedWindow;
+  nsCOMPtr<nsPIDOMWindowOuter> focusedWindow;
   GetRootFocusedContentAndWindow(getter_AddRefs(focusedWindow));
   return fm->ClearFocus(focusedWindow);
 }
 
 NS_IMETHODIMP
-nsXULCommandDispatcher::SetFocusedWindow(nsIDOMWindow* aWindow)
+nsXULCommandDispatcher::SetFocusedWindow(mozIDOMWindowProxy* aWindow)
 {
   NS_ENSURE_TRUE(aWindow, NS_OK); // do nothing if set to null
 
-  nsCOMPtr<nsPIDOMWindow> window(do_QueryInterface(aWindow));
+  nsCOMPtr<nsPIDOMWindowOuter> window = nsPIDOMWindowOuter::From(aWindow);
   NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
 
   nsIFocusManager* fm = nsFocusManager::GetFocusManager();
@@ -223,7 +214,7 @@ nsXULCommandDispatcher::AdvanceFocus()
 NS_IMETHODIMP
 nsXULCommandDispatcher::RewindFocus()
 {
-  nsCOMPtr<nsPIDOMWindow> win;
+  nsCOMPtr<nsPIDOMWindowOuter> win;
   GetRootFocusedContentAndWindow(getter_AddRefs(win));
 
   nsCOMPtr<nsIDOMElement> result;
@@ -237,7 +228,7 @@ nsXULCommandDispatcher::RewindFocus()
 NS_IMETHODIMP
 nsXULCommandDispatcher::AdvanceFocusIntoSubtree(nsIDOMElement* aElt)
 {
-  nsCOMPtr<nsPIDOMWindow> win;
+  nsCOMPtr<nsPIDOMWindowOuter> win;
   GetRootFocusedContentAndWindow(getter_AddRefs(win));
 
   nsCOMPtr<nsIDOMElement> result;
@@ -272,13 +263,13 @@ nsXULCommandDispatcher::AddCommandUpdater(nsIDOMElement* aElement,
     if (updater->mElement == aElement) {
 
 #ifdef DEBUG
-      if (PR_LOG_TEST(gCommandLog, PR_LOG_NOTICE)) {
+      if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
         nsAutoCString eventsC, targetsC, aeventsC, atargetsC; 
         eventsC.AssignWithConversion(updater->mEvents);
         targetsC.AssignWithConversion(updater->mTargets);
         CopyUTF16toUTF8(aEvents, aeventsC);
         CopyUTF16toUTF8(aTargets, atargetsC);
-        PR_LOG(gCommandLog, PR_LOG_NOTICE,
+        MOZ_LOG(gCommandLog, LogLevel::Debug,
                ("xulcmd[%p] replace %p(events=%s targets=%s) with (events=%s targets=%s)",
                 this, aElement,
                 eventsC.get(),
@@ -300,12 +291,12 @@ nsXULCommandDispatcher::AddCommandUpdater(nsIDOMElement* aElement,
     updater = updater->mNext;
   }
 #ifdef DEBUG
-  if (PR_LOG_TEST(gCommandLog, PR_LOG_NOTICE)) {
+  if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
     nsAutoCString aeventsC, atargetsC; 
     CopyUTF16toUTF8(aEvents, aeventsC);
     CopyUTF16toUTF8(aTargets, atargetsC);
 
-    PR_LOG(gCommandLog, PR_LOG_NOTICE,
+    MOZ_LOG(gCommandLog, LogLevel::Debug,
            ("xulcmd[%p] add     %p(events=%s targets=%s)",
             this, aElement,
             aeventsC.get(),
@@ -314,11 +305,7 @@ nsXULCommandDispatcher::AddCommandUpdater(nsIDOMElement* aElement,
 #endif
 
   // If we get here, this is a new updater. Append it to the list.
-  updater = new Updater(aElement, aEvents, aTargets);
-  if (! updater)
-      return NS_ERROR_OUT_OF_MEMORY;
-
-  *link = updater;
+  *link = new Updater(aElement, aEvents, aTargets);
   return NS_OK;
 }
 
@@ -335,11 +322,11 @@ nsXULCommandDispatcher::RemoveCommandUpdater(nsIDOMElement* aElement)
   while (updater) {
     if (updater->mElement == aElement) {
 #ifdef DEBUG
-      if (PR_LOG_TEST(gCommandLog, PR_LOG_NOTICE)) {
+      if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
         nsAutoCString eventsC, targetsC; 
         eventsC.AssignWithConversion(updater->mEvents);
         targetsC.AssignWithConversion(updater->mTargets);
-        PR_LOG(gCommandLog, PR_LOG_NOTICE,
+        MOZ_LOG(gCommandLog, LogLevel::Debug,
                ("xulcmd[%p] remove  %p(events=%s targets=%s)",
                 this, aElement,
                 eventsC.get(),
@@ -395,17 +382,17 @@ nsXULCommandDispatcher::UpdateCommands(const nsAString& aEventName)
     nsIContent* content = updaters[u];
 
 #ifdef DEBUG
-    if (PR_LOG_TEST(gCommandLog, PR_LOG_NOTICE)) {
+    if (MOZ_LOG_TEST(gCommandLog, LogLevel::Debug)) {
       nsAutoCString aeventnameC; 
       CopyUTF16toUTF8(aEventName, aeventnameC);
-      PR_LOG(gCommandLog, PR_LOG_NOTICE,
+      MOZ_LOG(gCommandLog, LogLevel::Debug,
              ("xulcmd[%p] update %p event=%s",
               this, content,
               aeventnameC.get()));
     }
 #endif
 
-    WidgetEvent event(true, NS_XUL_COMMAND_UPDATE);
+    WidgetEvent event(true, eXULCommandUpdate);
     EventDispatcher::Dispatch(content, nullptr, &event);
   }
   return NS_OK;

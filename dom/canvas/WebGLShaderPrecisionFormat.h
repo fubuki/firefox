@@ -10,9 +10,7 @@
 
 namespace mozilla {
 
-class WebGLBuffer;
-
-class WebGLShaderPrecisionFormat MOZ_FINAL
+class WebGLShaderPrecisionFormat final
     : public WebGLContextBoundObject
 {
 public:
@@ -24,7 +22,7 @@ public:
         , mPrecision(precision)
     { }
 
-    JSObject* WrapObject(JSContext* cx);
+    bool WrapObject(JSContext* cx, JS::Handle<JSObject*> givenProto, JS::MutableHandle<JSObject*> reflector);
 
     // WebIDL WebGLShaderPrecisionFormat API
     GLint RangeMin() const {

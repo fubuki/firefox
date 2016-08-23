@@ -29,8 +29,14 @@
 #define _PR_SI_ARCHITECTURE "powerpc64"
 #elif defined(__powerpc__)
 #define _PR_SI_ARCHITECTURE "powerpc"
+#elif defined(__aarch64__)
+#define _PR_SI_ARCHITECTURE "aarch64"
 #elif defined(__arm__)
 #define _PR_SI_ARCHITECTURE "arm"
+#elif defined(__mips64__)
+#define _PR_SI_ARCHITECTURE "mips64"
+#elif defined(__mips__)
+#define _PR_SI_ARCHITECTURE "mips"
 #else
 #error "Unknown CPU architecture"
 #endif
@@ -224,7 +230,7 @@ extern void _MD_EarlyInit(void);
 
 #define _MD_EARLY_INIT                  _MD_EarlyInit
 #define _MD_FINAL_INIT			_PR_UnixInit
-#define _MD_INTERVAL_USE_GTOD
+#define _PR_HAVE_CLOCK_MONOTONIC
 
 /*
  * We wrapped the select() call.  _MD_SELECT refers to the built-in,

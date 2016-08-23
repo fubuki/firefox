@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +12,7 @@
 #include "nsISupports.h"
 #include "nsTArrayForwardDeclare.h"
 #include "mozilla/dom/CPOWManagerGetter.h"
+#include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 
 #define NS_ICONTENTCHILD_IID                                    \
   { 0x4eed2e73, 0x94ba, 0x48a8,                                 \
@@ -21,21 +22,22 @@ class nsString;
 
 namespace IPC {
 class Principal;
-} // IPC
+} // namespace IPC
 
 namespace mozilla {
 
 namespace jsipc {
 class PJavaScriptChild;
 class CpowEntry;
-} // jsipc
+} // namespace jsipc
 
 namespace dom {
 
+class Blob;
 class BlobChild;
+class BlobImpl;
 class BlobConstructorParams;
 class ClonedMessageData;
-class File;
 class IPCTabContext;
 class PBlobChild;
 class PBrowserChild;
@@ -46,11 +48,12 @@ class nsIContentChild : public nsISupports
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICONTENTCHILD_IID)
 
-  BlobChild* GetOrCreateActorForBlob(File* aBlob);
+  BlobChild* GetOrCreateActorForBlob(Blob* aBlob);
+  BlobChild* GetOrCreateActorForBlobImpl(BlobImpl* aImpl);
 
-  virtual PBlobChild* SendPBlobConstructor(
-    PBlobChild* aActor,
-    const BlobConstructorParams& aParams) = 0;
+  virtual PBlobChild*
+  SendPBlobConstructor(PBlobChild* aActor,
+                       const BlobConstructorParams& aParams) = 0;
 
   virtual bool
   SendPBrowserConstructor(PBrowserChild* aActor,
@@ -77,13 +80,14 @@ protected:
   virtual bool DeallocPBlobChild(PBlobChild* aActor);
 
   virtual bool RecvAsyncMessage(const nsString& aMsg,
-                                const ClonedMessageData& aData,
-                                const InfallibleTArray<jsipc::CpowEntry>& aCpows,
-                                const IPC::Principal& aPrincipal);
+                                InfallibleTArray<jsipc::CpowEntry>&& aCpows,
+                                const IPC::Principal& aPrincipal,
+                                const ClonedMessageData& aData);
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIContentChild, NS_ICONTENTCHILD_IID)
 
-} // dom
-} // mozilla
+} // namespace dom
+} // namespace mozilla
+
 #endif /* mozilla_dom_nsIContentChild_h */

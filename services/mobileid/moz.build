@@ -6,19 +6,16 @@
 
 DIRS += ['interfaces']
 
-TEST_DIRS += ['tests']
+XPCSHELL_TESTS_MANIFESTS += ['tests/xpcshell/xpcshell.ini']
 
 EXTRA_JS_MODULES += [
     'MobileIdentityClient.jsm',
     'MobileIdentityCommon.jsm',
     'MobileIdentityCredentialsStore.jsm',
+    'MobileIdentityManager.jsm',
     'MobileIdentitySmsMoMtVerificationFlow.jsm',
     'MobileIdentitySmsMtVerificationFlow.jsm',
+    'MobileIdentitySmsVerificationFlow.jsm',
     'MobileIdentityUIGlueCommon.jsm',
     'MobileIdentityVerificationFlow.jsm'
-]
-
-EXTRA_PP_JS_MODULES += [
-    'MobileIdentityManager.jsm',
-    'MobileIdentitySmsVerificationFlow.jsm'
 ]

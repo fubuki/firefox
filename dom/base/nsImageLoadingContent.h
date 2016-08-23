@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim: ft=cpp tw=78 sw=2 et ts=2
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,6 +17,7 @@
 #include "imgIOnloadBlocker.h"
 #include "mozilla/CORSMode.h"
 #include "mozilla/EventStates.h"
+#include "mozilla/TimeStamp.h"
 #include "nsCOMPtr.h"
 #include "nsIImageLoadingContent.h"
 #include "nsIRequest.h"
@@ -24,11 +25,10 @@
 #include "nsAutoPtr.h"
 #include "nsIContentPolicy.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/net/ReferrerPolicy.h"
 
 class nsIURI;
 class nsIDocument;
-class imgILoader;
-class nsIIOService;
 class nsPresContext;
 class nsIContent;
 class imgRequestProxy;
@@ -41,6 +41,11 @@ class imgRequestProxy;
 class nsImageLoadingContent : public nsIImageLoadingContent,
                               public imgIOnloadBlocker
 {
+  template <typename T> using Maybe = mozilla::Maybe<T>;
+  using Nothing = mozilla::Nothing;
+  using OnNonvisible = mozilla::OnNonvisible;
+  using Visibility = mozilla::Visibility;
+
   /* METHODS */
 public:
   nsImageLoadingContent();
@@ -194,15 +199,13 @@ protected:
 
   void ClearBrokenState() { mBroken = false; }
 
-  // Sets blocking state only if the desired state is different from the
-  // current one. See the comment for mBlockingOnload for more information.
-  void SetBlockingOnload(bool aBlocking);
-
   /**
    * Returns the CORS mode that will be used for all future image loads. The
    * default implementation returns CORS_NONE unconditionally.
    */
   virtual mozilla::CORSMode GetCORSMode();
+
+  virtual mozilla::net::ReferrerPolicy GetImageReferrerPolicy();
 
   // Subclasses are *required* to call BindToTree/UnbindFromTree.
   void BindToTree(nsIDocument* aDocument, nsIContent* aParent,
@@ -288,7 +291,7 @@ protected:
    *
    * @param aImageLoadType The ImageLoadType for this request
    */
-   nsRefPtr<imgRequestProxy>& PrepareNextRequest(ImageLoadType aImageLoadType);
+   RefPtr<imgRequestProxy>& PrepareNextRequest(ImageLoadType aImageLoadType);
 
   /**
    * Called when we would normally call PrepareNextRequest(), but the request was
@@ -305,8 +308,8 @@ protected:
    *
    * @param aImageLoadType The ImageLoadType for this request
    */
-  nsRefPtr<imgRequestProxy>& PrepareCurrentRequest(ImageLoadType aImageLoadType);
-  nsRefPtr<imgRequestProxy>& PreparePendingRequest(ImageLoadType aImageLoadType);
+  RefPtr<imgRequestProxy>& PrepareCurrentRequest(ImageLoadType aImageLoadType);
+  RefPtr<imgRequestProxy>& PreparePendingRequest(ImageLoadType aImageLoadType);
 
   /**
    * Switch our pending request to be our current request.
@@ -320,8 +323,10 @@ protected:
    * @param aNonvisibleAction An action to take if the image is no longer
    *                          visible as a result; see |UntrackImage|.
    */
-  void ClearCurrentRequest(nsresult aReason, uint32_t aNonvisibleAction);
-  void ClearPendingRequest(nsresult aReason, uint32_t aNonvisibleAction);
+  void ClearCurrentRequest(nsresult aReason,
+                           const Maybe<OnNonvisible>& aNonvisibleAction = Nothing());
+  void ClearPendingRequest(nsresult aReason,
+                           const Maybe<OnNonvisible>& aNonvisibleAction = Nothing());
 
   /**
    * Retrieve a pointer to the 'registered with the refresh driver' flag for
@@ -350,18 +355,20 @@ protected:
    *
    * No-op if aImage is null.
    *
-   * @param aNonvisibleAction What to do if the image's visibility count is now
-   *                          zero. If ON_NONVISIBLE_NO_ACTION, nothing will be
-   *                          done. If ON_NONVISIBLE_REQUEST_DISCARD, the image
-   *                          will be asked to discard its surfaces if possible.
+   * @param aNonvisibleAction A requested action if the frame has become
+   *                          nonvisible. If Nothing(), no action is
+   *                          requested. If DISCARD_IMAGES is specified, the
+   *                          frame is requested to ask any images it's
+   *                          associated with to discard their surfaces if
+   *                          possible.
    */
   void TrackImage(imgIRequest* aImage);
   void UntrackImage(imgIRequest* aImage,
-                    uint32_t aNonvisibleAction = ON_NONVISIBLE_NO_ACTION);
+                    const Maybe<OnNonvisible>& aNonvisibleAction = Nothing());
 
   /* MEMBERS */
-  nsRefPtr<imgRequestProxy> mCurrentRequest;
-  nsRefPtr<imgRequestProxy> mPendingRequest;
+  RefPtr<imgRequestProxy> mCurrentRequest;
+  RefPtr<imgRequestProxy> mPendingRequest;
   uint32_t mCurrentRequestFlags;
   uint32_t mPendingRequestFlags;
 
@@ -400,6 +407,8 @@ private:
    */
   mozilla::EventStates mForcedImageState;
 
+  mozilla::TimeStamp mMostRecentRequestChange;
+
   int16_t mImageBlockingStatus;
   bool mLoadingEnabled : 1;
 
@@ -416,7 +425,6 @@ private:
   bool mBroken : 1;
   bool mUserDisabled : 1;
   bool mSuppressed : 1;
-  bool mFireEventsOnDecode : 1;
 
 protected:
   /**
@@ -440,8 +448,6 @@ private:
 
   // True when FrameCreate has been called but FrameDestroy has not.
   bool mFrameCreateCalled;
-
-  uint32_t mVisibleCount;
 };
 
 #endif // nsImageLoadingContent_h__

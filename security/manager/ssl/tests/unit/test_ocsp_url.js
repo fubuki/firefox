@@ -25,25 +25,30 @@ function start_ocsp_responder(expectedCertNames, expectedPaths) {
 }
 
 function check_cert_err(cert_name, expected_error) {
-  let cert = constructCertFromFile("test_ocsp_url/" + cert_name + ".der");
+  let cert = constructCertFromFile("test_ocsp_url/" + cert_name + ".pem");
   return checkCertErrorGeneric(certdb, cert, expected_error,
                                certificateUsageSSLServer);
 }
 
 function run_test() {
-  addCertFromFile(certdb, "test_ocsp_url/ca.der", 'CTu,CTu,CTu');
-  addCertFromFile(certdb, "test_ocsp_url/int.der", ',,');
+  addCertFromFile(certdb, "test_ocsp_url/ca.pem", 'CTu,CTu,CTu');
+  addCertFromFile(certdb, "test_ocsp_url/int.pem", ',,');
 
   // Enabled so that we can force ocsp failure responses.
   Services.prefs.setBoolPref("security.OCSP.require", true);
 
   Services.prefs.setCharPref("network.dns.localDomains",
                              "www.example.com");
+  Services.prefs.setIntPref("security.OCSP.enabled", 1);
+
+  // Note: We don't test the case of a well-formed HTTP URL with an empty port
+  //       because the OCSP code would then send a request to port 80, which we
+  //       can't use in tests.
 
   add_test(function() {
     clearOCSPCache();
     let ocspResponder = failingOCSPResponder();
-    check_cert_err("bad-scheme",SEC_ERROR_CERT_BAD_ACCESS_LOCATION);
+    check_cert_err("bad-scheme", SEC_ERROR_CERT_BAD_ACCESS_LOCATION);
     ocspResponder.stop(run_next_test);
   });
 
@@ -51,6 +56,13 @@ function run_test() {
     clearOCSPCache();
     let ocspResponder = failingOCSPResponder();
     check_cert_err("empty-scheme-url", SEC_ERROR_CERT_BAD_ACCESS_LOCATION);
+    ocspResponder.stop(run_next_test);
+  });
+
+  add_test(() => {
+    clearOCSPCache();
+    let ocspResponder = failingOCSPResponder();
+    check_cert_err("ftp-url", SEC_ERROR_CERT_BAD_ACCESS_LOCATION);
     ocspResponder.stop(run_next_test);
   });
 
@@ -64,7 +76,7 @@ function run_test() {
   add_test(function() {
     clearOCSPCache();
     let ocspResponder = start_ocsp_responder(["hTTp-url"], ["hTTp-url"]);
-    check_cert_err("hTTp-url", 0);
+    check_cert_err("hTTp-url", PRErrorCodeSuccess);
     ocspResponder.stop(run_next_test);
   });
 
@@ -86,7 +98,7 @@ function run_test() {
   add_test(function() {
     clearOCSPCache();
     let ocspResponder = start_ocsp_responder(["no-path-url"], ['']);
-    check_cert_err("no-path-url", 0);
+    check_cert_err("no-path-url", PRErrorCodeSuccess);
     ocspResponder.stop(run_next_test);
   });
 
@@ -108,6 +120,16 @@ function run_test() {
     clearOCSPCache();
     let ocspResponder = failingOCSPResponder();
     check_cert_err("unknown-scheme", SEC_ERROR_CERT_BAD_ACCESS_LOCATION);
+    ocspResponder.stop(run_next_test);
+  });
+
+  // Note: We currently don't have anything that ensures user:pass sections
+  //       weren't sent. The following test simply checks that such sections
+  //       don't cause failures.
+  add_test(() => {
+    clearOCSPCache();
+    let ocspResponder = start_ocsp_responder(["user-pass"], [""]);
+    check_cert_err("user-pass", PRErrorCodeSuccess);
     ocspResponder.stop(run_next_test);
   });
 

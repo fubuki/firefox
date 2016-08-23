@@ -22,7 +22,7 @@
 
 struct JSContext;
 class JSObject;
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 
@@ -45,7 +45,7 @@ template <typename T> class Optional;
   { 0x3839d699, 0x22c5, 0x439f, \
   { 0x94, 0xca, 0x0e, 0x0b, 0x26, 0xf9, 0xca, 0xbf } }
 
-class MediaSource MOZ_FINAL : public DOMEventTargetHelper
+class MediaSource final : public DOMEventTargetHelper
 {
 public:
   /** WebIDL Methods. */
@@ -73,9 +73,9 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(MediaSource, DOMEventTargetHelper)
   NS_DECLARE_STATIC_IID_ACCESSOR(MOZILLA_DOM_MEDIASOURCE_IMPLEMENTATION_IID)
 
-  nsPIDOMWindow* GetParentObject() const;
+  nsPIDOMWindowInner* GetParentObject() const;
 
-  JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // Attach this MediaSource to Decoder aDecoder.  Returns false if already attached.
   bool Attach(MediaSourceDecoder* aDecoder);
@@ -95,25 +95,6 @@ public:
     return mPrincipal;
   }
 
-  // Called by SourceBuffers to notify this MediaSource that data has
-  // been evicted from the buffered data. The start and end times
-  // that were evicted are provided.
-  void NotifyEvicted(double aStart, double aEnd);
-
-  // Queue InitializationEvent to run on the main thread.  Called when a
-  // SourceBuffer has an initialization segment appended, but only
-  // dispatched the first time (using mFirstSourceBufferInitialized).
-  // Demarcates the point in time at which only currently registered
-  // TrackBuffers are treated as essential by the MediaSourceReader for
-  // initialization.
-  void QueueInitializationEvent();
-
-#if defined(DEBUG)
-  // Dump the contents of each SourceBuffer to a series of files under aPath.
-  // aPath must exist.  Debug only, invoke from your favourite debugger.
-  void Dump(const char* aPath);
-#endif
-
   // Returns a string describing the state of the MediaSource internal
   // buffered data. Used for debugging purposes.
   void GetMozDebugReaderData(nsAString& aString);
@@ -122,12 +103,12 @@ private:
   // MediaSourceDecoder uses DurationChange to set the duration
   // without hitting the checks in SetDuration.
   friend class mozilla::MediaSourceDecoder;
-  // SourceBuffer uses SetDuration
+  // SourceBuffer uses SetDuration and SourceBufferIsActive
   friend class mozilla::dom::SourceBuffer;
 
   ~MediaSource();
 
-  explicit MediaSource(nsPIDOMWindow* aWindow);
+  explicit MediaSource(nsPIDOMWindowInner* aWindow);
 
   friend class AsyncEventRunner<MediaSource>;
   void DispatchSimpleEvent(const char* aName);
@@ -135,24 +116,23 @@ private:
 
   void DurationChange(double aOldDuration, double aNewDuration);
 
-  void InitializationEvent();
-
   // SetDuration with no checks.
   void SetDuration(double aDuration, MSRangeRemovalAction aAction);
 
-  nsRefPtr<SourceBufferList> mSourceBuffers;
-  nsRefPtr<SourceBufferList> mActiveSourceBuffers;
+  // Mark SourceBuffer as active and rebuild ActiveSourceBuffers.
+  void SourceBufferIsActive(SourceBuffer* aSourceBuffer);
 
-  nsRefPtr<MediaSourceDecoder> mDecoder;
+  RefPtr<SourceBufferList> mSourceBuffers;
+  RefPtr<SourceBufferList> mActiveSourceBuffers;
+
+  RefPtr<MediaSourceDecoder> mDecoder;
   // Ensures the media element remains alive to dispatch progress and
   // durationchanged events.
-  nsRefPtr<HTMLMediaElement> mMediaElement;
+  RefPtr<HTMLMediaElement> mMediaElement;
 
-  nsRefPtr<nsIPrincipal> mPrincipal;
+  RefPtr<nsIPrincipal> mPrincipal;
 
   MediaSourceReadyState mReadyState;
-
-  bool mFirstSourceBufferInitialized;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(MediaSource, MOZILLA_DOM_MEDIASOURCE_IMPLEMENTATION_IID)
@@ -160,4 +140,5 @@ NS_DEFINE_STATIC_IID_ACCESSOR(MediaSource, MOZILLA_DOM_MEDIASOURCE_IMPLEMENTATIO
 } // namespace dom
 
 } // namespace mozilla
+
 #endif /* mozilla_dom_MediaSource_h_ */

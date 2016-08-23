@@ -187,14 +187,14 @@ XPCCallContext::GetArgc() const
     return mArgc;
 }
 
-inline jsval*
+inline JS::Value*
 XPCCallContext::GetArgv() const
 {
     CHECK_STATE(READY_TO_CALL);
     return mArgv;
 }
 
-inline jsval*
+inline JS::Value*
 XPCCallContext::GetRetVal() const
 {
     CHECK_STATE(READY_TO_CALL);
@@ -202,7 +202,7 @@ XPCCallContext::GetRetVal() const
 }
 
 inline void
-XPCCallContext::SetRetVal(jsval val)
+XPCCallContext::SetRetVal(JS::Value val)
 {
     CHECK_STATE(HAVE_ARGS);
     if (mRetVal)
@@ -252,6 +252,18 @@ XPCCallContext::SetMethodIndex(uint16_t index)
 }
 
 /***************************************************************************/
+inline XPCNativeInterface*
+XPCNativeMember::GetInterface() const
+{
+    XPCNativeMember* arrayStart =
+        const_cast<XPCNativeMember*>(this - mIndexInInterface);
+    size_t arrayStartOffset = XPCNativeInterface::OffsetOfMembers();
+    char* xpcNativeInterfaceStart =
+        reinterpret_cast<char*>(arrayStart) - arrayStartOffset;
+    return reinterpret_cast<XPCNativeInterface*>(xpcNativeInterfaceStart);
+}
+
+/***************************************************************************/
 
 inline const nsIID*
 XPCNativeInterface::GetIID() const
@@ -283,6 +295,13 @@ XPCNativeInterface::HasAncestor(const nsIID* iid) const
     bool found = false;
     mInfo->HasAncestor(iid, &found);
     return found;
+}
+
+/* static */
+inline size_t
+XPCNativeInterface::OffsetOfMembers()
+{
+    return offsetof(XPCNativeInterface, mMembers);
 }
 
 /***************************************************************************/
@@ -477,7 +496,7 @@ JSObject* XPCWrappedNativeTearOff::GetJSObjectPreserveColor() const
 inline
 JSObject* XPCWrappedNativeTearOff::GetJSObject()
 {
-    JSObject *obj = GetJSObjectPreserveColor();
+    JSObject* obj = GetJSObjectPreserveColor();
     if (obj) {
       JS::ExposeObjectToActiveJS(obj);
     }
@@ -492,7 +511,7 @@ void XPCWrappedNativeTearOff::SetJSObject(JSObject*  JSObj)
 }
 
 inline
-void XPCWrappedNativeTearOff::JSObjectMoved(JSObject *obj, const JSObject *old)
+void XPCWrappedNativeTearOff::JSObjectMoved(JSObject* obj, const JSObject* old)
 {
     MOZ_ASSERT(!IsMarked());
     MOZ_ASSERT(mJSObject == old);
@@ -502,6 +521,7 @@ void XPCWrappedNativeTearOff::JSObjectMoved(JSObject *obj, const JSObject *old)
 inline
 XPCWrappedNativeTearOff::~XPCWrappedNativeTearOff()
 {
+    MOZ_COUNT_DTOR(XPCWrappedNativeTearOff);
     MOZ_ASSERT(!(GetInterface() || GetNative() || GetJSObjectPreserveColor()),
                "tearoff not empty in dtor");
 }
@@ -517,25 +537,17 @@ XPCWrappedNative::HasInterfaceNoQI(const nsIID& iid)
 inline void
 XPCWrappedNative::SweepTearOffs()
 {
-    XPCWrappedNativeTearOffChunk* chunk;
-    for (chunk = &mFirstChunk; chunk; chunk = chunk->mNextChunk) {
-        XPCWrappedNativeTearOff* to = chunk->mTearOffs;
-        for (int i = XPC_WRAPPED_NATIVE_TEAROFFS_PER_CHUNK; i > 0; i--, to++) {
-            bool marked = to->IsMarked();
-            to->Unmark();
-            if (marked)
-                continue;
+    for (XPCWrappedNativeTearOff* to = &mFirstTearOff; to; to = to->GetNextTearOff()) {
+        bool marked = to->IsMarked();
+        to->Unmark();
+        if (marked)
+            continue;
 
-            // If this tearoff does not have a live dedicated JSObject,
-            // then let's recycle it.
-            if (!to->GetJSObjectPreserveColor()) {
-                nsISupports* obj = to->GetNative();
-                if (obj) {
-                    obj->Release();
-                    to->SetNative(nullptr);
-                }
-                to->SetInterface(nullptr);
-            }
+        // If this tearoff does not have a live dedicated JSObject,
+        // then let's recycle it.
+        if (!to->GetJSObjectPreserveColor()) {
+            to->SetNative(nullptr);
+            to->SetInterface(nullptr);
         }
     }
 }
@@ -551,9 +563,9 @@ xpc_ForcePropertyResolve(JSContext* cx, JS::HandleObject obj, jsid idArg)
 }
 
 inline jsid
-GetRTIdByIndex(JSContext *cx, unsigned index)
+GetRTIdByIndex(JSContext* cx, unsigned index)
 {
-  XPCJSRuntime *rt = nsXPConnect::XPConnect()->GetRuntime();
+  XPCJSRuntime* rt = nsXPConnect::XPConnect()->GetRuntime();
   return rt->GetStringID(index);
 }
 

@@ -3,10 +3,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/embedding/PPrinting.h"
 #include "nsPrintOptionsImpl.h"
+
+#include "mozilla/embedding/PPrinting.h"
+#include "mozilla/layout/RemotePrintJobChild.h"
+#include "mozilla/RefPtr.h"
+#include "nsPrintingProxy.h"
 #include "nsReadableUtils.h"
 #include "nsPrintSettingsImpl.h"
+#include "nsIPrintSession.h"
 
 #include "nsIDOMWindow.h"
 #include "nsIServiceManager.h"
@@ -20,13 +25,14 @@
 #include "nsIStringEnumerator.h"
 #include "nsISupportsPrimitives.h"
 #include "stdlib.h"
-#include "nsAutoPtr.h"
 #include "mozilla/Preferences.h"
 #include "nsPrintfCString.h"
 #include "nsIWebBrowserPrint.h"
 
 using namespace mozilla;
 using namespace mozilla::embedding;
+
+typedef mozilla::layout::RemotePrintJobChild RemotePrintJobChild;
 
 NS_IMPL_ISUPPORTS(nsPrintOptions, nsIPrintOptions, nsIPrintSettingsService)
 
@@ -58,17 +64,11 @@ static const char kPrintFooterStrRight[]  = "print_footerright";
 static const char kPrintReversed[]      = "print_reversed";
 static const char kPrintInColor[]       = "print_in_color";
 static const char kPrintPaperName[]     = "print_paper_name";
-static const char kPrintPlexName[]      = "print_plex_name";
-static const char kPrintPaperSizeType[] = "print_paper_size_type";
 static const char kPrintPaperData[]     = "print_paper_data";
 static const char kPrintPaperSizeUnit[] = "print_paper_size_unit";
 static const char kPrintPaperWidth[]    = "print_paper_width";
 static const char kPrintPaperHeight[]   = "print_paper_height";
-static const char kPrintColorspace[]    = "print_colorspace";
-static const char kPrintResolutionName[]= "print_resolution_name";
-static const char kPrintDownloadFonts[] = "print_downloadfonts";
 static const char kPrintOrientation[]   = "print_orientation";
-static const char kPrintCommand[]       = "print_command";
 static const char kPrinterName[]        = "print_printer";
 static const char kPrintToFile[]        = "print_to_file";
 static const char kPrintToFileName[]    = "print_to_filename";
@@ -175,32 +175,14 @@ nsPrintOptions::SerializeToPrintData(nsIPrintSettings* aSettings,
   aSettings->GetPaperName(getter_Copies(paperName));
   data->paperName() = paperName;
 
-  aSettings->GetPaperSizeType(&data->paperSizeType());
   aSettings->GetPaperData(&data->paperData());
   aSettings->GetPaperWidth(&data->paperWidth());
   aSettings->GetPaperHeight(&data->paperHeight());
   aSettings->GetPaperSizeUnit(&data->paperSizeUnit());
 
-  nsXPIDLString plexName;
-  aSettings->GetPlexName(getter_Copies(plexName));
-  data->plexName() = plexName;
-
-  nsXPIDLString colorspace;
-  aSettings->GetColorspace(getter_Copies(colorspace));
-  data->colorspace() = colorspace;
-
-  nsXPIDLString resolutionName;
-  aSettings->GetResolutionName(getter_Copies(resolutionName));
-  data->resolutionName() = resolutionName;
-
-  aSettings->GetDownloadFonts(&data->downloadFonts());
   aSettings->GetPrintReversed(&data->printReversed());
   aSettings->GetPrintInColor(&data->printInColor());
   aSettings->GetOrientation(&data->orientation());
-
-  nsXPIDLString printCommand;
-  aSettings->GetPrintCommand(getter_Copies(printCommand));
-  data->printCommand() = printCommand;
 
   aSettings->GetNumCopies(&data->numCopies());
 
@@ -220,7 +202,33 @@ nsPrintOptions::SerializeToPrintData(nsIPrintSettings* aSettings,
   aSettings->GetDuplex(&data->duplex());
   aSettings->GetIsInitializedFromPrinter(&data->isInitializedFromPrinter());
   aSettings->GetIsInitializedFromPrefs(&data->isInitializedFromPrefs());
-  aSettings->GetPersistMarginBoxSettings(&data->persistMarginBoxSettings());
+
+  aSettings->GetPrintOptionsBits(&data->optionFlags());
+
+  // Initialize the platform-specific values that don't
+  // default-initialize, so that we don't send uninitialized data over
+  // IPC (which leads to valgrind warnings, and, for bools, fatal
+  // assertions).
+  // data->driverName() default-initializes
+  // data->deviceName() default-initializes
+  data->printableWidthInInches() = 0;
+  data->printableHeightInInches() = 0;
+  data->isFramesetDocument() = false;
+  data->isFramesetFrameSelected() = false;
+  data->isIFrameSelected() = false;
+  data->isRangeSelection() = false;
+  // data->GTKPrintSettings() default-initializes
+  // data->printJobName() default-initializes
+  data->printAllPages() = true;
+  data->mustCollate() = false;
+  // data->disposition() default-initializes
+  data->pagesAcross() = 1;
+  data->pagesDown() = 1;
+  data->printTime() = 0;
+  data->detailedErrorReporting() = true;
+  // data->faxNumber() default-initializes
+  data->addHeaderAndFooter() = false;
+  data->fileNameExtensionHidden() = false;
 
   return NS_OK;
 }
@@ -229,6 +237,12 @@ NS_IMETHODIMP
 nsPrintOptions::DeserializeToPrintSettings(const PrintData& data,
                                            nsIPrintSettings* settings)
 {
+  nsCOMPtr<nsIPrintSession> session;
+  nsresult rv = settings->GetPrintSession(getter_AddRefs(session));
+  if (NS_SUCCEEDED(rv) && session) {
+    session->SetRemotePrintJob(
+      static_cast<RemotePrintJobChild*>(data.remotePrintJobChild()));
+  }
   settings->SetStartPageRange(data.startPageRange());
   settings->SetEndPageRange(data.endPageRange());
 
@@ -276,24 +290,14 @@ nsPrintOptions::DeserializeToPrintSettings(const PrintData& data,
 
   settings->SetPaperName(data.paperName().get());
 
-  settings->SetPaperSizeType(data.paperSizeType());
   settings->SetPaperData(data.paperData());
   settings->SetPaperWidth(data.paperWidth());
   settings->SetPaperHeight(data.paperHeight());
   settings->SetPaperSizeUnit(data.paperSizeUnit());
 
-  settings->SetPlexName(data.plexName().get());
-
-  settings->SetColorspace(data.colorspace().get());
-
-  settings->SetResolutionName(data.resolutionName().get());
-
-  settings->SetDownloadFonts(data.downloadFonts());
   settings->SetPrintReversed(data.printReversed());
   settings->SetPrintInColor(data.printInColor());
   settings->SetOrientation(data.orientation());
-
-  settings->SetPrintCommand(data.printCommand().get());
 
   settings->SetNumCopies(data.numCopies());
 
@@ -309,7 +313,8 @@ nsPrintOptions::DeserializeToPrintSettings(const PrintData& data,
   settings->SetDuplex(data.duplex());
   settings->SetIsInitializedFromPrinter(data.isInitializedFromPrinter());
   settings->SetIsInitializedFromPrefs(data.isInitializedFromPrefs());
-  settings->SetPersistMarginBoxSettings(data.persistMarginBoxSettings());
+
+  settings->SetPrintOptionsBits(data.optionFlags());
 
   return NS_OK;
 }
@@ -345,11 +350,11 @@ nsPrintOptions::ShowPrintSetupDialog(nsIPrintSettings *aPS)
       do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIDOMWindow> parent;
+  nsCOMPtr<mozIDOMWindowProxy> parent;
   wwatch->GetActiveWindow(getter_AddRefs(parent));
   // null |parent| is non-fatal
 
-  nsCOMPtr<nsIDOMWindow> newWindow;
+  nsCOMPtr<mozIDOMWindowProxy> newWindow;
 
   return wwatch->OpenWindow(parent,
                             "chrome://global/content/printPageSetup.xul",
@@ -513,11 +518,10 @@ nsPrintOptions::ReadPrefs(nsIPrintSettings* aPS, const nsAString& aPrinterName,
 
   // Paper size prefs are read as a group
   if (aFlags & nsIPrintSettings::kInitSavePaperSize) {
-    int32_t sizeUnit, sizeType;
+    int32_t sizeUnit;
     double width, height;
 
     bool success = GETINTPREF(kPrintPaperSizeUnit, &sizeUnit)
-                  && GETINTPREF(kPrintPaperSizeType, &sizeType)
                   && GETDBLPREF(kPrintPaperWidth, width)
                   && GETDBLPREF(kPrintPaperHeight, height)
                   && GETSTRPREF(kPrintPaperName, &str);
@@ -529,13 +533,28 @@ nsPrintOptions::ReadPrefs(nsIPrintSettings* aPS, const nsAString& aPrinterName,
       success = (sizeUnit != nsIPrintSettings::kPaperSizeInches)
              || (width < 100.0)
              || (height < 100.0);
+#if defined(XP_WIN)
+      // Work around legacy invalid prefs where the size unit gets set to
+      // millimeters, but the height and width remains as the default inches
+      // ones for letter. See bug 1276717.
+      if (sizeUnit == nsIPrintSettings::kPaperSizeMillimeters &&
+          height == 11L && width == 8.5L) {
+
+        // As an extra precaution only override, when the resolution is also
+        // set to the legacy invalid, uninitialized value. We'll just broadly
+        // assume that anything outside of a million DPI is invalid.
+        if (GETINTPREF(kPrintResolution, &iVal) &&
+            (iVal < 0 || iVal > 1000000)) {
+          height = -1L;
+          width = -1L;
+        }
+      }
+#endif
     }
 
     if (success) {
       aPS->SetPaperSizeUnit(sizeUnit);
       DUMP_INT(kReadStr, kPrintPaperSizeUnit, sizeUnit);
-      aPS->SetPaperSizeType(sizeType);
-      DUMP_INT(kReadStr, kPrintPaperSizeType, sizeType);
       aPS->SetPaperWidth(width);
       DUMP_DBL(kReadStr, kPrintPaperWidth, width);
       aPS->SetPaperHeight(height);
@@ -629,13 +648,6 @@ nsPrintOptions::ReadPrefs(nsIPrintSettings* aPS, const nsAString& aPrinterName,
     }
   }
 
-  if (aFlags & nsIPrintSettings::kInitSavePlexName) {
-    if (GETSTRPREF(kPrintPlexName, &str)) {
-      aPS->SetPlexName(str.get());
-      DUMP_STR(kReadStr, kPrintPlexName, str.get());
-    }
-  }
-
   if (aFlags & nsIPrintSettings::kInitSavePaperData) {
     if (GETINTPREF(kPrintPaperData, &iVal)) {
       aPS->SetPaperData(iVal);
@@ -643,38 +655,10 @@ nsPrintOptions::ReadPrefs(nsIPrintSettings* aPS, const nsAString& aPrinterName,
     }
   }
 
-  if (aFlags & nsIPrintSettings::kInitSaveColorspace) {
-    if (GETSTRPREF(kPrintColorspace, &str)) {
-      aPS->SetColorspace(str.get());
-      DUMP_STR(kReadStr, kPrintColorspace, str.get());
-    }
-  }
-
-  if (aFlags & nsIPrintSettings::kInitSaveResolutionName) {
-    if (GETSTRPREF(kPrintResolutionName, &str)) {
-      aPS->SetResolutionName(str.get());
-      DUMP_STR(kReadStr, kPrintResolutionName, str.get());
-    }
-  }
-
-  if (aFlags & nsIPrintSettings::kInitSaveDownloadFonts) {
-    if (GETBOOLPREF(kPrintDownloadFonts, &b)) {
-      aPS->SetDownloadFonts(b);
-      DUMP_BOOL(kReadStr, kPrintDownloadFonts, b);
-    }
-  }
-
   if (aFlags & nsIPrintSettings::kInitSaveOrientation) {
     if (GETINTPREF(kPrintOrientation, &iVal)) {
       aPS->SetOrientation(iVal);
       DUMP_INT(kReadStr, kPrintOrientation, iVal);
-    }
-  }
-
-  if (aFlags & nsIPrintSettings::kInitSavePrintCommand) {
-    if (GETSTRPREF(kPrintCommand, &str)) {
-      aPS->SetPrintCommand(str.get());
-      DUMP_STR(kReadStr, kPrintCommand, str.get());
     }
   }
 
@@ -743,9 +727,6 @@ nsPrintOptions::WritePrefs(nsIPrintSettings *aPS, const nsAString& aPrinterName,
 {
   NS_ENSURE_ARG_POINTER(aPS);
 
-  bool persistMarginBoxSettings;
-  aPS->GetPersistMarginBoxSettings(&persistMarginBoxSettings);
-
   nsIntMargin margin;
   if (aFlags & nsIPrintSettings::kInitSaveMargins) {
     if (NS_SUCCEEDED(aPS->GetMarginInTwips(margin))) {
@@ -802,13 +783,12 @@ nsPrintOptions::WritePrefs(nsIPrintSettings *aPS, const nsAString& aPrinterName,
 
   // Paper size prefs are saved as a group
   if (aFlags & nsIPrintSettings::kInitSavePaperSize) {
-    int16_t sizeUnit, sizeType;
+    int16_t sizeUnit;
     double width, height;
     char16_t *name;
  
     if (
       NS_SUCCEEDED(aPS->GetPaperSizeUnit(&sizeUnit)) &&
-      NS_SUCCEEDED(aPS->GetPaperSizeType(&sizeType)) &&
       NS_SUCCEEDED(aPS->GetPaperWidth(&width)) &&
       NS_SUCCEEDED(aPS->GetPaperHeight(&height)) &&
       NS_SUCCEEDED(aPS->GetPaperName(&name))
@@ -816,9 +796,6 @@ nsPrintOptions::WritePrefs(nsIPrintSettings *aPS, const nsAString& aPrinterName,
       DUMP_INT(kWriteStr, kPrintPaperSizeUnit, sizeUnit);
       Preferences::SetInt(GetPrefName(kPrintPaperSizeUnit, aPrinterName),
                           int32_t(sizeUnit));
-      DUMP_INT(kWriteStr, kPrintPaperSizeType, sizeType);
-      Preferences::SetInt(GetPrefName(kPrintPaperSizeType, aPrinterName),
-                          int32_t(sizeType));
       DUMP_DBL(kWriteStr, kPrintPaperWidth, width);
       WritePrefDouble(GetPrefName(kPrintPaperWidth, aPrinterName), width);
       DUMP_DBL(kWriteStr, kPrintPaperHeight, height);
@@ -850,53 +827,51 @@ nsPrintOptions::WritePrefs(nsIPrintSettings *aPS, const nsAString& aPrinterName,
         }
   }
 
-  if (persistMarginBoxSettings) {
-    if (aFlags & nsIPrintSettings::kInitSaveHeaderLeft) {
-      if (NS_SUCCEEDED(aPS->GetHeaderStrLeft(&uStr))) {
-        DUMP_STR(kWriteStr, kPrintHeaderStrLeft, uStr);
-        Preferences::SetString(GetPrefName(kPrintHeaderStrLeft, aPrinterName),
-                               uStr);
-      }
+  if (aFlags & nsIPrintSettings::kInitSaveHeaderLeft) {
+    if (NS_SUCCEEDED(aPS->GetHeaderStrLeft(&uStr))) {
+      DUMP_STR(kWriteStr, kPrintHeaderStrLeft, uStr);
+      Preferences::SetString(GetPrefName(kPrintHeaderStrLeft, aPrinterName),
+                             uStr);
     }
+  }
 
-    if (aFlags & nsIPrintSettings::kInitSaveHeaderCenter) {
-      if (NS_SUCCEEDED(aPS->GetHeaderStrCenter(&uStr))) {
-        DUMP_STR(kWriteStr, kPrintHeaderStrCenter, uStr);
-        Preferences::SetString(GetPrefName(kPrintHeaderStrCenter, aPrinterName),
-                               uStr);
-      }
+  if (aFlags & nsIPrintSettings::kInitSaveHeaderCenter) {
+    if (NS_SUCCEEDED(aPS->GetHeaderStrCenter(&uStr))) {
+      DUMP_STR(kWriteStr, kPrintHeaderStrCenter, uStr);
+      Preferences::SetString(GetPrefName(kPrintHeaderStrCenter, aPrinterName),
+                             uStr);
     }
+  }
 
-    if (aFlags & nsIPrintSettings::kInitSaveHeaderRight) {
-      if (NS_SUCCEEDED(aPS->GetHeaderStrRight(&uStr))) {
-        DUMP_STR(kWriteStr, kPrintHeaderStrRight, uStr);
-        Preferences::SetString(GetPrefName(kPrintHeaderStrRight, aPrinterName),
-                               uStr);
-      }
+  if (aFlags & nsIPrintSettings::kInitSaveHeaderRight) {
+    if (NS_SUCCEEDED(aPS->GetHeaderStrRight(&uStr))) {
+      DUMP_STR(kWriteStr, kPrintHeaderStrRight, uStr);
+      Preferences::SetString(GetPrefName(kPrintHeaderStrRight, aPrinterName),
+                             uStr);
     }
+  }
 
-    if (aFlags & nsIPrintSettings::kInitSaveFooterLeft) {
-      if (NS_SUCCEEDED(aPS->GetFooterStrLeft(&uStr))) {
-        DUMP_STR(kWriteStr, kPrintFooterStrLeft, uStr);
-        Preferences::SetString(GetPrefName(kPrintFooterStrLeft, aPrinterName),
-                               uStr);
-      }
+  if (aFlags & nsIPrintSettings::kInitSaveFooterLeft) {
+    if (NS_SUCCEEDED(aPS->GetFooterStrLeft(&uStr))) {
+      DUMP_STR(kWriteStr, kPrintFooterStrLeft, uStr);
+      Preferences::SetString(GetPrefName(kPrintFooterStrLeft, aPrinterName),
+                             uStr);
     }
+  }
 
-    if (aFlags & nsIPrintSettings::kInitSaveFooterCenter) {
-      if (NS_SUCCEEDED(aPS->GetFooterStrCenter(&uStr))) {
-        DUMP_STR(kWriteStr, kPrintFooterStrCenter, uStr);
-        Preferences::SetString(GetPrefName(kPrintFooterStrCenter, aPrinterName),
-                               uStr);
-      }
+  if (aFlags & nsIPrintSettings::kInitSaveFooterCenter) {
+    if (NS_SUCCEEDED(aPS->GetFooterStrCenter(&uStr))) {
+      DUMP_STR(kWriteStr, kPrintFooterStrCenter, uStr);
+      Preferences::SetString(GetPrefName(kPrintFooterStrCenter, aPrinterName),
+                             uStr);
     }
+  }
 
-    if (aFlags & nsIPrintSettings::kInitSaveFooterRight) {
-      if (NS_SUCCEEDED(aPS->GetFooterStrRight(&uStr))) {
-        DUMP_STR(kWriteStr, kPrintFooterStrRight, uStr);
-        Preferences::SetString(GetPrefName(kPrintFooterStrRight, aPrinterName),
-                               uStr);
-      }
+  if (aFlags & nsIPrintSettings::kInitSaveFooterRight) {
+    if (NS_SUCCEEDED(aPS->GetFooterStrRight(&uStr))) {
+      DUMP_STR(kWriteStr, kPrintFooterStrRight, uStr);
+      Preferences::SetString(GetPrefName(kPrintFooterStrRight, aPrinterName),
+                             uStr);
     }
   }
 
@@ -928,13 +903,6 @@ nsPrintOptions::WritePrefs(nsIPrintSettings *aPS, const nsAString& aPrinterName,
     }
   }
 
-  if (aFlags & nsIPrintSettings::kInitSavePlexName) {
-    if (NS_SUCCEEDED(aPS->GetPlexName(&uStr))) {
-      DUMP_STR(kWriteStr, kPrintPlexName, uStr);
-      Preferences::SetString(GetPrefName(kPrintPlexName, aPrinterName), uStr);
-    }
-  }
-
   if (aFlags & nsIPrintSettings::kInitSavePaperData) {
     if (NS_SUCCEEDED(aPS->GetPaperData(&iVal16))) {
       DUMP_INT(kWriteStr, kPrintPaperData, iVal16);
@@ -943,39 +911,10 @@ nsPrintOptions::WritePrefs(nsIPrintSettings *aPS, const nsAString& aPrinterName,
     }
   }
 
-  if (aFlags & nsIPrintSettings::kInitSaveColorspace) {
-    if (NS_SUCCEEDED(aPS->GetColorspace(&uStr))) {
-      DUMP_STR(kWriteStr, kPrintColorspace, uStr);
-      Preferences::SetString(GetPrefName(kPrintColorspace, aPrinterName), uStr);
-    }
-  }
-
-  if (aFlags & nsIPrintSettings::kInitSaveResolutionName) {
-    if (NS_SUCCEEDED(aPS->GetResolutionName(&uStr))) {
-      DUMP_STR(kWriteStr, kPrintResolutionName, uStr);
-      Preferences::SetString(GetPrefName(kPrintResolutionName, aPrinterName),
-                             uStr);
-    }
-  }
-
-  if (aFlags & nsIPrintSettings::kInitSaveDownloadFonts) {
-    if (NS_SUCCEEDED(aPS->GetDownloadFonts(&b))) {
-      DUMP_BOOL(kWriteStr, kPrintDownloadFonts, b);
-      Preferences::SetBool(GetPrefName(kPrintDownloadFonts, aPrinterName), b);
-    }
-  }
-
   if (aFlags & nsIPrintSettings::kInitSaveOrientation) {
     if (NS_SUCCEEDED(aPS->GetOrientation(&iVal))) {
       DUMP_INT(kWriteStr, kPrintOrientation, iVal);
       Preferences::SetInt(GetPrefName(kPrintOrientation, aPrinterName), iVal);
-    }
-  }
-
-  if (aFlags & nsIPrintSettings::kInitSavePrintCommand) {
-    if (NS_SUCCEEDED(aPS->GetPrintCommand(&uStr))) {
-      DUMP_STR(kWriteStr, kPrintCommand, uStr);
-      Preferences::SetString(GetPrefName(kPrintCommand, aPrinterName), uStr);
     }
   }
 
@@ -1297,6 +1236,15 @@ nsPrintOptions::SavePrintSettingsToPrefs(nsIPrintSettings *aPS,
                                          uint32_t aFlags)
 {
   NS_ENSURE_ARG_POINTER(aPS);
+
+  if (GeckoProcessType_Content == XRE_GetProcessType()) {
+    // If we're in the content process, we can't directly write to the
+    // Preferences service - we have to proxy the save up to the
+    // parent process.
+    RefPtr<nsPrintingProxy> proxy = nsPrintingProxy::GetInstance();
+    return proxy->SavePrintSettings(aPS, aUsePrinterNamePrefix, aFlags);
+  }
+
   nsAutoString prtName;
 
   // Do not use printer name in Linux because GTK backend does not support
@@ -1465,8 +1413,6 @@ Tester::Tester()
     ps->SetFooterStrCenter(NS_ConvertUTF8toUTF16("Center").get());
     ps->SetFooterStrRight(NS_ConvertUTF8toUTF16("Right").get());
     ps->SetPaperName(NS_ConvertUTF8toUTF16("Paper Name").get());
-    ps->SetPlexName(NS_ConvertUTF8toUTF16("Plex Name").get());
-    ps->SetPaperSizeType(10);
     ps->SetPaperData(1);
     ps->SetPaperWidth(100.0);
     ps->SetPaperHeight(50.0);
@@ -1474,7 +1420,6 @@ Tester::Tester()
     ps->SetPrintReversed(true);
     ps->SetPrintInColor(true);
     ps->SetOrientation(nsIPrintSettings::kLandscapeOrientation);
-    ps->SetPrintCommand(NS_ConvertUTF8toUTF16("Command").get());
     ps->SetNumCopies(2);
     ps->SetPrinterName(NS_ConvertUTF8toUTF16("Printer Name").get());
     ps->SetPrintToFile(true);
@@ -1498,15 +1443,10 @@ Tester::Tester()
       {kPrintBGImages, nsIPrintSettings::kInitSaveBGImages},
       {kPrintShrinkToFit, nsIPrintSettings::kInitSaveShrinkToFit},
       {kPrintPaperSize, nsIPrintSettings::kInitSavePaperSize},
-      {kPrintPlexName, nsIPrintSettings::kInitSavePlexName},
       {kPrintPaperData, nsIPrintSettings::kInitSavePaperData},
       {kPrintReversed, nsIPrintSettings::kInitSaveReversed},
       {kPrintInColor, nsIPrintSettings::kInitSaveInColor},
-      {kPrintColorspace, nsIPrintSettings::kInitSaveColorspace},
-      {kPrintResolutionName, nsIPrintSettings::kInitSaveResolutionName},
-      {kPrintDownloadFonts, nsIPrintSettings::kInitSaveDownloadFonts},
       {kPrintOrientation, nsIPrintSettings::kInitSaveOrientation},
-      {kPrintCommand, nsIPrintSettings::kInitSavePrintCommand},
       {kPrinterName, nsIPrintSettings::kInitSavePrinterName},
       {kPrintToFile, nsIPrintSettings::kInitSavePrintToFile},
       {kPrintToFileName, nsIPrintSettings::kInitSaveToFileName},

@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,100 +9,27 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/dom/BrowserElementBinding.h"
+#include "mozilla/dom/BrowserElementAudioChannel.h"
 #include "mozilla/dom/DOMRequest.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/ToJSValue.h"
 
+#include "AudioChannelService.h"
+
+#include "mozIApplication.h"
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsFrameLoader.h"
+#include "nsIAppsService.h"
 #include "nsIDOMDOMRequest.h"
 #include "nsIDOMElement.h"
+#include "nsIMozBrowserFrame.h"
 #include "nsINode.h"
-#include "nsIObserver.h"
-#include "nsIObserverService.h"
 #include "nsIPrincipal.h"
-#include "nsWeakReference.h"
 
 using namespace mozilla::dom;
 
 namespace mozilla {
-
-static const char kRemoteBrowserPending[] = "remote-browser-pending";
-static const char kInprocessBrowserShown[] = "inprocess-browser-shown";
-
-class nsBrowserElement::BrowserShownObserver : public nsIObserver
-                                             , public nsSupportsWeakReference
-{
-public:
-  explicit BrowserShownObserver(nsBrowserElement* aBrowserElement);
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIOBSERVER
-  void AddObserver();
-  void RemoveObserver();
-private:
-  virtual ~BrowserShownObserver();
-
-  // Weak reference to the browser element. nsBrowserElement has a
-  // reference to us. nsBrowserElement's destructor is responsible to
-  // null out this weak reference via RemoveObserver()
-  nsBrowserElement* mBrowserElement;
-};
-
-NS_IMPL_ISUPPORTS(nsBrowserElement::BrowserShownObserver, nsIObserver, nsISupportsWeakReference)
-
-nsBrowserElement::BrowserShownObserver::BrowserShownObserver(nsBrowserElement* aBrowserElement)
-  : mBrowserElement(aBrowserElement)
-{
-}
-
-nsBrowserElement::BrowserShownObserver::~BrowserShownObserver()
-{
-  RemoveObserver();
-}
-
-NS_IMETHODIMP
-nsBrowserElement::BrowserShownObserver::Observe(nsISupports* aSubject,
-                                                const char* aTopic,
-                                                const char16_t* aData)
-{
-  NS_ENSURE_TRUE(mBrowserElement, NS_OK);
-
-  if (!strcmp(aTopic, kRemoteBrowserPending) ||
-      !strcmp(aTopic, kInprocessBrowserShown)) {
-    nsCOMPtr<nsIFrameLoader> frameLoader = do_QueryInterface(aSubject);
-    nsCOMPtr<nsIFrameLoader> myFrameLoader = mBrowserElement->GetFrameLoader();
-    // The browser element API needs the frameloader to
-    // initialize. We still use the observer to get notified when the
-    // frameloader is created. So we check if the frameloader created
-    // is ours, then initialize the browser element API.
-    if (frameLoader && frameLoader == myFrameLoader) {
-      mBrowserElement->InitBrowserElementAPI();
-    }
-  }
-  return NS_OK;
-}
-
-void
-nsBrowserElement::BrowserShownObserver::AddObserver()
-{
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (obs) {
-    obs->AddObserver(this, kRemoteBrowserPending, true);
-    obs->AddObserver(this, kInprocessBrowserShown, true);
-  }
-}
-
-void
-nsBrowserElement::BrowserShownObserver::RemoveObserver()
-{
-  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-  if (obs) {
-    obs->RemoveObserver(this, kRemoteBrowserPending);
-    obs->RemoveObserver(this, kInprocessBrowserShown);
-  }
-  mBrowserElement = nullptr;
-}
 
 bool
 nsBrowserElement::IsBrowserElementOrThrow(ErrorResult& aRv)
@@ -127,34 +54,25 @@ nsBrowserElement::IsNotWidgetOrThrow(ErrorResult& aRv)
 void
 nsBrowserElement::InitBrowserElementAPI()
 {
-  bool isBrowserOrApp;
+  bool isMozBrowserOrApp;
   nsCOMPtr<nsIFrameLoader> frameLoader = GetFrameLoader();
   NS_ENSURE_TRUE_VOID(frameLoader);
-  nsresult rv = frameLoader->GetOwnerIsBrowserOrAppFrame(&isBrowserOrApp);
+  nsresult rv = frameLoader->GetOwnerIsMozBrowserOrAppFrame(&isMozBrowserOrApp);
   NS_ENSURE_SUCCESS_VOID(rv);
   rv = frameLoader->GetOwnerIsWidget(&mOwnerIsWidget);
   NS_ENSURE_SUCCESS_VOID(rv);
 
-  if (!isBrowserOrApp) {
+  if (!isMozBrowserOrApp) {
     return;
   }
 
-  mBrowserElementAPI = do_CreateInstance("@mozilla.org/dom/browser-element-api;1");
-  if (mBrowserElementAPI) {
-    mBrowserElementAPI->SetFrameLoader(frameLoader);
+  if (!mBrowserElementAPI) {
+    mBrowserElementAPI = do_CreateInstance("@mozilla.org/dom/browser-element-api;1");
+    if (NS_WARN_IF(!mBrowserElementAPI)) {
+      return;
+    }
   }
-}
-
-nsBrowserElement::nsBrowserElement()
-  : mOwnerIsWidget(false)
-{
-  mObserver = new BrowserShownObserver(this);
-  mObserver->AddObserver();
-}
-
-nsBrowserElement::~nsBrowserElement()
-{
-  mObserver->RemoveObserver();
+  mBrowserElementAPI->SetFrameLoader(frameLoader);
 }
 
 void
@@ -347,8 +265,9 @@ nsBrowserElement::Download(const nsAString& aUrl,
   jsapi.Init(wrappedObj->GetJSObject());
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> options(cx);
+  aRv.MightThrowJSException();
   if (!ToJSValue(cx, aOptions, &options)) {
-    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+    aRv.StealExceptionFromJSContext(cx);
     return nullptr;
   }
   nsresult rv = mBrowserElementAPI->Download(aUrl, options, getter_AddRefs(req));
@@ -468,6 +387,62 @@ nsBrowserElement::GetContentDimensions(ErrorResult& aRv)
 }
 
 void
+nsBrowserElement::FindAll(const nsAString& aSearchString,
+                          BrowserFindCaseSensitivity aCaseSensitivity,
+                          ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+  NS_ENSURE_TRUE_VOID(IsNotWidgetOrThrow(aRv));
+
+  uint32_t caseSensitivity;
+  if (aCaseSensitivity == BrowserFindCaseSensitivity::Case_insensitive) {
+    caseSensitivity = nsIBrowserElementAPI::FIND_CASE_INSENSITIVE;
+  } else {
+    caseSensitivity = nsIBrowserElementAPI::FIND_CASE_SENSITIVE;
+  }
+
+  nsresult rv = mBrowserElementAPI->FindAll(aSearchString, caseSensitivity);
+
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+  }
+}
+
+void
+nsBrowserElement::FindNext(BrowserFindDirection aDirection,
+                          ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+  NS_ENSURE_TRUE_VOID(IsNotWidgetOrThrow(aRv));
+
+  uint32_t direction;
+  if (aDirection == BrowserFindDirection::Backward) {
+    direction = nsIBrowserElementAPI::FIND_BACKWARD;
+  } else {
+    direction = nsIBrowserElementAPI::FIND_FORWARD;
+  }
+
+  nsresult rv = mBrowserElementAPI->FindNext(direction);
+
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+  }
+}
+
+void
+nsBrowserElement::ClearMatch(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+  NS_ENSURE_TRUE_VOID(IsNotWidgetOrThrow(aRv));
+
+  nsresult rv = mBrowserElementAPI->ClearMatch();
+
+  if (NS_FAILED(rv)) {
+    aRv.Throw(rv);
+  }
+}
+
+void
 nsBrowserElement::AddNextPaintListener(BrowserElementNextPaintEventCallback& aListener,
                                        ErrorResult& aRv)
 {
@@ -507,29 +482,9 @@ nsBrowserElement::SetInputMethodActive(bool aIsActive,
 {
   NS_ENSURE_TRUE(IsBrowserElementOrThrow(aRv), nullptr);
 
-  nsCOMPtr<nsIFrameLoader> frameLoader = GetFrameLoader();
-  if (!frameLoader) {
-    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
-    return nullptr;
-  }
-
-  nsCOMPtr<nsIDOMElement> ownerElement;
-  nsresult rv = frameLoader->GetOwnerElement(getter_AddRefs(ownerElement));
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return nullptr;
-  }
-
-  nsCOMPtr<nsINode> node = do_QueryInterface(ownerElement);
-  nsCOMPtr<nsIPrincipal> principal = node->NodePrincipal();
-  if (!nsContentUtils::IsExactSitePermAllow(principal, "input-manage")) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
-    return nullptr;
-  }
-
   nsCOMPtr<nsIDOMDOMRequest> req;
-  rv = mBrowserElementAPI->SetInputMethodActive(aIsActive,
-                                                getter_AddRefs(req));
+  nsresult rv = mBrowserElementAPI->SetInputMethodActive(aIsActive,
+                                                         getter_AddRefs(req));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     if (rv == NS_ERROR_INVALID_ARG) {
       aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
@@ -541,5 +496,327 @@ nsBrowserElement::SetInputMethodActive(bool aIsActive,
 
   return req.forget().downcast<DOMRequest>();
 }
+
+void
+nsBrowserElement::GetAllowedAudioChannels(
+                 nsTArray<RefPtr<BrowserElementAudioChannel>>& aAudioChannels,
+                 ErrorResult& aRv)
+{
+  aAudioChannels.Clear();
+
+  // If empty, it means that this is the first call of this method.
+  if (mBrowserElementAudioChannels.IsEmpty()) {
+    nsCOMPtr<nsIFrameLoader> frameLoader = GetFrameLoader();
+    if (NS_WARN_IF(!frameLoader)) {
+      return;
+    }
+
+    bool isMozBrowserOrApp;
+    aRv = frameLoader->GetOwnerIsMozBrowserOrAppFrame(&isMozBrowserOrApp);
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+
+    if (!isMozBrowserOrApp) {
+      return;
+    }
+
+    nsCOMPtr<nsIDOMElement> frameElement;
+    aRv = frameLoader->GetOwnerElement(getter_AddRefs(frameElement));
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+
+    MOZ_ASSERT(frameElement);
+
+    nsCOMPtr<nsIDOMDocument> doc;
+    aRv = frameElement->GetOwnerDocument(getter_AddRefs(doc));
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+
+    MOZ_ASSERT(doc);
+
+    nsCOMPtr<mozIDOMWindowProxy> win;
+    aRv = doc->GetDefaultView(getter_AddRefs(win));
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+
+    MOZ_ASSERT(win);
+
+    auto* window = nsPIDOMWindowOuter::From(win);
+    nsPIDOMWindowInner* innerWindow = window->GetCurrentInnerWindow();
+
+    nsCOMPtr<nsIMozBrowserFrame> mozBrowserFrame =
+      do_QueryInterface(frameElement);
+    if (NS_WARN_IF(!mozBrowserFrame)) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return;
+    }
+
+    nsAutoString manifestURL;
+    aRv = mozBrowserFrame->GetAppManifestURL(manifestURL);
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+
+    nsCOMPtr<mozIApplication> parentApp;
+    aRv = GetParentApplication(getter_AddRefs(parentApp));
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+
+    MOZ_LOG(AudioChannelService::GetAudioChannelLog(), LogLevel::Debug,
+            ("nsBrowserElement, GetAllowedAudioChannels, this = %p\n", this));
+
+    GenerateAllowedAudioChannels(innerWindow, frameLoader, mBrowserElementAPI,
+                                 manifestURL, parentApp,
+                                 mBrowserElementAudioChannels, aRv);
+    if (NS_WARN_IF(aRv.Failed())) {
+      return;
+    }
+  }
+
+  aAudioChannels.AppendElements(mBrowserElementAudioChannels);
+}
+
+/* static */ void
+nsBrowserElement::GenerateAllowedAudioChannels(
+                 nsPIDOMWindowInner* aWindow,
+                 nsIFrameLoader* aFrameLoader,
+                 nsIBrowserElementAPI* aAPI,
+                 const nsAString& aManifestURL,
+                 mozIApplication* aParentApp,
+                 nsTArray<RefPtr<BrowserElementAudioChannel>>& aAudioChannels,
+                 ErrorResult& aRv)
+{
+  MOZ_ASSERT(aAudioChannels.IsEmpty());
+
+  nsCOMPtr<nsIAppsService> appsService =
+    do_GetService("@mozilla.org/AppsService;1");
+  if (NS_WARN_IF(!appsService)) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return;
+  }
+
+  nsCOMPtr<mozIApplication> app;
+  aRv = appsService->GetAppByManifestURL(aManifestURL, getter_AddRefs(app));
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  // Normal is always allowed.
+  nsTArray<RefPtr<BrowserElementAudioChannel>> channels;
+
+  RefPtr<BrowserElementAudioChannel> ac =
+    BrowserElementAudioChannel::Create(aWindow, aFrameLoader, aAPI,
+                                       AudioChannel::Normal,
+                                       aManifestURL, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  channels.AppendElement(ac);
+
+  if (app) {
+    const nsAttrValue::EnumTable* audioChannelTable =
+      AudioChannelService::GetAudioChannelTable();
+
+    bool allowed;
+    nsAutoCString permissionName;
+
+    for (uint32_t i = 0; audioChannelTable && audioChannelTable[i].tag; ++i) {
+      permissionName.AssignASCII("audio-channel-");
+      permissionName.AppendASCII(audioChannelTable[i].tag);
+
+      // In case of nested iframes we want to check if the parent has the
+      // permission to use this AudioChannel.
+      if (aParentApp) {
+        aRv = aParentApp->HasPermission(permissionName.get(), &allowed);
+        if (NS_WARN_IF(aRv.Failed())) {
+          return;
+        }
+
+        if (!allowed) {
+          continue;
+        }
+      }
+
+      aRv = app->HasPermission(permissionName.get(), &allowed);
+      if (NS_WARN_IF(aRv.Failed())) {
+        return;
+      }
+
+      if (allowed) {
+        RefPtr<BrowserElementAudioChannel> ac =
+          BrowserElementAudioChannel::Create(aWindow, aFrameLoader, aAPI,
+                                             (AudioChannel)audioChannelTable[i].value,
+                                             aManifestURL, aRv);
+        if (NS_WARN_IF(aRv.Failed())) {
+          return;
+        }
+
+        channels.AppendElement(ac);
+      }
+    }
+  }
+
+  aAudioChannels.SwapElements(channels);
+}
+
+already_AddRefed<DOMRequest>
+nsBrowserElement::GetMuted(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE(IsBrowserElementOrThrow(aRv), nullptr);
+  NS_ENSURE_TRUE(IsNotWidgetOrThrow(aRv), nullptr);
+
+  nsCOMPtr<nsIDOMDOMRequest> req;
+  nsresult rv = mBrowserElementAPI->GetMuted(getter_AddRefs(req));
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
+  return req.forget().downcast<DOMRequest>();
+}
+
+void
+nsBrowserElement::Mute(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+  NS_ENSURE_TRUE_VOID(IsNotWidgetOrThrow(aRv));
+
+  nsresult rv = mBrowserElementAPI->Mute();
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+  }
+}
+
+void
+nsBrowserElement::Unmute(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+  NS_ENSURE_TRUE_VOID(IsNotWidgetOrThrow(aRv));
+
+  nsresult rv = mBrowserElementAPI->Unmute();
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+  }
+}
+
+already_AddRefed<DOMRequest>
+nsBrowserElement::GetVolume(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE(IsBrowserElementOrThrow(aRv), nullptr);
+  NS_ENSURE_TRUE(IsNotWidgetOrThrow(aRv), nullptr);
+
+  nsCOMPtr<nsIDOMDOMRequest> req;
+  nsresult rv = mBrowserElementAPI->GetVolume(getter_AddRefs(req));
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
+  return req.forget().downcast<DOMRequest>();
+}
+
+void
+nsBrowserElement::SetVolume(float aVolume, ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+  NS_ENSURE_TRUE_VOID(IsNotWidgetOrThrow(aRv));
+
+  nsresult rv = mBrowserElementAPI->SetVolume(aVolume);
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+  }
+}
+
+void
+nsBrowserElement::SetNFCFocus(bool aIsFocus,
+                              ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE_VOID(IsBrowserElementOrThrow(aRv));
+
+  nsresult rv = mBrowserElementAPI->SetNFCFocus(aIsFocus);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+  }
+}
+
+already_AddRefed<DOMRequest>
+nsBrowserElement::ExecuteScript(const nsAString& aScript,
+                                const BrowserElementExecuteScriptOptions& aOptions,
+                                ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE(IsBrowserElementOrThrow(aRv), nullptr);
+  NS_ENSURE_TRUE(IsNotWidgetOrThrow(aRv), nullptr);
+
+  nsCOMPtr<nsIDOMDOMRequest> req;
+  nsCOMPtr<nsIXPConnectWrappedJS> wrappedObj = do_QueryInterface(mBrowserElementAPI);
+  MOZ_ASSERT(wrappedObj, "Failed to get wrapped JS from XPCOM component.");
+  AutoJSAPI jsapi;
+  jsapi.Init(wrappedObj->GetJSObject());
+  JSContext* cx = jsapi.cx();
+  JS::Rooted<JS::Value> options(cx);
+  aRv.MightThrowJSException();
+  if (!ToJSValue(cx, aOptions, &options)) {
+    aRv.StealExceptionFromJSContext(cx);
+    return nullptr;
+  }
+
+  nsresult rv = mBrowserElementAPI->ExecuteScript(aScript, options, getter_AddRefs(req));
+
+  if (NS_FAILED(rv)) {
+    if (rv == NS_ERROR_INVALID_ARG) {
+      aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
+    } else {
+      aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    }
+    return nullptr;
+  }
+
+  return req.forget().downcast<DOMRequest>();
+}
+
+already_AddRefed<DOMRequest>
+nsBrowserElement::GetStructuredData(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE(IsBrowserElementOrThrow(aRv), nullptr);
+
+  nsCOMPtr<nsIDOMDOMRequest> req;
+  nsresult rv = mBrowserElementAPI->GetStructuredData(getter_AddRefs(req));
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
+  return req.forget().downcast<DOMRequest>();
+}
+
+already_AddRefed<DOMRequest>
+nsBrowserElement::GetWebManifest(ErrorResult& aRv)
+{
+  NS_ENSURE_TRUE(IsBrowserElementOrThrow(aRv), nullptr);
+
+  nsCOMPtr<nsIDOMDOMRequest> req;
+  nsresult rv = mBrowserElementAPI->GetWebManifest(getter_AddRefs(req));
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
+  return req.forget().downcast<DOMRequest>();
+}
+
+
 
 } // namespace mozilla

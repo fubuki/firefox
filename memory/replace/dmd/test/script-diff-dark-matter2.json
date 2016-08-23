@@ -1,28 +1,18 @@
 {
- "version": 3,
+ "version": 5,
  "invocation": {
-  "dmdEnvVar": "--sample-below=63",
-  "mode": "dark-matter",
-  "sampleBelowSize": 63
+  "dmdEnvVar": null,
+  "mode": "dark-matter"
  },
  "blockList": [
-  {"req": 4096, "alloc": "A"},
-  {"req": 4096, "alloc": "A"},
-  {"req": 4096, "alloc": "A"},
-  {"req": 4096, "alloc": "A"},
+  {"req": 4096, "alloc": "A", "num": 4},
 
   {"req": 8192, "alloc": "B"},
   {"req": 8192, "alloc": "B"},
 
-  {"req": 4000, "slop": 96, "alloc": "C"},
-  {"req": 4000, "slop": 96, "alloc": "C"},
-  {"req": 4000, "slop": 96, "alloc": "C"},
-  {"req": 4000, "slop": 96, "alloc": "C"},
+  {"req": 4000, "slop": 96, "alloc": "C", "num": 4},
 
-  {"req": 4096, "alloc": "E"},
-  {"req": 4096, "alloc": "E"},
-  {"req": 4096, "alloc": "E"},
-  {"req": 4096, "alloc": "E"},
+  {"req": 4096, "alloc": "E", "num": 4},
 
   {"req": 2000, "slop": 48, "alloc": "F"},
   {"req": 1000, "slop": 24, "alloc": "F", "reps": ["R1"]},
@@ -31,16 +21,12 @@
   {"req": 512,              "alloc": "F"},
   {"req": 512,              "alloc": "F"},
   {"req": 128,              "alloc": "F"},
-  {                         "alloc": "F", "reps": ["R1", "R2"]},
-  {"req": 64,               "alloc": "F"},
-  {"req": 64,               "alloc": "F"},
-  {"req": 64,               "alloc": "F"},
-  {"req": 64,               "alloc": "F"},
-  {                         "alloc": "F"},
+  {"req": 63,               "alloc": "F", "reps": ["R1", "R2"]},
+  {"req": 64,               "alloc": "F", "num": 4},
+  {"req": 63,               "alloc": "F"},
 
-  {"req": 4096,            "alloc": "G"},
-  {"req": 4096,            "alloc": "G"},
-  {"req": 20480,           "alloc": "G"}
+  {"req": 4096, "num": 2 },
+  {"req": 20480 }
  ],
  "traceTable": {
   "A": ["AA"],
@@ -49,7 +35,6 @@
   "D": ["DD"],
   "E": ["EE"],
   "F": ["FF"],
-  "G": ["GG"],
   "R1": ["RR1"],
   "R2": ["RR2"]
  },
@@ -60,7 +45,6 @@
   "DD": "#00: D (D.cpp:99)",
   "EE": "#00: E (E.cpp:99)",
   "FF": "#00: F (F.cpp:99)",
-  "GG": "#00: G (G.cpp:99)",
   "RR1": "#00: R1 (R1.cpp:99)",
   "RR2": "#00: R2 (R2.cpp:99)"
  }

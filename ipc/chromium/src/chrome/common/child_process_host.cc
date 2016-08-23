@@ -74,7 +74,7 @@ ChildProcessHost::~ChildProcessHost() {
 }
 
 bool ChildProcessHost::CreateChannel() {
-  channel_id_ = GenerateRandomChannelID(this);
+  channel_id_ = IPC::Channel::GenerateVerifiedChannelID(std::wstring());
   channel_.reset(new IPC::Channel(
       channel_id_, IPC::Channel::MODE_SERVER, &listener_));
   if (!channel_->Connect())
@@ -154,13 +154,13 @@ ChildProcessHost::ListenerHook::ListenerHook(ChildProcessHost* host)
 }
 
 void ChildProcessHost::ListenerHook::OnMessageReceived(
-    const IPC::Message& msg) {
+    IPC::Message&& msg) {
 
   bool msg_is_ok = true;
   bool handled = false;
 
   if (!handled) {
-      host_->OnMessageReceived(msg);
+      host_->OnMessageReceived(mozilla::Move(msg));
   }
 
   if (!msg_is_ok)

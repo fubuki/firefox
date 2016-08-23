@@ -4,48 +4,46 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "nsUrlClassifierPrefixSet.h"
+#include "nsIUrlClassifierPrefixSet.h"
 #include "nsCOMPtr.h"
 #include "nsDebug.h"
 #include "nsPrintfCString.h"
 #include "nsTArray.h"
 #include "nsString.h"
-#include "nsUrlClassifierPrefixSet.h"
-#include "nsIUrlClassifierPrefixSet.h"
 #include "nsIFile.h"
 #include "nsToolkitCompsCID.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
+#include "nsNetUtil.h"
+#include "nsISeekableStream.h"
+#include "nsIBufferedStreams.h"
+#include "nsIFileStreams.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/FileUtils.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
+#include "mozilla/unused.h"
+#include <algorithm>
 
 using namespace mozilla;
 
 // NSPR_LOG_MODULES=UrlClassifierPrefixSet:5
-#if defined(PR_LOGGING)
-static const PRLogModuleInfo *gUrlClassifierPrefixSetLog = nullptr;
-#define LOG(args) PR_LOG(gUrlClassifierPrefixSetLog, PR_LOG_DEBUG, args)
-#define LOG_ENABLED() PR_LOG_TEST(gUrlClassifierPrefixSetLog, 4)
-#else
-#define LOG(args)
-#define LOG_ENABLED() (false)
-#endif
+static LazyLogModule gUrlClassifierPrefixSetLog("UrlClassifierPrefixSet");
+#define LOG(args) MOZ_LOG(gUrlClassifierPrefixSetLog, mozilla::LogLevel::Debug, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(gUrlClassifierPrefixSetLog, mozilla::LogLevel::Debug)
 
 NS_IMPL_ISUPPORTS(
   nsUrlClassifierPrefixSet, nsIUrlClassifierPrefixSet, nsIMemoryReporter)
 
-MOZ_DEFINE_MALLOC_SIZE_OF(UrlClassifierMallocSizeOf)
+// Definition required due to std::max<>()
+const uint32_t nsUrlClassifierPrefixSet::MAX_BUFFER_SIZE;
 
 nsUrlClassifierPrefixSet::nsUrlClassifierPrefixSet()
-  : mTotalPrefixes(0)
-  , mMemoryInUse(0)
+  : mLock("nsUrlClassifierPrefixSet.mLock")
+  , mTotalPrefixes(0)
   , mMemoryReportPath()
 {
-#if defined(PR_LOGGING)
-  if (!gUrlClassifierPrefixSetLog)
-    gUrlClassifierPrefixSetLog = PR_NewLogModule("UrlClassifierPrefixSet");
-#endif
 }
 
 NS_IMETHODIMP
@@ -70,6 +68,8 @@ nsUrlClassifierPrefixSet::~nsUrlClassifierPrefixSet()
 NS_IMETHODIMP
 nsUrlClassifierPrefixSet::SetPrefixes(const uint32_t* aArray, uint32_t aLength)
 {
+  MutexAutoLock lock(mLock);
+
   nsresult rv = NS_OK;
 
   if (aLength <= 0) {
@@ -83,14 +83,14 @@ nsUrlClassifierPrefixSet::SetPrefixes(const uint32_t* aArray, uint32_t aLength)
     rv = MakePrefixSet(aArray, aLength);
   }
 
-  mMemoryInUse = SizeOfIncludingThis(UrlClassifierMallocSizeOf);
-
   return rv;
 }
 
 nsresult
 nsUrlClassifierPrefixSet::MakePrefixSet(const uint32_t* aPrefixes, uint32_t aLength)
 {
+  mLock.AssertCurrentThreadOwns();
+
   if (aLength == 0) {
     return NS_OK;
   }
@@ -110,25 +110,29 @@ nsUrlClassifierPrefixSet::MakePrefixSet(const uint32_t* aPrefixes, uint32_t aLen
 
   uint32_t numOfDeltas = 0;
   uint32_t totalDeltas = 0;
-  uint32_t currentItem = aPrefixes[0];
+  uint32_t previousItem = aPrefixes[0];
   for (uint32_t i = 1; i < aLength; i++) {
     if ((numOfDeltas >= DELTAS_LIMIT) ||
-          (aPrefixes[i] - currentItem >= MAX_INDEX_DIFF)) {
+          (aPrefixes[i] - previousItem >= MAX_INDEX_DIFF)) {
+      // Compact the previous element.
+      // Note there is always at least one element when we get here,
+      // because we created the first element before the loop.
+      mIndexDeltas.LastElement().Compact();
       mIndexDeltas.AppendElement();
-      mIndexDeltas[mIndexDeltas.Length() - 1].Compact();
       mIndexPrefixes.AppendElement(aPrefixes[i]);
       numOfDeltas = 0;
     } else {
-      uint16_t delta = aPrefixes[i] - currentItem;
-      mIndexDeltas[mIndexDeltas.Length() - 1].AppendElement(delta);
+      uint16_t delta = aPrefixes[i] - previousItem;
+      mIndexDeltas.LastElement().AppendElement(delta);
       numOfDeltas++;
       totalDeltas++;
     }
-    currentItem = aPrefixes[i];
+    previousItem = aPrefixes[i];
   }
 
-  mIndexPrefixes.Compact();
+  mIndexDeltas.LastElement().Compact();
   mIndexDeltas.Compact();
+  mIndexPrefixes.Compact();
 
   LOG(("Total number of indices: %d", aLength));
   LOG(("Total number of deltas: %d", totalDeltas));
@@ -140,7 +144,9 @@ nsUrlClassifierPrefixSet::MakePrefixSet(const uint32_t* aPrefixes, uint32_t aLen
 nsresult
 nsUrlClassifierPrefixSet::GetPrefixesNative(FallibleTArray<uint32_t>& outArray)
 {
-  if (!outArray.SetLength(mTotalPrefixes)) {
+  MutexAutoLock lock(mLock);
+
+  if (!outArray.SetLength(mTotalPrefixes, fallible)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -165,6 +171,9 @@ NS_IMETHODIMP
 nsUrlClassifierPrefixSet::GetPrefixes(uint32_t* aCount,
                                       uint32_t** aPrefixes)
 {
+  // No need to get mLock here because this function does not directly touch
+  // the class's data members. (GetPrefixesNative() will get mLock, however.)
+
   NS_ENSURE_ARG_POINTER(aCount);
   *aCount = 0;
   NS_ENSURE_ARG_POINTER(aPrefixes);
@@ -177,7 +186,7 @@ nsUrlClassifierPrefixSet::GetPrefixes(uint32_t* aCount,
   }
 
   uint64_t itemCount = prefixes.Length();
-  uint32_t* prefixArray = static_cast<uint32_t*>(nsMemory::Alloc(itemCount * sizeof(uint32_t)));
+  uint32_t* prefixArray = static_cast<uint32_t*>(moz_xmalloc(itemCount * sizeof(uint32_t)));
   NS_ENSURE_TRUE(prefixArray, NS_ERROR_OUT_OF_MEMORY);
 
   memcpy(prefixArray, prefixes.Elements(), sizeof(uint32_t) * itemCount);
@@ -192,6 +201,8 @@ uint32_t nsUrlClassifierPrefixSet::BinSearch(uint32_t start,
                                              uint32_t end,
                                              uint32_t target)
 {
+  mLock.AssertCurrentThreadOwns();
+
   while (start != end && end >= start) {
     uint32_t i = start + ((end - start) >> 1);
     uint32_t value = mIndexPrefixes[i];
@@ -209,6 +220,8 @@ uint32_t nsUrlClassifierPrefixSet::BinSearch(uint32_t start,
 NS_IMETHODIMP
 nsUrlClassifierPrefixSet::Contains(uint32_t aPrefix, bool* aFound)
 {
+  MutexAutoLock lock(mLock);
+
   *aFound = false;
 
   if (mIndexPrefixes.Length() == 0) {
@@ -253,13 +266,21 @@ nsUrlClassifierPrefixSet::Contains(uint32_t aPrefix, bool* aFound)
   return NS_OK;
 }
 
+MOZ_DEFINE_MALLOC_SIZE_OF(UrlClassifierMallocSizeOf)
+
 NS_IMETHODIMP
 nsUrlClassifierPrefixSet::CollectReports(nsIHandleReportCallback* aHandleReport,
                                          nsISupports* aData, bool aAnonymize)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // No need to get mLock here because this function does not directly touch
+  // the class's data members. (SizeOfIncludingThis() will get mLock, however.)
+
+  size_t amount = SizeOfIncludingThis(UrlClassifierMallocSizeOf);
+
   return aHandleReport->Callback(
-    EmptyCString(), mMemoryReportPath, KIND_HEAP, UNITS_BYTES,
-    mMemoryInUse,
+    EmptyCString(), mMemoryReportPath, KIND_HEAP, UNITS_BYTES, amount,
     NS_LITERAL_CSTRING("Memory used by the prefix set for a URL classifier."),
     aData);
 }
@@ -267,40 +288,73 @@ nsUrlClassifierPrefixSet::CollectReports(nsIHandleReportCallback* aHandleReport,
 size_t
 nsUrlClassifierPrefixSet::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
 {
+  MutexAutoLock lock(mLock);
+
   size_t n = 0;
   n += aMallocSizeOf(this);
-  n += mIndexDeltas.SizeOfExcludingThis(aMallocSizeOf);
+  n += mIndexDeltas.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (uint32_t i = 0; i < mIndexDeltas.Length(); i++) {
-    n += mIndexDeltas[i].SizeOfExcludingThis(aMallocSizeOf);
+    n += mIndexDeltas[i].ShallowSizeOfExcludingThis(aMallocSizeOf);
   }
-  n += mIndexPrefixes.SizeOfExcludingThis(aMallocSizeOf);
+  n += mIndexPrefixes.ShallowSizeOfExcludingThis(aMallocSizeOf);
   return n;
 }
 
 NS_IMETHODIMP
 nsUrlClassifierPrefixSet::IsEmpty(bool * aEmpty)
 {
+  MutexAutoLock lock(mLock);
+
   *aEmpty = (mIndexPrefixes.Length() == 0);
   return NS_OK;
 }
 
-nsresult
-nsUrlClassifierPrefixSet::LoadFromFd(AutoFDClose& fileFd)
+NS_IMETHODIMP
+nsUrlClassifierPrefixSet::LoadFromFile(nsIFile* aFile)
 {
-  uint32_t magic;
-  int32_t read;
+  MutexAutoLock lock(mLock);
 
-  read = PR_Read(fileFd, &magic, sizeof(uint32_t));
+  Telemetry::AutoTimer<Telemetry::URLCLASSIFIER_PS_FILELOAD_TIME> timer;
+
+  nsCOMPtr<nsIInputStream> localInFile;
+  nsresult rv = NS_NewLocalFileInputStream(getter_AddRefs(localInFile), aFile,
+                                           PR_RDONLY | nsIFile::OS_READAHEAD);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Calculate how big the file is, make sure our read buffer isn't bigger
+  // than the file itself which is just wasting memory.
+  int64_t fileSize;
+  rv = aFile->GetFileSize(&fileSize);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (fileSize < 0 || fileSize > UINT32_MAX) {
+    return NS_ERROR_FAILURE;
+  }
+
+  uint32_t bufferSize = std::min<uint32_t>(static_cast<uint32_t>(fileSize),
+                                           MAX_BUFFER_SIZE);
+
+  // Convert to buffered stream
+  nsCOMPtr<nsIInputStream> in = NS_BufferInputStream(localInFile, bufferSize);
+
+  uint32_t magic;
+  uint32_t read;
+
+  rv = in->Read(reinterpret_cast<char*>(&magic), sizeof(uint32_t), &read);
+  NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(read == sizeof(uint32_t), NS_ERROR_FAILURE);
 
   if (magic == PREFIXSET_VERSION_MAGIC) {
     uint32_t indexSize;
     uint32_t deltaSize;
 
-    read = PR_Read(fileFd, &indexSize, sizeof(uint32_t));
-    NS_ENSURE_TRUE(read == sizeof(uint32_t), NS_ERROR_FILE_CORRUPTED);
-    read = PR_Read(fileFd, &deltaSize, sizeof(uint32_t));
-    NS_ENSURE_TRUE(read == sizeof(uint32_t), NS_ERROR_FILE_CORRUPTED);
+    rv = in->Read(reinterpret_cast<char*>(&indexSize), sizeof(uint32_t), &read);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(read == sizeof(uint32_t), NS_ERROR_FAILURE);
+
+    rv = in->Read(reinterpret_cast<char*>(&deltaSize), sizeof(uint32_t), &read);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(read == sizeof(uint32_t), NS_ERROR_FAILURE);
 
     if (indexSize == 0) {
       LOG(("stored PrefixSet is empty!"));
@@ -318,23 +372,31 @@ nsUrlClassifierPrefixSet::LoadFromFd(AutoFDClose& fileFd)
 
     mTotalPrefixes = indexSize;
 
-    int32_t toRead = indexSize*sizeof(uint32_t);
-    read = PR_Read(fileFd, mIndexPrefixes.Elements(), toRead);
-    NS_ENSURE_TRUE(read == toRead, NS_ERROR_FILE_CORRUPTED);
-    read = PR_Read(fileFd, indexStarts.Elements(), toRead);
-    NS_ENSURE_TRUE(read == toRead, NS_ERROR_FILE_CORRUPTED);
+    uint32_t toRead = indexSize*sizeof(uint32_t);
+    rv = in->Read(reinterpret_cast<char*>(mIndexPrefixes.Elements()), toRead, &read);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(read == toRead, NS_ERROR_FAILURE);
+
+    rv = in->Read(reinterpret_cast<char*>(indexStarts.Elements()), toRead, &read);
+    NS_ENSURE_SUCCESS(rv, rv);
+    NS_ENSURE_TRUE(read == toRead, NS_ERROR_FAILURE);
+
     if (indexSize != 0 && indexStarts[0] != 0) {
       return NS_ERROR_FILE_CORRUPTED;
     }
     for (uint32_t i = 0; i < indexSize; i++) {
       uint32_t numInDelta = i == indexSize - 1 ? deltaSize - indexStarts[i]
                                : indexStarts[i + 1] - indexStarts[i];
+      if (numInDelta > DELTAS_LIMIT) {
+        return NS_ERROR_FILE_CORRUPTED;
+      }
       if (numInDelta > 0) {
         mIndexDeltas[i].SetLength(numInDelta);
         mTotalPrefixes += numInDelta;
         toRead = numInDelta * sizeof(uint16_t);
-        read = PR_Read(fileFd, mIndexDeltas[i].Elements(), toRead);
-        NS_ENSURE_TRUE(read == toRead, NS_ERROR_FILE_CORRUPTED);
+        rv = in->Read(reinterpret_cast<char*>(mIndexDeltas[i].Elements()), toRead, &read);
+        NS_ENSURE_SUCCESS(rv, rv);
+        NS_ENSURE_TRUE(read == toRead, NS_ERROR_FAILURE);
       }
     }
   } else {
@@ -349,39 +411,40 @@ nsUrlClassifierPrefixSet::LoadFromFd(AutoFDClose& fileFd)
 }
 
 NS_IMETHODIMP
-nsUrlClassifierPrefixSet::LoadFromFile(nsIFile* aFile)
+nsUrlClassifierPrefixSet::StoreToFile(nsIFile* aFile)
 {
-  Telemetry::AutoTimer<Telemetry::URLCLASSIFIER_PS_FILELOAD_TIME> timer;
+  MutexAutoLock lock(mLock);
 
-  nsresult rv;
-  AutoFDClose fileFd;
-  rv = aFile->OpenNSPRFileDesc(PR_RDONLY | nsIFile::OS_READAHEAD,
-                               0, &fileFd.rwget());
-  if (!NS_FAILED(rv)) {
-    rv = LoadFromFd(fileFd);
-    mMemoryInUse = SizeOfIncludingThis(UrlClassifierMallocSizeOf);
-  }
+  nsCOMPtr<nsIOutputStream> localOutFile;
+  nsresult rv = NS_NewLocalFileOutputStream(getter_AddRefs(localOutFile), aFile,
+                                            PR_WRONLY | PR_TRUNCATE | PR_CREATE_FILE);
+  NS_ENSURE_SUCCESS(rv, rv);
 
-  return rv;
-}
+  uint32_t fileSize;
 
-nsresult
-nsUrlClassifierPrefixSet::StoreToFd(AutoFDClose& fileFd)
-{
+  // Preallocate the file storage
   {
-      Telemetry::AutoTimer<Telemetry::URLCLASSIFIER_PS_FALLOCATE_TIME> timer;
-      int64_t size = 4 * sizeof(uint32_t);
-      uint32_t deltas = mTotalPrefixes - mIndexPrefixes.Length();
-      size += 2 * mIndexPrefixes.Length() * sizeof(uint32_t);
-      size += deltas * sizeof(uint16_t);
+    nsCOMPtr<nsIFileOutputStream> fos(do_QueryInterface(localOutFile));
+    Telemetry::AutoTimer<Telemetry::URLCLASSIFIER_PS_FALLOCATE_TIME> timer;
+    fileSize = 4 * sizeof(uint32_t);
+    uint32_t deltas = mTotalPrefixes - mIndexPrefixes.Length();
+    fileSize += 2 * mIndexPrefixes.Length() * sizeof(uint32_t);
+    fileSize += deltas * sizeof(uint16_t);
 
-      mozilla::fallocate(fileFd, size);
+    // Ignore failure, the preallocation is a hint and we write out the entire
+    // file later on
+    Unused << fos->Preallocate(fileSize);
   }
 
-  int32_t written;
-  int32_t writelen = sizeof(uint32_t);
+  // Convert to buffered stream
+  nsCOMPtr<nsIOutputStream> out =
+    NS_BufferOutputStream(localOutFile, std::min(fileSize, MAX_BUFFER_SIZE));
+
+  uint32_t written;
+  uint32_t writelen = sizeof(uint32_t);
   uint32_t magic = PREFIXSET_VERSION_MAGIC;
-  written = PR_Write(fileFd, &magic, writelen);
+  rv = out->Write(reinterpret_cast<char*>(&magic), writelen, &written);
+  NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(written == writelen, NS_ERROR_FAILURE);
 
   uint32_t indexSize = mIndexPrefixes.Length();
@@ -402,20 +465,28 @@ nsUrlClassifierPrefixSet::StoreToFd(AutoFDClose& fileFd)
     indexStarts.AppendElement(totalDeltas);
   }
 
-  written = PR_Write(fileFd, &indexSize, writelen);
+  rv = out->Write(reinterpret_cast<char*>(&indexSize), writelen, &written);
+  NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(written == writelen, NS_ERROR_FAILURE);
-  written = PR_Write(fileFd, &totalDeltas, writelen);
+
+  rv = out->Write(reinterpret_cast<char*>(&totalDeltas), writelen, &written);
+  NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(written == writelen, NS_ERROR_FAILURE);
 
   writelen = indexSize * sizeof(uint32_t);
-  written = PR_Write(fileFd, mIndexPrefixes.Elements(), writelen);
+  rv = out->Write(reinterpret_cast<char*>(mIndexPrefixes.Elements()), writelen, &written);
+  NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(written == writelen, NS_ERROR_FAILURE);
-  written = PR_Write(fileFd, indexStarts.Elements(), writelen);
+
+  rv = out->Write(reinterpret_cast<char*>(indexStarts.Elements()), writelen, &written);
+  NS_ENSURE_SUCCESS(rv, rv);
   NS_ENSURE_TRUE(written == writelen, NS_ERROR_FAILURE);
+
   if (totalDeltas > 0) {
     for (uint32_t i = 0; i < indexDeltaSize; i++) {
       writelen = mIndexDeltas[i].Length() * sizeof(uint16_t);
-      written = PR_Write(fileFd, mIndexDeltas[i].Elements(), writelen);
+      rv = out->Write(reinterpret_cast<char*>(mIndexDeltas[i].Elements()), writelen, &written);
+      NS_ENSURE_SUCCESS(rv, rv);
       NS_ENSURE_TRUE(written == writelen, NS_ERROR_FAILURE);
     }
   }
@@ -423,15 +494,4 @@ nsUrlClassifierPrefixSet::StoreToFd(AutoFDClose& fileFd)
   LOG(("Saving PrefixSet successful\n"));
 
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsUrlClassifierPrefixSet::StoreToFile(nsIFile* aFile)
-{
-  AutoFDClose fileFd;
-  nsresult rv = aFile->OpenNSPRFileDesc(PR_RDWR | PR_TRUNCATE | PR_CREATE_FILE,
-                                        0644, &fileFd.rwget());
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return StoreToFd(fileFd);
 }

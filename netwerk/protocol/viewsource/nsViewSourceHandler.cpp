@@ -35,7 +35,7 @@ nsViewSourceHandler::GetDefaultPort(int32_t *result)
 NS_IMETHODIMP
 nsViewSourceHandler::GetProtocolFlags(uint32_t *result)
 {
-    *result = URI_NORELATIVE | URI_NOAUTH | URI_LOADABLE_BY_ANYONE |
+    *result = URI_NORELATIVE | URI_NOAUTH | URI_DANGEROUS_TO_LOAD |
         URI_NON_PERSISTABLE;
     return NS_OK;
 }
@@ -70,7 +70,7 @@ nsViewSourceHandler::NewURI(const nsACString &aSpec,
 
     asciiSpec.Insert(VIEW_SOURCE ":", 0);
 
-    // We can't swap() from an nsRefPtr<nsSimpleNestedURI> to an nsIURI**,
+    // We can't swap() from an RefPtr<nsSimpleNestedURI> to an nsIURI**,
     // sadly.
     nsSimpleNestedURI* ourURI = new nsSimpleNestedURI(innerURI);
     nsCOMPtr<nsIURI> uri = ourURI;
@@ -124,22 +124,21 @@ nsViewSourceHandler::NewChannel(nsIURI* uri, nsIChannel* *result)
 }
 
 nsresult
-nsViewSourceHandler::NewSrcdocChannel(nsIURI* uri, const nsAString &srcdoc,
-                                      nsIChannel* *result)
+nsViewSourceHandler::NewSrcdocChannel(nsIURI *aURI,
+                                      nsIURI *aBaseURI,
+                                      const nsAString &aSrcdoc,
+                                      nsILoadInfo* aLoadInfo,
+                                      nsIChannel** outChannel)
 {
-    NS_ENSURE_ARG_POINTER(uri);
-    nsViewSourceChannel *channel = new nsViewSourceChannel();
-    if (!channel)
-        return NS_ERROR_OUT_OF_MEMORY;
-    NS_ADDREF(channel);
+    NS_ENSURE_ARG_POINTER(aURI);
+    RefPtr<nsViewSourceChannel> channel = new nsViewSourceChannel();
 
-    nsresult rv = channel->InitSrcdoc(uri, srcdoc);
+    nsresult rv = channel->InitSrcdoc(aURI, aBaseURI, aSrcdoc, aLoadInfo);
     if (NS_FAILED(rv)) {
-        NS_RELEASE(channel);
         return rv;
     }
 
-    *result = static_cast<nsIViewSourceChannel*>(channel);
+    *outChannel = static_cast<nsIViewSourceChannel*>(channel.forget().take());
     return NS_OK;
 }
 

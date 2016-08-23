@@ -7,6 +7,7 @@
 #define GFX_WINDOWSDWRITEFONTS_H
 
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/UniquePtr.h"
 #include <dwrite.h>
 
 #include "gfxFont.h"
@@ -29,18 +30,18 @@ public:
     ~gfxDWriteFont();
 
     virtual gfxFont*
-    CopyWithAntialiasOption(AntialiasOption anAAOption) MOZ_OVERRIDE;
+    CopyWithAntialiasOption(AntialiasOption anAAOption) override;
 
-    virtual uint32_t GetSpaceGlyph() MOZ_OVERRIDE;
+    virtual uint32_t GetSpaceGlyph() override;
 
-    virtual bool SetupCairoFont(gfxContext *aContext) MOZ_OVERRIDE;
+    virtual bool SetupCairoFont(DrawTarget* aDrawTarget) override;
 
-    virtual bool AllowSubpixelAA() MOZ_OVERRIDE
+    virtual bool AllowSubpixelAA() override
     { return mAllowManualShowGlyphs; }
 
     bool IsValid() const;
 
-    virtual gfxFloat GetAdjustedSize() const MOZ_OVERRIDE {
+    virtual gfxFloat GetAdjustedSize() const override {
         return mAdjustedSize;
     }
 
@@ -50,32 +51,32 @@ public:
     virtual RunMetrics Measure(gfxTextRun *aTextRun,
                                uint32_t aStart, uint32_t aEnd,
                                BoundingBoxType aBoundingBoxType,
-                               gfxContext *aContextForTightBoundingBox,
+                               DrawTarget *aDrawTargetForTightBoundingBox,
                                Spacing *aSpacing,
-                               uint16_t aOrientation) MOZ_OVERRIDE;
+                               uint16_t aOrientation) override;
 
-    virtual bool ProvidesGlyphWidths() const MOZ_OVERRIDE;
+    virtual bool ProvidesGlyphWidths() const override;
 
     virtual int32_t GetGlyphWidth(DrawTarget& aDrawTarget,
-                                  uint16_t aGID) MOZ_OVERRIDE;
+                                  uint16_t aGID) override;
 
-    virtual mozilla::TemporaryRef<mozilla::gfx::GlyphRenderingOptions>
-    GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams = nullptr) MOZ_OVERRIDE;
+    virtual already_AddRefed<mozilla::gfx::GlyphRenderingOptions>
+    GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams = nullptr) override;
 
     virtual void AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
-                                        FontCacheSizes* aSizes) const;
+                                        FontCacheSizes* aSizes) const override;
     virtual void AddSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
-                                        FontCacheSizes* aSizes) const;
+                                        FontCacheSizes* aSizes) const override;
 
-    virtual FontType GetType() const { return FONT_TYPE_DWRITE; }
+    virtual FontType GetType() const override { return FONT_TYPE_DWRITE; }
 
-    virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
-    GetScaledFont(mozilla::gfx::DrawTarget *aTarget) MOZ_OVERRIDE;
+    virtual already_AddRefed<mozilla::gfx::ScaledFont>
+    GetScaledFont(mozilla::gfx::DrawTarget *aTarget) override;
 
-    virtual cairo_scaled_font_t *GetCairoScaledFont() MOZ_OVERRIDE;
+    virtual cairo_scaled_font_t *GetCairoScaledFont() override;
 
 protected:
-    virtual const Metrics& GetHorizontalMetrics() MOZ_OVERRIDE;
+    virtual const Metrics& GetHorizontalMetrics() override;
 
     bool GetFakeMetricsForArialBlack(DWRITE_FONT_METRICS *aFontMetrics);
 
@@ -90,13 +91,17 @@ protected:
     DWRITE_MEASURING_MODE GetMeasuringMode();
     bool GetForceGDIClassic();
 
-    nsRefPtr<IDWriteFontFace> mFontFace;
+    RefPtr<IDWriteFontFace> mFontFace;
+    RefPtr<IDWriteFont> mFont;
+    RefPtr<IDWriteFontFamily> mFontFamily;
     cairo_font_face_t *mCairoFontFace;
 
     Metrics *mMetrics;
 
     // cache of glyph widths in 16.16 fixed-point pixels
-    nsAutoPtr<nsDataHashtable<nsUint32HashKey,int32_t> > mGlyphWidths;
+    mozilla::UniquePtr<nsDataHashtable<nsUint32HashKey,int32_t>> mGlyphWidths;
+
+    uint32_t mSpaceGlyph;
 
     bool mNeedsOblique;
     bool mNeedsBold;

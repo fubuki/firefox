@@ -18,7 +18,7 @@
 namespace mozilla {
 namespace gmp {
 
-class GMPParent;
+class GMPContentParent;
 
 class GMPVideoEncoderParent : public GMPVideoEncoderProxy,
                               public PGMPVideoEncoderParent,
@@ -27,28 +27,28 @@ class GMPVideoEncoderParent : public GMPVideoEncoderProxy,
 public:
   NS_INLINE_DECL_REFCOUNTING(GMPVideoEncoderParent)
 
-  explicit GMPVideoEncoderParent(GMPParent *aPlugin);
+  explicit GMPVideoEncoderParent(GMPContentParent *aPlugin);
 
   GMPVideoHostImpl& Host();
   void Shutdown();
 
   // GMPVideoEncoderProxy
-  virtual void Close() MOZ_OVERRIDE;
-  virtual GMPErr InitEncode(const GMPVideoCodec& aCodecSettings,
-                            const nsTArray<uint8_t>& aCodecSpecific,
-                            GMPVideoEncoderCallbackProxy* aCallback,
-                            int32_t aNumberOfCores,
-                            uint32_t aMaxPayloadSize) MOZ_OVERRIDE;
-  virtual GMPErr Encode(GMPUnique<GMPVideoi420Frame>::Ptr aInputFrame,
-                        const nsTArray<uint8_t>& aCodecSpecificInfo,
-                        const nsTArray<GMPVideoFrameType>& aFrameTypes) MOZ_OVERRIDE;
-  virtual GMPErr SetChannelParameters(uint32_t aPacketLoss, uint32_t aRTT) MOZ_OVERRIDE;
-  virtual GMPErr SetRates(uint32_t aNewBitRate, uint32_t aFrameRate) MOZ_OVERRIDE;
-  virtual GMPErr SetPeriodicKeyFrames(bool aEnable) MOZ_OVERRIDE;
-  virtual const uint64_t ParentID() MOZ_OVERRIDE { return reinterpret_cast<uint64_t>(mPlugin.get()); }
+  void Close() override;
+  GMPErr InitEncode(const GMPVideoCodec& aCodecSettings,
+                    const nsTArray<uint8_t>& aCodecSpecific,
+                    GMPVideoEncoderCallbackProxy* aCallback,
+                    int32_t aNumberOfCores,
+                    uint32_t aMaxPayloadSize) override;
+  GMPErr Encode(GMPUniquePtr<GMPVideoi420Frame> aInputFrame,
+                const nsTArray<uint8_t>& aCodecSpecificInfo,
+                const nsTArray<GMPVideoFrameType>& aFrameTypes) override;
+  GMPErr SetChannelParameters(uint32_t aPacketLoss, uint32_t aRTT) override;
+  GMPErr SetRates(uint32_t aNewBitRate, uint32_t aFrameRate) override;
+  GMPErr SetPeriodicKeyFrames(bool aEnable) override;
+  uint32_t GetPluginId() const override { return mPluginId; }
 
   // GMPSharedMemManager
-  virtual bool Alloc(size_t aSize, Shmem::SharedMemory::SharedMemoryType aType, Shmem* aMem) MOZ_OVERRIDE
+  bool Alloc(size_t aSize, Shmem::SharedMemory::SharedMemoryType aType, Shmem* aMem) override
   {
 #ifdef GMP_SAFE_SHMEM
     return AllocShmem(aSize, aType, aMem);
@@ -56,7 +56,7 @@ public:
     return AllocUnsafeShmem(aSize, aType, aMem);
 #endif
   }
-  virtual void Dealloc(Shmem& aMem) MOZ_OVERRIDE
+  void Dealloc(Shmem& aMem) override
   {
     DeallocShmem(aMem);
   }
@@ -65,21 +65,24 @@ private:
   virtual ~GMPVideoEncoderParent();
 
   // PGMPVideoEncoderParent
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
-  virtual bool RecvEncoded(const GMPVideoEncodedFrameData& aEncodedFrame,
-                           const nsTArray<uint8_t>& aCodecSpecificInfo) MOZ_OVERRIDE;
-  virtual bool RecvError(const GMPErr& aError) MOZ_OVERRIDE;
-  virtual bool RecvParentShmemForPool(Shmem& aFrameBuffer) MOZ_OVERRIDE;
-  virtual bool AnswerNeedShmem(const uint32_t& aEncodedBufferSize,
-                               Shmem* aMem) MOZ_OVERRIDE;
-  virtual bool Recv__delete__() MOZ_OVERRIDE;
+  void ActorDestroy(ActorDestroyReason aWhy) override;
+  bool RecvEncoded(const GMPVideoEncodedFrameData& aEncodedFrame,
+                   InfallibleTArray<uint8_t>&& aCodecSpecificInfo) override;
+  bool RecvError(const GMPErr& aError) override;
+  bool RecvShutdown() override;
+  bool RecvParentShmemForPool(Shmem&& aFrameBuffer) override;
+  bool AnswerNeedShmem(const uint32_t& aEncodedBufferSize,
+                       Shmem* aMem) override;
+  bool Recv__delete__() override;
 
   bool mIsOpen;
   bool mShuttingDown;
-  nsRefPtr<GMPParent> mPlugin;
+  bool mActorDestroyed;
+  RefPtr<GMPContentParent> mPlugin;
   GMPVideoEncoderCallbackProxy* mCallback;
   GMPVideoHostImpl mVideoHost;
   nsCOMPtr<nsIThread> mEncodedThread;
+  const uint32_t mPluginId;
 };
 
 } // namespace gmp

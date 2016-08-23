@@ -37,7 +37,28 @@ struct CancelUSSDRequest
   uint32_t clientId;
 };
 
+struct ConferenceCallRequest
+{
+  uint32_t clientId;
+};
+
+struct SeparateCallRequest
+{
+  uint32_t clientId;
+  uint32_t callIndex;
+};
+
 struct HangUpConferenceRequest
+{
+  uint32_t clientId;
+};
+
+struct HoldConferenceRequest
+{
+  uint32_t clientId;
+};
+
+struct ResumeConferenceRequest
 {
   uint32_t clientId;
 };
@@ -86,7 +107,11 @@ union IPCTelephonyRequest
   DialRequest;
   SendUSSDRequest;
   CancelUSSDRequest;
+  ConferenceCallRequest;
+  SeparateCallRequest;
   HangUpConferenceRequest;
+  HoldConferenceRequest;
+  ResumeConferenceRequest;
   AnswerCallRequest;
   HangUpCallRequest;
   RejectCallRequest;
@@ -100,55 +125,43 @@ sync protocol PTelephony {
   manages PTelephonyRequest;
 
 child:
-  NotifyCallError(uint32_t aClientId, int32_t aCallIndex, nsString aError);
+  async NotifyCallStateChanged(nsTelephonyCallInfo[] aAllInfo);
 
-  NotifyCallStateChanged(nsTelephonyCallInfo aInfo);
+  async NotifyCdmaCallWaiting(uint32_t aClientId, IPCCdmaWaitingCallData aData);
 
-  NotifyCdmaCallWaiting(uint32_t aClientId, IPCCdmaWaitingCallData aData);
+  async NotifyConferenceError(nsString aName, nsString aMessage);
 
-  NotifyConferenceCallStateChanged(uint16_t aCallState);
-
-  NotifyConferenceError(nsString aName, nsString aMessage);
-
-  NotifySupplementaryService(uint32_t aClientId, int32_t aCallIndex,
-                             uint16_t aNotification);
+  async NotifySupplementaryService(uint32_t aClientId, int32_t aCallIndex,
+                                   uint16_t aNotification);
 
 parent:
   /**
    * Sent when the child no longer needs to use PTelephony.
    */
-  __delete__();
+  async __delete__();
 
   /**
    * Sent when the child makes an asynchronous request to the parent.
    */
-  PTelephonyRequest(IPCTelephonyRequest request);
+  async PTelephonyRequest(IPCTelephonyRequest request);
 
-  RegisterListener();
+  async RegisterListener();
 
-  UnregisterListener();
+  async UnregisterListener();
 
-  ConferenceCall(uint32_t aClientId);
+  async StartTone(uint32_t aClientId, nsString aTone);
 
-  SeparateCall(uint32_t aClientId, uint32_t aCallIndex);
-
-  HoldConference(uint32_t aClientId);
-
-  ResumeConference(uint32_t aClientId);
-
-  StartTone(uint32_t aClientId, nsString aTone);
-
-  StopTone(uint32_t aClientId);
+  async StopTone(uint32_t aClientId);
 
   sync GetMicrophoneMuted()
     returns (bool aMuted);
 
-  SetMicrophoneMuted(bool aMuted);
+  async SetMicrophoneMuted(bool aMuted);
 
   sync GetSpeakerEnabled()
     returns (bool aEnabled);
 
-  SetSpeakerEnabled(bool aEnabled);
+  async SetSpeakerEnabled(bool aEnabled);
 };
 
 } /* namespace telephony */

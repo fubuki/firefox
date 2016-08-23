@@ -50,7 +50,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=435442
     25% { margin-top: 100px }
   }
   @keyframes kf4 {
-    to, from { display: inline; margin-top: 37px }
+    to, from { border-collapse: collapse; margin-top: 37px }
   }
   @keyframes kf_cascade1 {
     from { padding-top: 50px }
@@ -157,6 +157,11 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=435442
 
   @keyframes overridetop {
     0%, 100% { top: 0px }
+  }
+
+  @keyframes opacitymid {
+    0% { opacity: 0.2 }
+    100% { opacity: 0.8 }
   }
   </style>
 </head>
@@ -561,23 +566,23 @@ done_div();
 // we still override the value when two consecutive keyframes have
 // the same value.
 new_div("animation: kf4 ease 10s");
-is(cs.display, "block",
+is(cs.borderCollapse, "separate",
    "non-animatable properties should be ignored (linear, 0s)");
 is(cs.marginTop, "37px",
    "animatable properties should still apply (linear, 0s)");
 advance_clock(1000);
-is(cs.display, "block",
+is(cs.borderCollapse, "separate",
    "non-animatable properties should be ignored (linear, 1s)");
 is(cs.marginTop, "37px",
    "animatable properties should still apply (linear, 1s)");
 done_div();
 new_div("animation: kf4 step-start 10s");
-is(cs.display, "block",
+is(cs.borderCollapse, "separate",
    "non-animatable properties should be ignored (step-start, 0s)");
 is(cs.marginTop, "37px",
    "animatable properties should still apply (step-start, 0s)");
 advance_clock(1000);
-is(cs.display, "block",
+is(cs.borderCollapse, "separate",
    "non-animatable properties should be ignored (step-start, 1s)");
 is(cs.marginTop, "37px",
    "animatable properties should still apply (step-start, 1s)");
@@ -1199,7 +1204,7 @@ is(cs.marginRight, "0px", "large negative delay test at 400ms");
 check_events([{ type: 'animationiteration', target: div,
                 animationName: 'anim2', elapsedTime: 4.0,
                 pseudoElement: "" }],
-             "right after start in large negative delay test");
+             "large negative delay test at 400ms");
 advance_clock(800);
 is_approx(px_to_num(cs.marginRight), 100 * gTF.ease_in(0.8), 0.01,
           "large negative delay test at 1200ms");
@@ -1209,7 +1214,7 @@ is(cs.marginRight, "100px", "large negative delay test at 1400ms");
 check_events([{ type: 'animationend', target: div,
                 animationName: 'anim2', elapsedTime: 5.0,
                 pseudoElement: "" }],
-             "right after start in large negative delay test");
+             "large negative delay test at 1400ms");
 done_div();
 
 /*
@@ -1510,8 +1515,7 @@ dyn2.appendRule("50% { margin-left: 0px }");
 is(cs.marginLeft, "50px", "dynamic rule change test, @keyframes appendRule");
 var dyn2_kf1 = dyn2.cssRules[0]; // currently 0% { margin-left: 100px }
 dyn2_kf1.style.marginLeft = "-100px";
-// FIXME: Bug 978833 (keyframe rules used as nsIStyleRule but doesn't follow immutability contract)
-todo_is(cs.marginLeft, "-50px", "dynamic rule change test, keyframe style set");
+is(cs.marginLeft, "-50px", "dynamic rule change test, keyframe style set");
 dyn2.name = "dyn2";
 is(cs.marginLeft, "25px", "dynamic rule change test, change in @keyframes name applies (second time)");
 var dyn1_kf2 = dyn1.cssRules[1]; // currently 50% { margin-left: 50px }
@@ -1968,6 +1972,64 @@ advance_clock(0);
 advance_clock(500);
 is(cs.getPropertyValue("left"), "0px", "left is not animating");
 is(cs.getPropertyValue("top"), "50px", "top is animating");
+done_div();
+
+/*
+ * Bug 962594 - Turn off CSS animations when the element is display:none, or
+ * is in a display:none subtree.
+ */
+
+// Helper function for the two tests below
+function testDisplayNoneTurnsOffAnimations(aTestName, aElementToDisplayNone) {
+  is(cs.getPropertyValue("margin-right"), "0px",
+    aTestName + "margin-right at 0s");
+  advance_clock(1000);
+  is(cs.getPropertyValue("margin-right"), "10px",
+    aTestName + "margin-right at 1s");
+  aElementToDisplayNone.style.display = "none";
+  is(cs.getPropertyValue("margin-right"), "0px",
+    aTestName + "margin-right after display:none");
+  advance_clock(1000);
+  is(cs.getPropertyValue("margin-right"), "0px",
+    aTestName + "margin-right 1s after display:none");
+  aElementToDisplayNone.style.display = "";
+  is(cs.getPropertyValue("margin-right"), "0px",
+    aTestName + "margin-right after display:block");
+  advance_clock(1000);
+  is(cs.getPropertyValue("margin-right"), "10px",
+    aTestName + "margin-right 1s after display:block");
+}
+
+// Check that it works if the animated element itself becomes display:none
+new_div("animation: anim2 linear 10s");
+testDisplayNoneTurnsOffAnimations("AnimatedElement ", div);
+done_div();
+
+// Check that it works if an ancestor of the animated element becomes display:none
+new_div("animation: anim2 linear 10s");
+var ancestor = document.createElement("div");
+div.parentNode.insertBefore(ancestor, div);
+ancestor.appendChild(div);
+testDisplayNoneTurnsOffAnimations("AncestorElement ", ancestor);
+ancestor.parentNode.insertBefore(div, ancestor);
+ancestor.parentNode.removeChild(ancestor);
+done_div();
+
+
+/*
+ * Bug 1125455 - Transitions should not run when animations are running.
+ */
+new_div("transition: opacity 2s linear; opacity: 0.8");
+advance_clock(0);
+is(cs.getPropertyValue("opacity"), "0.8", "initial opacity");
+div.style.opacity = "0.2";
+is(cs.getPropertyValue("opacity"), "0.8", "opacity transition at 0s");
+advance_clock(500);
+is(cs.getPropertyValue("opacity"), "0.65", "opacity transition at 0.5s");
+div.style.animation = "opacitymid 2s linear";
+is(cs.getPropertyValue("opacity"), "0.2", "opacity animation overriding transition at 0s");
+advance_clock(500);
+is(cs.getPropertyValue("opacity"), "0.35", "opacity animation overriding transition at 0.5s");
 done_div();
 
 SpecialPowers.DOMWindowUtils.restoreNormalRefresh();

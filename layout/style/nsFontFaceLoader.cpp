@@ -6,13 +6,14 @@
 
 /* code for loading in @font-face defined font data */
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "nsFontFaceLoader.h"
 
 #include "nsError.h"
 #include "nsContentUtils.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Telemetry.h"
 #include "FontFaceSet.h"
 #include "nsPresContext.h"
 #include "nsIPrincipal.h"
@@ -24,31 +25,34 @@
 #include "mozilla/gfx/2D.h"
 
 using namespace mozilla;
+using namespace mozilla::dom;
 
-#ifdef PR_LOGGING
-PRLogModuleInfo*
-nsFontFaceLoader::GetFontDownloaderLog()
+#define LOG(args) MOZ_LOG(gfxUserFontSet::GetUserFontsLog(), mozilla::LogLevel::Debug, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(gfxUserFontSet::GetUserFontsLog(), \
+                                  LogLevel::Debug)
+
+static uint32_t
+GetFallbackDelay()
 {
-  static PRLogModuleInfo* sLog;
-  if (!sLog)
-    sLog = PR_NewLogModule("fontdownloader");
-  return sLog;
+  return Preferences::GetInt("gfx.downloadable_fonts.fallback_delay", 3000);
 }
-#endif /* PR_LOGGING */
 
-#define LOG(args) PR_LOG(GetFontDownloaderLog(), PR_LOG_DEBUG, args)
-#define LOG_ENABLED() PR_LOG_TEST(GetFontDownloaderLog(), PR_LOG_DEBUG)
-
+static uint32_t
+GetShortFallbackDelay()
+{
+  return Preferences::GetInt("gfx.downloadable_fonts.fallback_delay_short", 100);
+}
 
 nsFontFaceLoader::nsFontFaceLoader(gfxUserFontEntry* aUserFontEntry,
                                    nsIURI* aFontURI,
-                                   mozilla::dom::FontFaceSet* aFontFaceSet,
+                                   FontFaceSet* aFontFaceSet,
                                    nsIChannel* aChannel)
   : mUserFontEntry(aUserFontEntry),
     mFontURI(aFontURI),
     mFontFaceSet(aFontFaceSet),
     mChannel(aChannel)
 {
+  mStartTime = TimeStamp::Now();
 }
 
 nsFontFaceLoader::~nsFontFaceLoader()
@@ -68,8 +72,15 @@ nsFontFaceLoader::~nsFontFaceLoader()
 void
 nsFontFaceLoader::StartedLoading(nsIStreamLoader* aStreamLoader)
 {
-  int32_t loadTimeout =
-    Preferences::GetInt("gfx.downloadable_fonts.fallback_delay", 3000);
+  int32_t loadTimeout;
+  uint8_t fontDisplay = GetFontDisplay();
+  if (fontDisplay == NS_FONT_DISPLAY_AUTO ||
+      fontDisplay == NS_FONT_DISPLAY_BLOCK) {
+    loadTimeout = GetFallbackDelay();
+  } else {
+    loadTimeout = GetShortFallbackDelay();
+  }
+
   if (loadTimeout > 0) {
     mLoadTimer = do_CreateInstance("@mozilla.org/timer;1");
     if (mLoadTimer) {
@@ -84,7 +95,7 @@ nsFontFaceLoader::StartedLoading(nsIStreamLoader* aStreamLoader)
   mStreamLoader = aStreamLoader;
 }
 
-void
+/* static */ void
 nsFontFaceLoader::LoadTimerCallback(nsITimer* aTimer, void* aClosure)
 {
   nsFontFaceLoader* loader = static_cast<nsFontFaceLoader*>(aClosure);
@@ -95,45 +106,82 @@ nsFontFaceLoader::LoadTimerCallback(nsITimer* aTimer, void* aClosure)
   }
 
   gfxUserFontEntry* ufe = loader->mUserFontEntry.get();
-  bool updateUserFontSet = true;
+  uint8_t fontDisplay = loader->GetFontDisplay();
 
-  // If the entry is loading, check whether it's >75% done; if so,
-  // we allow another timeout period before showing a fallback font.
-  if (ufe->mFontDataLoadingState == gfxUserFontEntry::LOADING_STARTED) {
-    int64_t contentLength;
-    uint32_t numBytesRead;
-    if (NS_SUCCEEDED(loader->mChannel->GetContentLength(&contentLength)) &&
-        contentLength > 0 &&
-        contentLength < UINT32_MAX &&
-        NS_SUCCEEDED(loader->mStreamLoader->GetNumBytesRead(&numBytesRead)) &&
-        numBytesRead > 3 * (uint32_t(contentLength) >> 2))
-    {
-      // More than 3/4 the data has been downloaded, so allow 50% extra
-      // time and hope the remainder will arrive before the additional
-      // time expires.
-      ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_ALMOST_DONE;
-      uint32_t delay;
-      loader->mLoadTimer->GetDelay(&delay);
-      loader->mLoadTimer->InitWithFuncCallback(LoadTimerCallback,
-                                               static_cast<void*>(loader),
-                                               delay >> 1,
-                                               nsITimer::TYPE_ONE_SHOT);
-      updateUserFontSet = false;
-      LOG(("fontdownloader (%p) 75%% done, resetting timer\n", loader));
+  // Depending upon the value of the font-display descriptor for the font,
+  // their may be one or two timeouts associated with each font. The LOADING_SLOWLY
+  // state indicates that the fallback font is shown. The LOADING_TIMED_OUT
+  // state indicates that the fallback font is shown *and* the downloaded font
+  // resource will not replace the fallback font when the load completes.
+
+  bool updateUserFontSet = true;
+  switch (fontDisplay) {
+    case NS_FONT_DISPLAY_AUTO:
+    case NS_FONT_DISPLAY_BLOCK:
+      // If the entry is loading, check whether it's >75% done; if so,
+      // we allow another timeout period before showing a fallback font.
+      if (ufe->mFontDataLoadingState == gfxUserFontEntry::LOADING_STARTED) {
+        int64_t contentLength;
+        uint32_t numBytesRead;
+        if (NS_SUCCEEDED(loader->mChannel->GetContentLength(&contentLength)) &&
+            contentLength > 0 &&
+            contentLength < UINT32_MAX &&
+            NS_SUCCEEDED(loader->mStreamLoader->GetNumBytesRead(&numBytesRead)) &&
+            numBytesRead > 3 * (uint32_t(contentLength) >> 2))
+        {
+          // More than 3/4 the data has been downloaded, so allow 50% extra
+          // time and hope the remainder will arrive before the additional
+          // time expires.
+          ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_ALMOST_DONE;
+          uint32_t delay;
+          loader->mLoadTimer->GetDelay(&delay);
+          loader->mLoadTimer->InitWithFuncCallback(LoadTimerCallback,
+                                                   static_cast<void*>(loader),
+                                                   delay >> 1,
+                                                   nsITimer::TYPE_ONE_SHOT);
+          updateUserFontSet = false;
+          LOG(("userfonts (%p) 75%% done, resetting timer\n", loader));
+        }
+      }
+      if (updateUserFontSet) {
+        ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_SLOWLY;
+      }
+      break;
+    case NS_FONT_DISPLAY_SWAP:
+      ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_SLOWLY;
+      break;
+    case NS_FONT_DISPLAY_FALLBACK: {
+      if (ufe->mFontDataLoadingState == gfxUserFontEntry::LOADING_STARTED) {
+        ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_SLOWLY;
+      } else {
+        ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_TIMED_OUT;
+        updateUserFontSet = false;
+      }
+      break;
     }
+    case NS_FONT_DISPLAY_OPTIONAL:
+      ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_TIMED_OUT;
+      break;
+
+    default:
+      NS_NOTREACHED("strange font-display value");
+      break;
   }
 
   // If the font is not 75% loaded, or if we've already timed out once
   // before, we mark this entry as "loading slowly", so the fallback
   // font will be used in the meantime, and tell the context to refresh.
   if (updateUserFontSet) {
-    ufe->mFontDataLoadingState = gfxUserFontEntry::LOADING_SLOWLY;
-    nsPresContext* ctx = loader->mFontFaceSet->GetPresContext();
-    NS_ASSERTION(ctx, "userfontset doesn't have a presContext?");
-    if (ctx) {
-      loader->mFontFaceSet->IncrementGeneration();
-      ctx->UserFontSetUpdated();
-      LOG(("fontdownloader (%p) timeout reflow\n", loader));
+    nsTArray<gfxUserFontSet*> fontSets;
+    ufe->GetUserFontSets(fontSets);
+    for (gfxUserFontSet* fontSet : fontSets) {
+      nsPresContext* ctx = FontFaceSet::GetPresContextFor(fontSet);
+      if (ctx) {
+        fontSet->IncrementGeneration();
+        ctx->UserFontSetUpdated(ufe);
+        LOG(("userfonts (%p) timeout reflow for pres context %p display %d\n",
+             loader, ctx, fontDisplay));
+      }
     }
   }
 }
@@ -154,23 +202,32 @@ nsFontFaceLoader::OnStreamComplete(nsIStreamLoader* aLoader,
 
   mFontFaceSet->RemoveLoader(this);
 
-#ifdef PR_LOGGING
+  TimeStamp doneTime = TimeStamp::Now();
+  TimeDuration downloadTime = doneTime - mStartTime;
+  uint32_t downloadTimeMS = uint32_t(downloadTime.ToMilliseconds());
+  Telemetry::Accumulate(Telemetry::WEBFONT_DOWNLOAD_TIME, downloadTimeMS);
+
+  if (GetFontDisplay() == NS_FONT_DISPLAY_FALLBACK) {
+    uint32_t loadTimeout = GetFallbackDelay();
+    if (downloadTimeMS > loadTimeout &&
+        (mUserFontEntry->mFontDataLoadingState ==
+         gfxUserFontEntry::LOADING_SLOWLY)) {
+      mUserFontEntry->mFontDataLoadingState =
+        gfxUserFontEntry::LOADING_TIMED_OUT;
+    }
+  }
+
   if (LOG_ENABLED()) {
     nsAutoCString fontURI;
     mFontURI->GetSpec(fontURI);
     if (NS_SUCCEEDED(aStatus)) {
-      LOG(("fontdownloader (%p) download completed - font uri: (%s)\n", 
-           this, fontURI.get()));
+      LOG(("userfonts (%p) download completed - font uri: (%s) time: %d ms\n",
+           this, fontURI.get(), downloadTimeMS));
     } else {
-      LOG(("fontdownloader (%p) download failed - font uri: (%s) error: %8.8x\n", 
+      LOG(("userfonts (%p) download failed - font uri: (%s) error: %8.8x\n",
            this, fontURI.get(), aStatus));
     }
   }
-#endif
-
-  nsPresContext* ctx = mFontFaceSet->GetPresContext();
-  NS_ASSERTION(ctx && !ctx->PresShell()->IsDestroying(),
-               "We should have been canceled already");
 
   if (NS_SUCCEEDED(aStatus)) {
     // for HTTP requests, check whether the request _actually_ succeeded;
@@ -200,12 +257,21 @@ nsFontFaceLoader::OnStreamComplete(nsIStreamLoader* aLoader,
   bool fontUpdate =
     mUserFontEntry->FontDataDownloadComplete(aString, aStringLen, aStatus);
 
+  mFontFaceSet->GetUserFontSet()->RecordFontLoadDone(aStringLen, doneTime);
+
   // when new font loaded, need to reflow
   if (fontUpdate) {
-    // Update layout for the presence of the new font.  Since this is
-    // asynchronous, reflows will coalesce.
-    ctx->UserFontSetUpdated();
-    LOG(("fontdownloader (%p) reflow\n", this));
+    nsTArray<gfxUserFontSet*> fontSets;
+    mUserFontEntry->GetUserFontSets(fontSets);
+    for (gfxUserFontSet* fontSet : fontSets) {
+      nsPresContext* ctx = FontFaceSet::GetPresContextFor(fontSet);
+      if (ctx) {
+        // Update layout for the presence of the new font.  Since this is
+        // asynchronous, reflows will coalesce.
+        ctx->UserFontSetUpdated(mUserFontEntry);
+        LOG(("userfonts (%p) reflow for pres context %p\n", this, ctx));
+      }
+    }
   }
 
   // done with font set
@@ -231,39 +297,12 @@ nsFontFaceLoader::Cancel()
   mChannel->Cancel(NS_BINDING_ABORTED);
 }
 
-nsresult
-nsFontFaceLoader::CheckLoadAllowed(nsIPrincipal* aSourcePrincipal,
-                                   nsIURI* aTargetURI,
-                                   nsISupports* aContext)
+uint8_t
+nsFontFaceLoader::GetFontDisplay()
 {
-  nsresult rv;
-
-  if (!aSourcePrincipal)
-    return NS_OK;
-
-  // check with the security manager
-  nsIScriptSecurityManager* secMan = nsContentUtils::GetSecurityManager();
-  rv = secMan->CheckLoadURIWithPrincipal(aSourcePrincipal, aTargetURI,
-                                        nsIScriptSecurityManager::STANDARD);
-  if (NS_FAILED(rv)) {
-    return rv;
+  uint8_t fontDisplay = NS_FONT_DISPLAY_AUTO;
+  if (Preferences::GetBool("layout.css.font-display.enabled")) {
+    fontDisplay = mUserFontEntry->GetFontDisplay();
   }
-
-  // check content policy
-  int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_FONT,
-                                 aTargetURI,
-                                 aSourcePrincipal,
-                                 aContext,
-                                 EmptyCString(), // mime type
-                                 nullptr,
-                                 &shouldLoad,
-                                 nsContentUtils::GetContentPolicy(),
-                                 nsContentUtils::GetSecurityManager());
-
-  if (NS_FAILED(rv) || NS_CP_REJECTED(shouldLoad)) {
-    return NS_ERROR_CONTENT_BLOCKED;
-  }
-
-  return NS_OK;
+  return fontDisplay;
 }

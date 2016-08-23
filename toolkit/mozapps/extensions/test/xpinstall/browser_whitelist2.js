@@ -11,7 +11,7 @@ function test() {
   pm.add(makeURI("http://example.org/"), "install", pm.ALLOW_ACTION);
 
   var triggers = encodeURIComponent(JSON.stringify({
-    "Unsigned XPI": TESTROOT2 + "unsigned.xpi"
+    "Unsigned XPI": TESTROOT2 + "amosigned.xpi"
   }));
   gBrowser.selectedTab = gBrowser.addTab();
   gBrowser.loadURI(TESTROOT + "installtrigger.html?" + triggers);
@@ -24,7 +24,7 @@ function allow_blocked(installInfo) {
 }
 
 function finish_test() {
-  Services.perms.remove("example.org", "install");
+  Services.perms.remove(makeURI("http://example.org"), "install");
 
   gBrowser.removeCurrentTab();
   Harness.finish();

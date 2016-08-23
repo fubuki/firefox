@@ -5,6 +5,7 @@
 //
 
 #include "angle_gl.h"
+#include "compiler/translator/SymbolTable.h"
 #include "compiler/translator/VariableInfo.h"
 #include "compiler/translator/util.h"
 #include "common/utilities.h"
@@ -14,18 +15,6 @@ namespace sh
 
 namespace
 {
-
-TString InterfaceBlockFieldName(const TInterfaceBlock &interfaceBlock, const TField &field)
-{
-    if (interfaceBlock.hasInstanceName())
-    {
-        return interfaceBlock.name() + "." + field.name();
-    }
-    else
-    {
-        return field.name();
-    }
-}
 
 BlockLayoutType GetBlockLayoutType(TLayoutBlockStorage blockStorage)
 {
@@ -54,7 +43,8 @@ void ExpandVariable(const ShaderVariable &variable,
     {
         if (variable.isArray())
         {
-            for (size_t elementIndex = 0; elementIndex < variable.elementCount(); elementIndex++)
+            for (unsigned int elementIndex = 0; elementIndex < variable.elementCount();
+                 elementIndex++)
             {
                 std::string lname = name + ::ArrayString(elementIndex);
                 std::string lmappedName = mappedName + ::ArrayString(elementIndex);
@@ -127,20 +117,34 @@ VarT *FindVariable(const TString &name,
 }
 
 CollectVariables::CollectVariables(std::vector<sh::Attribute> *attribs,
-                                   std::vector<sh::Attribute> *outputVariables,
+                                   std::vector<sh::OutputVariable> *outputVariables,
                                    std::vector<sh::Uniform> *uniforms,
                                    std::vector<sh::Varying> *varyings,
                                    std::vector<sh::InterfaceBlock> *interfaceBlocks,
-                                   ShHashFunction64 hashFunction)
-    : mAttribs(attribs),
+                                   ShHashFunction64 hashFunction,
+                                   const TSymbolTable &symbolTable)
+    : TIntermTraverser(true, false, false),
+      mAttribs(attribs),
       mOutputVariables(outputVariables),
       mUniforms(uniforms),
       mVaryings(varyings),
       mInterfaceBlocks(interfaceBlocks),
+      mDepthRangeAdded(false),
       mPointCoordAdded(false),
       mFrontFacingAdded(false),
       mFragCoordAdded(false),
-      mHashFunction(hashFunction)
+      mInstanceIDAdded(false),
+      mPositionAdded(false),
+      mPointSizeAdded(false),
+      mLastFragDataAdded(false),
+      mFragColorAdded(false),
+      mFragDataAdded(false),
+      mFragDepthEXTAdded(false),
+      mFragDepthAdded(false),
+      mSecondaryFragColorEXTAdded(false),
+      mSecondaryFragDataEXTAdded(false),
+      mHashFunction(hashFunction),
+      mSymbolTable(symbolTable)
 {
 }
 
@@ -162,6 +166,56 @@ void CollectVariables::visitSymbol(TIntermSymbol *symbol)
     else if (symbol->getType().getBasicType() == EbtInterfaceBlock)
     {
         UNREACHABLE();
+    }
+    else if (symbolName == "gl_DepthRange")
+    {
+        ASSERT(symbol->getQualifier() == EvqUniform);
+
+        if (!mDepthRangeAdded)
+        {
+            Uniform info;
+            const char kName[] = "gl_DepthRange";
+            info.name = kName;
+            info.mappedName = kName;
+            info.type = GL_STRUCT_ANGLEX;
+            info.arraySize = 0;
+            info.precision = GL_NONE;
+            info.staticUse = true;
+
+            ShaderVariable nearInfo;
+            const char kNearName[] = "near";
+            nearInfo.name = kNearName;
+            nearInfo.mappedName = kNearName;
+            nearInfo.type = GL_FLOAT;
+            nearInfo.arraySize = 0;
+            nearInfo.precision = GL_HIGH_FLOAT;
+            nearInfo.staticUse = true;
+
+            ShaderVariable farInfo;
+            const char kFarName[] = "far";
+            farInfo.name = kFarName;
+            farInfo.mappedName = kFarName;
+            farInfo.type = GL_FLOAT;
+            farInfo.arraySize = 0;
+            farInfo.precision = GL_HIGH_FLOAT;
+            farInfo.staticUse = true;
+
+            ShaderVariable diffInfo;
+            const char kDiffName[] = "diff";
+            diffInfo.name = kDiffName;
+            diffInfo.mappedName = kDiffName;
+            diffInfo.type = GL_FLOAT;
+            diffInfo.arraySize = 0;
+            diffInfo.precision = GL_HIGH_FLOAT;
+            diffInfo.staticUse = true;
+
+            info.fields.push_back(nearInfo);
+            info.fields.push_back(farInfo);
+            info.fields.push_back(diffInfo);
+
+            mUniforms->push_back(info);
+            mDepthRangeAdded = true;
+        }
     }
     else
     {
@@ -185,7 +239,6 @@ void CollectVariables::visitSymbol(TIntermSymbol *symbol)
 
                     // Set static use on the parent interface block here
                     namedBlock->staticUse = true;
-
                 }
                 else
                 {
@@ -193,19 +246,21 @@ void CollectVariables::visitSymbol(TIntermSymbol *symbol)
                 }
 
                 // It's an internal error to reference an undefined user uniform
-                ASSERT(symbolName.compare(0, 3, "gl_") == 0 || var);
+                ASSERT(symbolName.compare(0, 3, "gl_") != 0 || var);
             }
             break;
           case EvqFragCoord:
             if (!mFragCoordAdded)
             {
                 Varying info;
-                info.name = "gl_FragCoord";
-                info.mappedName = "gl_FragCoord";
+                const char kName[] = "gl_FragCoord";
+                info.name = kName;
+                info.mappedName = kName;
                 info.type = GL_FLOAT_VEC4;
                 info.arraySize = 0;
-                info.precision = GL_MEDIUM_FLOAT;  // Use mediump as it doesn't really matter.
+                info.precision = GL_MEDIUM_FLOAT;  // Defined by spec.
                 info.staticUse = true;
+                info.isInvariant = mSymbolTable.isVaryingInvariant(kName);
                 mVaryings->push_back(info);
                 mFragCoordAdded = true;
             }
@@ -214,12 +269,14 @@ void CollectVariables::visitSymbol(TIntermSymbol *symbol)
             if (!mFrontFacingAdded)
             {
                 Varying info;
-                info.name = "gl_FrontFacing";
-                info.mappedName = "gl_FrontFacing";
+                const char kName[] = "gl_FrontFacing";
+                info.name = kName;
+                info.mappedName = kName;
                 info.type = GL_BOOL;
                 info.arraySize = 0;
                 info.precision = GL_NONE;
                 info.staticUse = true;
+                info.isInvariant = mSymbolTable.isVaryingInvariant(kName);
                 mVaryings->push_back(info);
                 mFrontFacingAdded = true;
             }
@@ -228,16 +285,181 @@ void CollectVariables::visitSymbol(TIntermSymbol *symbol)
             if (!mPointCoordAdded)
             {
                 Varying info;
-                info.name = "gl_PointCoord";
-                info.mappedName = "gl_PointCoord";
+                const char kName[] = "gl_PointCoord";
+                info.name = kName;
+                info.mappedName = kName;
                 info.type = GL_FLOAT_VEC2;
                 info.arraySize = 0;
-                info.precision = GL_MEDIUM_FLOAT;  // Use mediump as it doesn't really matter.
+                info.precision = GL_MEDIUM_FLOAT;  // Defined by spec.
                 info.staticUse = true;
+                info.isInvariant = mSymbolTable.isVaryingInvariant(kName);
                 mVaryings->push_back(info);
                 mPointCoordAdded = true;
             }
             return;
+          case EvqInstanceID:
+            if (!mInstanceIDAdded)
+            {
+                Attribute info;
+                const char kName[] = "gl_InstanceID";
+                info.name = kName;
+                info.mappedName = kName;
+                info.type = GL_INT;
+                info.arraySize = 0;
+                info.precision = GL_HIGH_INT;  // Defined by spec.
+                info.staticUse = true;
+                info.location = -1;
+                mAttribs->push_back(info);
+                mInstanceIDAdded = true;
+            }
+            return;
+          case EvqPosition:
+            if (!mPositionAdded)
+            {
+                Varying info;
+                const char kName[] = "gl_Position";
+                info.name = kName;
+                info.mappedName = kName;
+                info.type = GL_FLOAT_VEC4;
+                info.arraySize = 0;
+                info.precision = GL_HIGH_FLOAT;  // Defined by spec.
+                info.staticUse = true;
+                info.isInvariant = mSymbolTable.isVaryingInvariant(kName);
+                mVaryings->push_back(info);
+                mPositionAdded = true;
+            }
+            return;
+          case EvqPointSize:
+            if (!mPointSizeAdded)
+            {
+                Varying info;
+                const char kName[] = "gl_PointSize";
+                info.name = kName;
+                info.mappedName = kName;
+                info.type = GL_FLOAT;
+                info.arraySize = 0;
+                info.precision = GL_MEDIUM_FLOAT;  // Defined by spec.
+                info.staticUse = true;
+                info.isInvariant = mSymbolTable.isVaryingInvariant(kName);
+                mVaryings->push_back(info);
+                mPointSizeAdded = true;
+            }
+            return;
+          case EvqLastFragData:
+            if (!mLastFragDataAdded)
+            {
+                Varying info;
+                const char kName[] = "gl_LastFragData";
+                info.name = kName;
+                info.mappedName = kName;
+                info.type = GL_FLOAT_VEC4;
+                info.arraySize = static_cast<const TVariable*>(mSymbolTable.findBuiltIn("gl_MaxDrawBuffers", 100))->getConstPointer()->getIConst();
+                info.precision = GL_MEDIUM_FLOAT;  // Defined by spec.
+                info.staticUse = true;
+                info.isInvariant = mSymbolTable.isVaryingInvariant(kName);
+                mVaryings->push_back(info);
+                mLastFragDataAdded = true;
+            }
+            return;
+          case EvqFragColor:
+              if (!mFragColorAdded)
+              {
+                  OutputVariable info;
+                  const char kName[] = "gl_FragColor";
+                  info.name          = kName;
+                  info.mappedName    = kName;
+                  info.type          = GL_FLOAT_VEC4;
+                  info.arraySize     = 0;
+                  info.precision     = GL_MEDIUM_FLOAT;  // Defined by spec.
+                  info.staticUse = true;
+                  mOutputVariables->push_back(info);
+                  mFragColorAdded = true;
+              }
+              return;
+          case EvqFragData:
+              if (!mFragDataAdded)
+              {
+                  OutputVariable info;
+                  const char kName[] = "gl_FragData";
+                  info.name          = kName;
+                  info.mappedName    = kName;
+                  info.type          = GL_FLOAT_VEC4;
+                  info.arraySize = static_cast<const TVariable *>(
+                                       mSymbolTable.findBuiltIn("gl_MaxDrawBuffers", 100))
+                                       ->getConstPointer()
+                                       ->getIConst();
+                  info.precision = GL_MEDIUM_FLOAT;  // Defined by spec.
+                  info.staticUse = true;
+                  mOutputVariables->push_back(info);
+                  mFragDataAdded = true;
+              }
+              return;
+          case EvqFragDepthEXT:
+              if (!mFragDepthEXTAdded)
+              {
+                  OutputVariable info;
+                  const char kName[] = "gl_FragDepthEXT";
+                  info.name          = kName;
+                  info.mappedName    = kName;
+                  info.type          = GL_FLOAT;
+                  info.arraySize = 0;
+                  info.precision =
+                      GLVariablePrecision(static_cast<const TVariable *>(
+                                              mSymbolTable.findBuiltIn("gl_FragDepthEXT", 100))
+                                              ->getType());
+                  info.staticUse = true;
+                  mOutputVariables->push_back(info);
+                  mFragDepthEXTAdded = true;
+              }
+              return;
+          case EvqFragDepth:
+              if (!mFragDepthAdded)
+              {
+                  OutputVariable info;
+                  const char kName[] = "gl_FragDepth";
+                  info.name          = kName;
+                  info.mappedName    = kName;
+                  info.type          = GL_FLOAT;
+                  info.arraySize     = 0;
+                  info.precision     = GL_HIGH_FLOAT;
+                  info.staticUse = true;
+                  mOutputVariables->push_back(info);
+                  mFragDepthAdded = true;
+              }
+              return;
+          case EvqSecondaryFragColorEXT:
+              if (!mSecondaryFragColorEXTAdded)
+              {
+                  OutputVariable info;
+                  const char kName[] = "gl_SecondaryFragColorEXT";
+                  info.name          = kName;
+                  info.mappedName    = kName;
+                  info.type          = GL_FLOAT_VEC4;
+                  info.arraySize     = 0;
+                  info.precision     = GL_MEDIUM_FLOAT;  // Defined by spec.
+                  info.staticUse = true;
+                  mOutputVariables->push_back(info);
+                  mSecondaryFragColorEXTAdded = true;
+              }
+              return;
+          case EvqSecondaryFragDataEXT:
+              if (!mSecondaryFragDataEXTAdded)
+              {
+                  OutputVariable info;
+                  const char kName[] = "gl_SecondaryFragDataEXT";
+                  info.name          = kName;
+                  info.mappedName    = kName;
+                  info.type          = GL_FLOAT_VEC4;
+
+                  const TVariable *maxDualSourceDrawBuffersVar = static_cast<const TVariable *>(
+                      mSymbolTable.findBuiltIn("gl_MaxDualSourceDrawBuffersEXT", 100));
+                  info.arraySize = maxDualSourceDrawBuffersVar->getConstPointer()->getIConst();
+                  info.precision = GL_MEDIUM_FLOAT;  // Defined by spec.
+                  info.staticUse = true;
+                  mOutputVariables->push_back(info);
+                  mSecondaryFragDataEXTAdded = true;
+              }
+              return;
           default:
             break;
         }
@@ -251,14 +473,14 @@ void CollectVariables::visitSymbol(TIntermSymbol *symbol)
 class NameHashingTraverser : public GetVariableTraverser
 {
   public:
-    NameHashingTraverser(ShHashFunction64 hashFunction)
-        : mHashFunction(hashFunction)
+    NameHashingTraverser(ShHashFunction64 hashFunction,
+                         const TSymbolTable &symbolTable)
+        : GetVariableTraverser(symbolTable),
+          mHashFunction(hashFunction)
     {}
 
   private:
-    DISALLOW_COPY_AND_ASSIGN(NameHashingTraverser);
-
-    virtual void visitVariable(ShaderVariable *variable)
+    void visitVariable(ShaderVariable *variable) override
     {
         TString stringName = TString(variable->name.c_str());
         variable->mappedName = TIntermTraverser::hash(stringName, mHashFunction).c_str();
@@ -290,6 +512,26 @@ void CollectVariables::visitVariable(const TIntermSymbol *variable,
 
 template <>
 void CollectVariables::visitVariable(const TIntermSymbol *variable,
+                                     std::vector<OutputVariable> *infoList) const
+{
+    ASSERT(variable);
+    const TType &type = variable->getType();
+    ASSERT(!type.getStruct());
+
+    OutputVariable attribute;
+
+    attribute.type       = GLVariableType(type);
+    attribute.precision  = GLVariablePrecision(type);
+    attribute.name       = variable->getSymbol().c_str();
+    attribute.arraySize  = static_cast<unsigned int>(type.getArraySize());
+    attribute.mappedName = TIntermTraverser::hash(variable->getSymbol(), mHashFunction).c_str();
+    attribute.location   = variable->getType().getLayoutQualifier().location;
+
+    infoList->push_back(attribute);
+}
+
+template <>
+void CollectVariables::visitVariable(const TIntermSymbol *variable,
                                      std::vector<InterfaceBlock> *infoList) const
 {
     InterfaceBlock interfaceBlock;
@@ -297,23 +539,20 @@ void CollectVariables::visitVariable(const TIntermSymbol *variable,
     ASSERT(blockType);
 
     interfaceBlock.name = blockType->name().c_str();
-    interfaceBlock.mappedName = TIntermTraverser::hash(variable->getSymbol(), mHashFunction).c_str();
+    interfaceBlock.mappedName =
+        TIntermTraverser::hash(blockType->name().c_str(), mHashFunction).c_str();
     interfaceBlock.instanceName = (blockType->hasInstanceName() ? blockType->instanceName().c_str() : "");
     interfaceBlock.arraySize = variable->getArraySize();
     interfaceBlock.isRowMajorLayout = (blockType->matrixPacking() == EmpRowMajor);
     interfaceBlock.layout = GetBlockLayoutType(blockType->blockStorage());
 
     // Gather field information
-    const TFieldList &fieldList = blockType->fields();
-
-    for (size_t fieldIndex = 0; fieldIndex < fieldList.size(); ++fieldIndex)
+    for (const TField *field : blockType->fields())
     {
-        const TField &field = *fieldList[fieldIndex];
-        const TString &fullFieldName = InterfaceBlockFieldName(*blockType, field);
-        const TType &fieldType = *field.type();
+        const TType &fieldType = *field->type();
 
-        GetVariableTraverser traverser;
-        traverser.traverse(fieldType, fullFieldName, &interfaceBlock.fields);
+        NameHashingTraverser traverser(mHashFunction, mSymbolTable);
+        traverser.traverse(fieldType, field->name(), &interfaceBlock.fields);
 
         interfaceBlock.fields.back().isRowMajorLayout = (fieldType.getLayoutQualifier().matrixPacking == EmpRowMajor);
     }
@@ -325,7 +564,7 @@ template <typename VarT>
 void CollectVariables::visitVariable(const TIntermSymbol *variable,
                                      std::vector<VarT> *infoList) const
 {
-    NameHashingTraverser traverser(mHashFunction);
+    NameHashingTraverser traverser(mHashFunction, mSymbolTable);
     traverser.traverse(variable->getType(), variable->getSymbol(), infoList);
 }
 
@@ -421,9 +660,8 @@ bool CollectVariables::visitBinary(Visit, TIntermBinary *binaryNode)
     return true;
 }
 
-template <typename VarT>
-void ExpandVariables(const std::vector<VarT> &compact,
-                     std::vector<ShaderVariable> *expanded)
+void ExpandUniforms(const std::vector<Uniform> &compact,
+                    std::vector<ShaderVariable> *expanded)
 {
     for (size_t variableIndex = 0; variableIndex < compact.size(); variableIndex++)
     {
@@ -431,8 +669,5 @@ void ExpandVariables(const std::vector<VarT> &compact,
         ExpandVariable(variable, variable.name, variable.mappedName, variable.staticUse, expanded);
     }
 }
-
-template void ExpandVariables(const std::vector<Uniform> &, std::vector<ShaderVariable> *);
-template void ExpandVariables(const std::vector<Varying> &, std::vector<ShaderVariable> *);
 
 }

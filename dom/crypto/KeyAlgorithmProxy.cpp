@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -190,6 +190,19 @@ KeyAlgorithmProxy::JwkAlg() const
       return NS_LITERAL_STRING(JWK_ALG_RSA_OAEP_384);
     } else if (hashName.EqualsLiteral(WEBCRYPTO_ALG_SHA512)) {
       return NS_LITERAL_STRING(JWK_ALG_RSA_OAEP_512);
+    }
+  }
+
+  if (mName.EqualsLiteral(WEBCRYPTO_ALG_RSA_PSS)) {
+    nsString hashName = mRsa.mHash.mName;
+    if (hashName.EqualsLiteral(WEBCRYPTO_ALG_SHA1)) {
+      return NS_LITERAL_STRING(JWK_ALG_PS1);
+    } else if (hashName.EqualsLiteral(WEBCRYPTO_ALG_SHA256)) {
+      return NS_LITERAL_STRING(JWK_ALG_PS256);
+    } else if (hashName.EqualsLiteral(WEBCRYPTO_ALG_SHA384)) {
+      return NS_LITERAL_STRING(JWK_ALG_PS384);
+    } else if (hashName.EqualsLiteral(WEBCRYPTO_ALG_SHA512)) {
+      return NS_LITERAL_STRING(JWK_ALG_PS512);
     }
   }
 

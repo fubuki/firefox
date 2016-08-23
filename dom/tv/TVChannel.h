@@ -18,22 +18,22 @@ namespace mozilla {
 namespace dom {
 
 class Promise;
-class TVProgram;
 class TVSource;
 
-class TVChannel MOZ_FINAL : public DOMEventTargetHelper
+class TVChannel final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TVChannel, DOMEventTargetHelper)
 
-  static already_AddRefed<TVChannel> Create(nsPIDOMWindow* aWindow,
-                                            TVSource* aSource,
-                                            nsITVChannelData* aData);
+  static already_AddRefed<TVChannel>
+  Create(nsPIDOMWindowInner* aWindow,
+         TVSource* aSource,
+         nsITVChannelData* aData);
 
   // WebIDL (internal functions)
 
-  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   nsresult DispatchTVEvent(nsIDOMEvent* aEvent);
 
@@ -63,7 +63,7 @@ public:
   bool IsFree() const;
 
 private:
-  TVChannel(nsPIDOMWindow* aWindow,
+  TVChannel(nsPIDOMWindowInner* aWindow,
             TVSource* aSource);
 
   ~TVChannel();
@@ -71,7 +71,7 @@ private:
   bool Init(nsITVChannelData* aData);
 
   nsCOMPtr<nsITVService> mTVService;
-  nsRefPtr<TVSource> mSource;
+  RefPtr<TVSource> mSource;
   nsString mNetworkId;
   nsString mTransportStreamId;
   nsString mServiceId;

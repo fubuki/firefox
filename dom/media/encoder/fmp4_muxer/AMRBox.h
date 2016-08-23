@@ -21,8 +21,8 @@ public:
   nsTArray<uint8_t> amrDecSpecInfo;
 
   // MuxerOperation methods
-  nsresult Generate(uint32_t* aBoxSize) MOZ_OVERRIDE;
-  nsresult Write() MOZ_OVERRIDE;
+  nsresult Generate(uint32_t* aBoxSize) override;
+  nsresult Write() override;
 
   // AMRSpecificBox methods
   AMRSpecificBox(ISOControl* aControl);
@@ -34,11 +34,11 @@ public:
 class AMRSampleEntry : public AudioSampleEntry {
 public:
   // 3GPP members
-  nsRefPtr<AMRSpecificBox> amr_special_box;
+  RefPtr<AMRSpecificBox> amr_special_box;
 
   // MuxerOperation methods
-  nsresult Generate(uint32_t* aBoxSize) MOZ_OVERRIDE;
-  nsresult Write() MOZ_OVERRIDE;
+  nsresult Generate(uint32_t* aBoxSize) override;
+  nsresult Write() override;
 
   // AMRSampleEntry methods
   AMRSampleEntry(ISOControl* aControl);

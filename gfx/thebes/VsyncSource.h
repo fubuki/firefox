@@ -6,12 +6,14 @@
 #ifndef GFX_VSYNCSOURCE_H
 #define GFX_VSYNCSOURCE_H
 
+#include "nsTArray.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/TimeStamp.h"
 #include "nsISupportsImpl.h"
-#include "nsTArray.h"
 
 namespace mozilla {
+class RefreshTimerVsyncDispatcher;
 class CompositorVsyncDispatcher;
 
 namespace gfx {
@@ -21,35 +23,62 @@ namespace gfx {
 class VsyncSource
 {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VsyncSource)
+
+  typedef mozilla::RefreshTimerVsyncDispatcher RefreshTimerVsyncDispatcher;
+  typedef mozilla::CompositorVsyncDispatcher CompositorVsyncDispatcher;
+
 public:
   // Controls vsync unique to each display and unique on each platform
   class Display {
     public:
       Display();
       virtual ~Display();
-      void AddCompositorVsyncDispatcher(mozilla::CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
-      void RemoveCompositorVsyncDispatcher(mozilla::CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
+
       // Notified when this display's vsync occurs, on the vsync thread
-      virtual void NotifyVsync(mozilla::TimeStamp aVsyncTimestamp);
+      // The aVsyncTimestamp should normalize to the Vsync time that just occured
+      // However, different platforms give different vsync notification times.
+      // b2g - The vsync timestamp of the previous frame that was just displayed
+      // OSX - The vsync timestamp of the upcoming frame, in the future
+      // Windows: It's messy, see gfxWindowsPlatform.
+      // Android: TODO
+      // All platforms should normalize to the vsync that just occured.
+      // Large parts of Gecko assume TimeStamps should not be in the future such as animations
+      virtual void NotifyVsync(TimeStamp aVsyncTimestamp);
+
+      RefPtr<RefreshTimerVsyncDispatcher> GetRefreshTimerVsyncDispatcher();
+
+      void AddCompositorVsyncDispatcher(CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
+      void RemoveCompositorVsyncDispatcher(CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
+      void NotifyRefreshTimerVsyncStatus(bool aEnable);
+      virtual TimeDuration GetVsyncRate();
 
       // These should all only be called on the main thread
       virtual void EnableVsync() = 0;
       virtual void DisableVsync() = 0;
       virtual bool IsVsyncEnabled() = 0;
+      virtual void Shutdown() = 0;
 
     private:
-      nsTArray<nsRefPtr<mozilla::CompositorVsyncDispatcher>> mCompositorVsyncDispatchers;
-  }; // end Display
+      void UpdateVsyncStatus();
 
-  void AddCompositorVsyncDispatcher(mozilla::CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
-  void RemoveCompositorVsyncDispatcher(mozilla::CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
+      Mutex mDispatcherLock;
+      bool mRefreshTimerNeedsVsync;
+      nsTArray<RefPtr<CompositorVsyncDispatcher>> mCompositorVsyncDispatchers;
+      RefPtr<RefreshTimerVsyncDispatcher> mRefreshTimerVsyncDispatcher;
+  };
+
+  void AddCompositorVsyncDispatcher(CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
+  void RemoveCompositorVsyncDispatcher(CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
+
+  RefPtr<RefreshTimerVsyncDispatcher> GetRefreshTimerVsyncDispatcher();
+  virtual Display& GetGlobalDisplay() = 0; // Works across all displays
+  void Shutdown();
 
 protected:
-  virtual Display& GetGlobalDisplay() = 0; // Works across all displays
-  virtual Display& FindDisplay(mozilla::CompositorVsyncDispatcher* aCompositorVsyncDispatcher);
   virtual ~VsyncSource() {}
-}; // VsyncSource
-} // gfx
-} // mozilla
+};
+
+} // namespace gfx
+} // namespace mozilla
 
 #endif /* GFX_VSYNCSOURCE_H */

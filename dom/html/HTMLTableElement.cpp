@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,8 +24,8 @@ namespace dom {
  * This class provides a late-bound collection of rows in a table.
  * mParent is NOT ref-counted to avoid circular references
  */
-class TableRowsCollection : public nsIHTMLCollection,
-                            public nsWrapperCache
+class TableRowsCollection final : public nsIHTMLCollection,
+                                  public nsWrapperCache
 {
 public:
   explicit TableRowsCollection(HTMLTableElement* aParent);
@@ -32,16 +33,16 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_NSIDOMHTMLCOLLECTION
 
-  virtual Element* GetElementAt(uint32_t aIndex) MOZ_OVERRIDE;
-  virtual nsINode* GetParentObject() MOZ_OVERRIDE
+  virtual Element* GetElementAt(uint32_t aIndex) override;
+  virtual nsINode* GetParentObject() override
   {
     return mParent;
   }
 
   virtual Element*
-  GetFirstNamedElement(const nsAString& aName, bool& aFound) MOZ_OVERRIDE;
+  GetFirstNamedElement(const nsAString& aName, bool& aFound) override;
   virtual void GetSupportedNames(unsigned aFlags,
-                                 nsTArray<nsString>& aNames) MOZ_OVERRIDE;
+                                 nsTArray<nsString>& aNames) override;
 
   NS_IMETHOD    ParentDestroyed();
 
@@ -49,18 +50,18 @@ public:
 
   // nsWrapperCache
   using nsWrapperCache::GetWrapperPreserveColor;
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 protected:
   virtual ~TableRowsCollection();
 
-  virtual JSObject* GetWrapperPreserveColorInternal() MOZ_OVERRIDE
+  virtual JSObject* GetWrapperPreserveColorInternal() override
   {
     return nsWrapperCache::GetWrapperPreserveColor();
   }
 
   // Those rows that are not in table sections
   HTMLTableElement* mParent;
-  nsRefPtr<nsContentList> mOrphanRows;  
+  RefPtr<nsContentList> mOrphanRows;  
 };
 
 
@@ -83,9 +84,9 @@ TableRowsCollection::~TableRowsCollection()
 }
 
 JSObject*
-TableRowsCollection::WrapObject(JSContext* aCx)
+TableRowsCollection::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLCollectionBinding::Wrap(aCx, this);
+  return HTMLCollectionBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(TableRowsCollection, mOrphanRows)
@@ -119,7 +120,7 @@ NS_INTERFACE_MAP_END
       /* TBodies */                                                  \
       for (nsIContent* _node = mParent->nsINode::GetFirstChild();    \
            _node; _node = _node->GetNextSibling()) {                 \
-        if (_node->IsHTML(nsGkAtoms::tbody)) {                       \
+        if (_node->IsHTMLElement(nsGkAtoms::tbody)) {                \
           rowGroup = static_cast<HTMLTableSectionElement*>(_node);   \
           rows = rowGroup->Rows();                                   \
           do { /* gives scoping */                                   \
@@ -302,9 +303,9 @@ HTMLTableElement::~HTMLTableElement()
 }
 
 JSObject*
-HTMLTableElement::WrapNode(JSContext *aCx)
+HTMLTableElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLTableElementBinding::Wrap(aCx, this);
+  return HTMLTableElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(HTMLTableElement)
@@ -326,9 +327,8 @@ NS_IMPL_ADDREF_INHERITED(HTMLTableElement, Element)
 NS_IMPL_RELEASE_INHERITED(HTMLTableElement, Element)
 
 // QueryInterface implementation for HTMLTableElement
-NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(HTMLTableElement)
-  NS_INTERFACE_TABLE_INHERITED(HTMLTableElement, nsIDOMHTMLTableElement)
-NS_INTERFACE_TABLE_TAIL_INHERITING(nsGenericHTMLElement)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(HTMLTableElement)
+NS_INTERFACE_MAP_END_INHERITING(nsGenericHTMLElement)
 
 
 NS_IMPL_ELEMENT_CLONE(HTMLTableElement)
@@ -366,10 +366,10 @@ HTMLTableElement::TBodies()
 already_AddRefed<nsGenericHTMLElement>
 HTMLTableElement::CreateTHead()
 {
-  nsRefPtr<nsGenericHTMLElement> head = GetTHead();
+  RefPtr<nsGenericHTMLElement> head = GetTHead();
   if (!head) {
     // Create a new head rowgroup.
-    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+    RefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::thead,
                                 getter_AddRefs(nodeInfo));
 
@@ -398,10 +398,10 @@ HTMLTableElement::DeleteTHead()
 already_AddRefed<nsGenericHTMLElement>
 HTMLTableElement::CreateTFoot()
 {
-  nsRefPtr<nsGenericHTMLElement> foot = GetTFoot();
+  RefPtr<nsGenericHTMLElement> foot = GetTFoot();
   if (!foot) {
     // create a new foot rowgroup
-    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+    RefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tfoot,
                                 getter_AddRefs(nodeInfo));
 
@@ -429,10 +429,10 @@ HTMLTableElement::DeleteTFoot()
 already_AddRefed<nsGenericHTMLElement>
 HTMLTableElement::CreateCaption()
 {
-  nsRefPtr<nsGenericHTMLElement> caption = GetCaption();
+  RefPtr<nsGenericHTMLElement> caption = GetCaption();
   if (!caption) {
     // Create a new caption.
-    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+    RefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::caption,
                                 getter_AddRefs(nodeInfo));
 
@@ -460,13 +460,13 @@ HTMLTableElement::DeleteCaption()
 already_AddRefed<nsGenericHTMLElement>
 HTMLTableElement::CreateTBody()
 {
-  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo =
+  RefPtr<mozilla::dom::NodeInfo> nodeInfo =
     OwnerDoc()->NodeInfoManager()->GetNodeInfo(nsGkAtoms::tbody, nullptr,
                                                kNameSpaceID_XHTML,
                                                nsIDOMNode::ELEMENT_NODE);
   MOZ_ASSERT(nodeInfo);
 
-  nsRefPtr<nsGenericHTMLElement> newBody =
+  RefPtr<nsGenericHTMLElement> newBody =
     NS_NewHTMLTableSectionElement(nodeInfo.forget());
   MOZ_ASSERT(newBody);
 
@@ -474,7 +474,7 @@ HTMLTableElement::CreateTBody()
   for (nsIContent* child = nsINode::GetLastChild();
        child;
        child = child->GetPreviousSibling()) {
-    if (child->IsHTML(nsGkAtoms::tbody)) {
+    if (child->IsHTMLElement(nsGkAtoms::tbody)) {
       referenceNode = child->GetNextSibling();
       break;
     }
@@ -512,7 +512,7 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
   // use local variable refIndex so we can remember original aIndex
   uint32_t refIndex = (uint32_t)aIndex;
 
-  nsRefPtr<nsGenericHTMLElement> newRow;
+  RefPtr<nsGenericHTMLElement> newRow;
   if (rowCount > 0) {
     if (refIndex == rowCount || aIndex == -1) {
       // we set refIndex to the last row so we can get the last row's
@@ -521,11 +521,11 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
       refIndex = rowCount - 1;
     }
 
-    Element* refRow = rows->Item(refIndex);
-    nsINode* parent = refRow->GetParentNode();
+    RefPtr<Element> refRow = rows->Item(refIndex);
+    nsCOMPtr<nsINode> parent = refRow->GetParentNode();
 
     // create the row
-    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+    RefPtr<mozilla::dom::NodeInfo> nodeInfo;
     nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tr,
                                 getter_AddRefs(nodeInfo));
 
@@ -552,14 +552,14 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
     for (nsIContent* child = nsINode::GetLastChild();
          child;
          child = child->GetPreviousSibling()) {
-      if (child->IsHTML(nsGkAtoms::tbody)) {
+      if (child->IsHTMLElement(nsGkAtoms::tbody)) {
         rowGroup = child;
         break;
       }
     }
 
     if (!rowGroup) { // need to create a TBODY
-      nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+      RefPtr<mozilla::dom::NodeInfo> nodeInfo;
       nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tbody,
                                   getter_AddRefs(nodeInfo));
 
@@ -573,7 +573,7 @@ HTMLTableElement::InsertRow(int32_t aIndex, ErrorResult& aError)
     }
 
     if (rowGroup) {
-      nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+      RefPtr<mozilla::dom::NodeInfo> nodeInfo;
       nsContentUtils::NameChanged(mNodeInfo, nsGkAtoms::tr,
                                   getter_AddRefs(nodeInfo));
 
@@ -705,10 +705,10 @@ HTMLTableElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
     if (value && value->Type() == nsAttrValue::eEnum) {
       if (value->GetEnumValue() == NS_STYLE_TEXT_ALIGN_CENTER ||
           value->GetEnumValue() == NS_STYLE_TEXT_ALIGN_MOZ_CENTER) {
-        nsCSSValue* marginLeft = aData->ValueForMarginLeftValue();
+        nsCSSValue* marginLeft = aData->ValueForMarginLeft();
         if (marginLeft->GetUnit() == eCSSUnit_Null)
           marginLeft->SetAutoValue();
-        nsCSSValue* marginRight = aData->ValueForMarginRightValue();
+        nsCSSValue* marginRight = aData->ValueForMarginRight();
         if (marginRight->GetUnit() == eCSSUnit_Null)
           marginRight->SetAutoValue();
       }
@@ -721,10 +721,10 @@ HTMLTableElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
       value = aAttributes->GetAttr(nsGkAtoms::hspace);
 
       if (value && value->Type() == nsAttrValue::eInteger) {
-        nsCSSValue* marginLeft = aData->ValueForMarginLeftValue();
+        nsCSSValue* marginLeft = aData->ValueForMarginLeft();
         if (marginLeft->GetUnit() == eCSSUnit_Null)
           marginLeft->SetFloatValue((float)value->GetIntegerValue(), eCSSUnit_Pixel); 
-        nsCSSValue* marginRight = aData->ValueForMarginRightValue();
+        nsCSSValue* marginRight = aData->ValueForMarginRight();
         if (marginRight->GetUnit() == eCSSUnit_Null)
           marginRight->SetFloatValue((float)value->GetIntegerValue(), eCSSUnit_Pixel);
       }
@@ -768,10 +768,10 @@ HTMLTableElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
     nscolor color;
     if (value && presContext->UseDocumentColors() &&
         value->GetColorValue(color)) {
-      nsCSSValue* borderLeftColor = aData->ValueForBorderLeftColorValue();
+      nsCSSValue* borderLeftColor = aData->ValueForBorderLeftColor();
       if (borderLeftColor->GetUnit() == eCSSUnit_Null)
         borderLeftColor->SetColorValue(color);
-      nsCSSValue* borderRightColor = aData->ValueForBorderRightColorValue();
+      nsCSSValue* borderRightColor = aData->ValueForBorderRightColor();
       if (borderRightColor->GetUnit() == eCSSUnit_Null)
         borderRightColor->SetColorValue(color);
       nsCSSValue* borderTopColor = aData->ValueForBorderTopColor();
@@ -792,10 +792,10 @@ HTMLTableElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
         borderThickness = borderValue->GetIntegerValue();
 
       // by default, set all border sides to the specified width
-      nsCSSValue* borderLeftWidth = aData->ValueForBorderLeftWidthValue();
+      nsCSSValue* borderLeftWidth = aData->ValueForBorderLeftWidth();
       if (borderLeftWidth->GetUnit() == eCSSUnit_Null)
         borderLeftWidth->SetFloatValue((float)borderThickness, eCSSUnit_Pixel);
-      nsCSSValue* borderRightWidth = aData->ValueForBorderRightWidthValue();
+      nsCSSValue* borderRightWidth = aData->ValueForBorderRightWidth();
       if (borderRightWidth->GetUnit() == eCSSUnit_Null)
         borderRightWidth->SetFloatValue((float)borderThickness, eCSSUnit_Pixel);
       nsCSSValue* borderTopWidth = aData->ValueForBorderTopWidth();
@@ -854,12 +854,12 @@ MapInheritedTableAttributesIntoRule(const nsMappedAttributes* aAttributes,
       // don't have any set.
       nsCSSValue padVal(float(value->GetIntegerValue()), eCSSUnit_Pixel);
 
-      nsCSSValue* paddingLeft = aData->ValueForPaddingLeftValue();
+      nsCSSValue* paddingLeft = aData->ValueForPaddingLeft();
       if (paddingLeft->GetUnit() == eCSSUnit_Null) {
         *paddingLeft = padVal;
       }
 
-      nsCSSValue* paddingRight = aData->ValueForPaddingRightValue();
+      nsCSSValue* paddingRight = aData->ValueForPaddingRight();
       if (paddingRight->GetUnit() == eCSSUnit_Null) {
         *paddingRight = padVal;
       }
@@ -897,11 +897,11 @@ HTMLTableElement::BuildInheritedAttributes()
   nsIDocument *document = GetComposedDoc();
   nsHTMLStyleSheet* sheet = document ?
                               document->GetAttributeStyleSheet() : nullptr;
-  nsRefPtr<nsMappedAttributes> newAttrs;
+  RefPtr<nsMappedAttributes> newAttrs;
   if (sheet) {
     const nsAttrValue* value = mAttrsAndChildren.GetAttr(nsGkAtoms::cellpadding);
     if (value) {
-      nsRefPtr<nsMappedAttributes> modifiableMapped = new
+      RefPtr<nsMappedAttributes> modifiableMapped = new
       nsMappedAttributes(sheet, MapInheritedTableAttributesIntoRule);
 
       if (modifiableMapped) {
@@ -954,7 +954,7 @@ HTMLTableElement::UnbindFromTree(bool aDeep, bool aNullParent)
 
 nsresult
 HTMLTableElement::BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValueOrString* aValue,
+                                nsAttrValueOrString* aValue,
                                 bool aNotify)
 {
   if (aName == nsGkAtoms::cellpadding && aNameSpaceID == kNameSpaceID_None) {

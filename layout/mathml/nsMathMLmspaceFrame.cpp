@@ -98,6 +98,8 @@ nsMathMLmspaceFrame::Reflow(nsPresContext*          aPresContext,
                             const nsHTMLReflowState& aReflowState,
                             nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
+  mPresentationData.flags &= ~NS_MATHML_ERROR;
   ProcessAttributes(aPresContext);
 
   mBoundingMetrics = nsBoundingMetrics();
@@ -118,7 +120,7 @@ nsMathMLmspaceFrame::Reflow(nsPresContext*          aPresContext,
 }
 
 /* virtual */ nsresult
-nsMathMLmspaceFrame::MeasureForWidth(nsRenderingContext& aRenderingContext,
+nsMathMLmspaceFrame::MeasureForWidth(DrawTarget* aDrawTarget,
                                      nsHTMLReflowMetrics& aDesiredSize)
 {
   ProcessAttributes(PresContext());

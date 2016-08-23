@@ -3,7 +3,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+Components.utils.import("resource://gre/modules/BrowserUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
+                                  "resource://gre/modules/LoginHelper.jsm");
+
 var security = {
+  init: function(uri, windowInfo) {
+    this.uri = uri;
+    this.windowInfo = windowInfo;
+  },
+
   // Display the server certificate (static)
   viewCert : function () {
     var cert = security._cert;
@@ -19,14 +29,10 @@ var security = {
 
     // We don't have separate info for a frame, return null until further notice
     // (see bug 138479)
-    if (gWindow != gWindow.top)
+    if (!this.windowInfo.isTopWindow)
       return null;
 
-    var hName = null;
-    try {
-      hName = gWindow.location.host;
-    }
-    catch (exception) { }
+    var hostName = this.windowInfo.hostName;
 
     var ui = security._getSecurityUI();
     if (!ui)
@@ -34,7 +40,10 @@ var security = {
 
     var isBroken =
       (ui.state & Components.interfaces.nsIWebProgressListener.STATE_IS_BROKEN);
-    var isInsecure = 
+    var isMixed =
+      (ui.state & (Components.interfaces.nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT |
+                   Components.interfaces.nsIWebProgressListener.STATE_LOADED_MIXED_DISPLAY_CONTENT));
+    var isInsecure =
       (ui.state & Components.interfaces.nsIWebProgressListener.STATE_IS_INSECURE);
     var isEV =
       (ui.state & Components.interfaces.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL);
@@ -48,15 +57,15 @@ var security = {
         this.mapIssuerOrganization(cert.issuerOrganization) || cert.issuerName;
 
       var retval = {
-        hostName : hName,
+        hostName : hostName,
         cAName : issuerName,
         encryptionAlgorithm : undefined,
         encryptionStrength : undefined,
         version: undefined,
         isBroken : isBroken,
+        isMixed : isMixed,
         isEV : isEV,
-        cert : cert,
-        fullLocation : gWindow.location
+        cert : cert
       };
 
       var version;
@@ -86,15 +95,16 @@ var security = {
       return retval;
     } else {
       return {
-        hostName : hName,
+        hostName : hostName,
         cAName : "",
         encryptionAlgorithm : "",
         encryptionStrength : 0,
         version: "",
         isBroken : isBroken,
+        isMixed : isMixed,
         isEV : isEV,
-        cert : null,
-        fullLocation : gWindow.location
+        cert : null
+
       };
     }
   },
@@ -117,7 +127,7 @@ var security = {
     // No mapping required
     return name;
   },
-  
+
   /**
    * Open the cookie manager window
    */
@@ -130,13 +140,12 @@ var security = {
                       getService(Components.interfaces.nsIEffectiveTLDService);
 
     var eTLD;
-    var uri = gDocument.documentURIObject;
     try {
-      eTLD = eTLDService.getBaseDomain(uri);
+      eTLD = eTLDService.getBaseDomain(this.uri);
     }
     catch (e) {
       // getBaseDomain will fail if the host is an IP address or is empty
-      eTLD = uri.asciiHost;
+      eTLD = this.uri.asciiHost;
     }
 
     if (win) {
@@ -151,25 +160,16 @@ var security = {
   /**
    * Open the login manager window
    */
-  viewPasswords : function()
-  {
-    var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                       .getService(Components.interfaces.nsIWindowMediator);
-    var win = wm.getMostRecentWindow("Toolkit:PasswordManager");
-    if (win) {
-      win.setFilter(this._getSecurityInfo().hostName);
-      win.focus();
-    }
-    else
-      window.openDialog("chrome://passwordmgr/content/passwordManager.xul",
-                        "Toolkit:PasswordManager", "",
-                        {filterString : this._getSecurityInfo().hostName});
+  viewPasswords : function() {
+    LoginHelper.openPasswordManager(window, this._getSecurityInfo().hostName);
   },
 
   _cert : null
 };
 
-function securityOnLoad() {
+function securityOnLoad(uri, windowInfo) {
+  security.init(uri, windowInfo);
+
   var info = security._getSecurityInfo();
   if (!info) {
     document.getElementById("securityTab").hidden = true;
@@ -183,7 +183,7 @@ function securityOnLoad() {
 
   /* Set Identity section text */
   setText("security-identity-domain-value", info.hostName);
-  
+
   var owner, verifier;
   if (info.cert && !info.isBroken) {
     // Try to pull out meaningful values.  Technically these fields are optional
@@ -227,12 +227,11 @@ function securityOnLoad() {
   var yesStr = pageInfoBundle.getString("yes");
   var noStr = pageInfoBundle.getString("no");
 
-  var uri = gDocument.documentURIObject;
   setText("security-privacy-cookies-value",
           hostHasCookies(uri) ? yesStr : noStr);
   setText("security-privacy-passwords-value",
           realmHasPasswords(uri) ? yesStr : noStr);
-  
+
   var visitCount = previousVisitCount(info.hostName);
   if(visitCount > 1) {
     setText("security-privacy-history-value",
@@ -243,7 +242,7 @@ function securityOnLoad() {
             pageInfoBundle.getString("securityOneVisit"));
   }
   else {
-    setText("security-privacy-history-value", noStr);        
+    setText("security-privacy-history-value", noStr);
   }
 
   /* Set the Technical Detail section messages */
@@ -253,8 +252,16 @@ function securityOnLoad() {
   var msg2;
 
   if (info.isBroken) {
-    hdr = pkiBundle.getString("pageInfo_MixedContent");
-    msg1 = pkiBundle.getString("pageInfo_Privacy_Broken1");
+    if (info.isMixed) {
+      hdr = pkiBundle.getString("pageInfo_MixedContent");
+      msg1 = pkiBundle.getString("pageInfo_MixedContent2");
+    } else {
+      hdr = pkiBundle.getFormattedString("pageInfo_BrokenEncryption",
+                                         [info.encryptionAlgorithm,
+                                          info.encryptionStrength + "",
+                                          info.version]);
+      msg1 = pkiBundle.getString("pageInfo_WeakCipher");
+    }
     msg2 = pkiBundle.getString("pageInfo_Privacy_None2");
   }
   else if (info.encryptionStrength > 0) {
@@ -276,7 +283,7 @@ function securityOnLoad() {
   }
   setText("security-technical-shortform", hdr);
   setText("security-technical-longform1", msg1);
-  setText("security-technical-longform2", msg2); 
+  setText("security-technical-longform2", msg2);
 }
 
 function setText(id, value)
@@ -331,13 +338,13 @@ function realmHasPasswords(uri) {
 function previousVisitCount(host, endTimeReference) {
   if (!host)
     return false;
-  
+
   var historyService = Components.classes["@mozilla.org/browser/nav-history-service;1"]
                                  .getService(Components.interfaces.nsINavHistoryService);
-    
+
   var options = historyService.getNewQueryOptions();
   options.resultType = options.RESULTS_AS_VISIT;
-  
+
   // Search for visits to this host before today
   var query = historyService.getNewQuery();
   query.endTimeReference = query.TIME_RELATIVE_TODAY;

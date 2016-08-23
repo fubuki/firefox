@@ -14,14 +14,12 @@
 class nsIAtom;
 class nsNodeInfoManager;
 class nsIContent;
-class nsIContentIterator;
 class nsIDocument;
 class nsIFrame;
 class nsIHTMLContentSink;
 class nsIFragmentContentSink;
 class nsStyleContext;
 class nsIURI;
-class nsString;
 class nsIPresShell;
 class nsIChannel;
 class nsTableColFrame;
@@ -177,6 +175,9 @@ nsIFrame*
 NS_NewRangeFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 nsIFrame*
 NS_NewNumberControlFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
+class DetailsFrame;
+DetailsFrame*
+NS_NewDetailsFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
 // Table frame factories
 class nsTableOuterFrame;
@@ -198,7 +199,7 @@ nsTableRowGroupFrame*
 NS_NewTableRowGroupFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 class nsTableCellFrame;
 nsTableCellFrame*
-NS_NewTableCellFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, bool aIsBorderCollapse);
+NS_NewTableCellFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, nsTableFrame* aTableFrame);
 
 nsresult
 NS_NewHTMLContentSink(nsIHTMLContentSink** aInstancePtrResult,

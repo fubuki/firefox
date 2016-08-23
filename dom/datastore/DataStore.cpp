@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,6 +13,7 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Preferences.h"
 #include "AccessCheck.h"
+#include "nsContentUtils.h"
 
 namespace mozilla {
 namespace dom {
@@ -24,7 +27,7 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(DataStore, DOMEventTargetHelper, mStore)
 
-DataStore::DataStore(nsPIDOMWindow* aWindow)
+DataStore::DataStore(nsPIDOMWindowInner* aWindow)
   : DOMEventTargetHelper(aWindow)
 {
 }
@@ -36,20 +39,21 @@ DataStore::~DataStore()
 already_AddRefed<DataStore>
 DataStore::Constructor(GlobalObject& aGlobal, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window =
+    do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
 
-  nsRefPtr<DataStore> store = new DataStore(window);
+  RefPtr<DataStore> store = new DataStore(window);
   return store.forget();
 }
 
 JSObject*
-DataStore::WrapObject(JSContext* aCx)
+DataStore::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return DataStoreBinding::Wrap(aCx, this);
+  return DataStoreBinding::Wrap(aCx, this, aGivenProto);
 }
 
 /*static*/ bool

@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+"use strict";
+
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
@@ -14,7 +16,7 @@ const SETTINGS_DEBUG_ENABLED = "geolocation.debugging.enabled";
 const SETTINGS_CHANGED_TOPIC = "mozsettings-changed";
 const SETTINGS_WIFI_ENABLED = "wifi.enabled";
 
-let gLoggingEnabled = false;
+var gLoggingEnabled = false;
 
 /*
    The gLocationRequestTimeout controls how long we wait on receiving an update
@@ -27,10 +29,10 @@ let gLoggingEnabled = false;
    data and xhr it to the location server.
 */
 
-let gLocationRequestTimeout = 5000;
+var gLocationRequestTimeout = 5000;
 
-let gWifiScanningEnabled = true;
-let gCellScanningEnabled = false;
+var gWifiScanningEnabled = true;
+var gCellScanningEnabled = false;
 
 function LOG(aMsg) {
   if (gLoggingEnabled) {
@@ -125,8 +127,8 @@ function CachedRequest(loc, cellInfo, wifiList) {
   };
  }
 
-let gCachedRequest = null;
-let gDebugCacheReasoning = ""; // for logging the caching logic
+var gCachedRequest = null;
+var gDebugCacheReasoning = ""; // for logging the caching logic
 
 // This function serves two purposes:
 // 1) do we have a cached request
@@ -318,13 +320,12 @@ WifiGeoPositionProvider.prototype = {
       }
     };
 
-    try {
-      Services.obs.addObserver(this, SETTINGS_CHANGED_TOPIC, false);
-      let settings = Cc["@mozilla.org/settingsService;1"].getService(Ci.nsISettingsService);
+    Services.obs.addObserver(this, SETTINGS_CHANGED_TOPIC, false);
+    let settingsService = Cc["@mozilla.org/settingsService;1"];
+    if (settingsService) {
+      let settings = settingsService.getService(Ci.nsISettingsService);
       settings.createLock().get(SETTINGS_WIFI_ENABLED, settingsCallback);
       settings.createLock().get(SETTINGS_DEBUG_ENABLED, settingsCallback);
-    } catch(ex) {
-      // This platform doesn't have the settings interface, and that is just peachy
     }
 
     if (gWifiScanningEnabled && Cc["@mozilla.org/wifi/monitor;1"]) {
@@ -382,8 +383,9 @@ WifiGeoPositionProvider.prototype = {
       let result = ap.ssid.indexOf(mask, ap.ssid.length - mask.length);
       if (result != -1) {
         LOG("Filtering out " + ap.ssid + " " + result);
+        return false;
       }
-      return result;
+      return true;
     };
 
     function sort(a, b) {
@@ -443,7 +445,7 @@ WifiGeoPositionProvider.prototype = {
               break;
             // CDMA cases to be handled in bug 1010282
           };
-          result.push({ radio: radioTechFamily,
+          result.push({ radioType: radioTechFamily,
                       mobileCountryCode: voice.network.mcc,
                       mobileNetworkCode: voice.network.mnc,
                       locationAreaCode: cell.gsmLocationAreaCode,
@@ -504,12 +506,18 @@ WifiGeoPositionProvider.prototype = {
     xhr.responseType = "json";
     xhr.mozBackgroundRequest = true;
     xhr.channel.loadFlags = Ci.nsIChannel.LOAD_ANONYMOUS;
+    xhr.timeout = Services.prefs.getIntPref("geo.wifi.xhr.timeout");
+    xhr.ontimeout = (function() {
+      LOG("Location request XHR timed out.")
+      this.notifyListener("notifyError",
+                          [POSITION_UNAVAILABLE]);
+    }).bind(this);
     xhr.onerror = (function() {
       this.notifyListener("notifyError",
                           [POSITION_UNAVAILABLE]);
     }).bind(this);
     xhr.onload = (function() {
-      LOG("gls returned status: " + xhr.status + " --> " +  JSON.stringify(xhr.response));
+      LOG("server returned status: " + xhr.status + " --> " +  JSON.stringify(xhr.response));
       if ((xhr.channel instanceof Ci.nsIHttpChannel && xhr.status != 200) ||
           !xhr.response || !xhr.response.location) {
         this.notifyListener("notifyError",

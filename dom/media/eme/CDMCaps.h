@@ -68,9 +68,19 @@ public:
     void GetKeyStatusesForSession(const nsAString& aSessionId,
                                   nsTArray<KeyStatus>& aOutKeyStatuses);
 
+    void GetSessionIdsForKeyId(const CencKeyId& aKeyId,
+                               nsTArray<nsCString>& aOutSessionIds);
+
+    // Ensures all keys for a session are marked as 'unknown', i.e. removed.
+    // Returns true if a key status was changed.
+    bool RemoveKeysForSession(const nsString& aSessionId);
+
     // Sets the capabilities of the CDM. aCaps is the logical OR of the
     // GMP_EME_CAP_* flags from gmp-decryption.h.
     void SetCaps(uint64_t aCaps);
+
+    bool CanRenderAudio();
+    bool CanRenderVideo();
 
     bool CanDecryptAndDecodeAudio();
     bool CanDecryptAndDecodeVideo();
@@ -100,7 +110,7 @@ private:
       , mListener(aListener)
     {}
     CencKeyId mKeyId;
-    nsRefPtr<SamplesWaitingForKey> mListener;
+    RefPtr<SamplesWaitingForKey> mListener;
   };
 
   Monitor mMonitor;
@@ -109,7 +119,7 @@ private:
 
   nsTArray<WaitForKeys> mWaitForKeys;
 
-  nsTArray<nsRefPtr<nsIRunnable>> mWaitForCaps;
+  nsTArray<nsCOMPtr<nsIRunnable>> mWaitForCaps;
   uint64_t mCaps;
 
   // It is not safe to copy this object.

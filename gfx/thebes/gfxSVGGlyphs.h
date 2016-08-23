@@ -8,14 +8,12 @@
 #include "gfxFontUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "nsString.h"
-#include "nsAutoPtr.h"
 #include "nsClassHashtable.h"
 #include "nsBaseHashtable.h"
 #include "nsHashKeys.h"
 #include "gfxPattern.h"
 #include "mozilla/gfx/UserData.h"
 #include "nsRefreshDriver.h"
-#include "DrawMode.h"
 
 class nsIDocument;
 class nsIContentViewer;
@@ -26,8 +24,8 @@ class gfxTextContextPaint;
 namespace mozilla {
 namespace dom {
 class Element;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 /**
  * Wraps an SVG document contained in the SVG table of an OpenType font.
@@ -37,7 +35,7 @@ class Element;
  * Finds and looks up elements contained in the SVG document which have glyph
  *   mappings to be drawn by gfxSVGGlyphs
  */
-class gfxSVGGlyphsDocument MOZ_FINAL : public nsAPostRefreshObserver
+class gfxSVGGlyphsDocument final : public nsAPostRefreshObserver
 {
     typedef mozilla::dom::Element Element;
 
@@ -49,7 +47,7 @@ public:
 
     ~gfxSVGGlyphsDocument();
 
-    virtual void DidRefresh() MOZ_OVERRIDE;
+    virtual void DidRefresh() override;
 
 private:
     nsresult ParseDocument(const uint8_t *aBuffer, uint32_t aBufLen);
@@ -68,7 +66,7 @@ private:
 
     nsBaseHashtable<nsUint32HashKey, Element*, Element*> mGlyphIdMap;
 
-    nsAutoCString mSVGGlyphsDocumentURI;
+    nsCString mSVGGlyphsDocumentURI;
 };
 
 /**
@@ -116,11 +114,10 @@ public:
 
     /**
      * Render the SVG glyph for |aGlyphId|
-     * @param aDrawMode Whether to fill or stroke or both; see DrawMode
      * @param aContextPaint Information on text context paints.
      *   See |gfxTextContextPaint|.
      */
-    bool RenderGlyph(gfxContext *aContext, uint32_t aGlyphId, DrawMode aDrawMode,
+    bool RenderGlyph(gfxContext *aContext, uint32_t aGlyphId,
                      gfxTextContextPaint *aContextPaint);
 
     /**
@@ -229,7 +226,7 @@ private:
 class SimpleTextContextPaint : public gfxTextContextPaint
 {
 private:
-    static const gfxRGBA sZero;
+    static const mozilla::gfx::Color sZero;
 
 public:
     static gfxMatrix SetupDeviceToPatternMatrix(gfxPattern *aPattern,
@@ -260,7 +257,7 @@ public:
         if (mFillPattern) {
             mFillPattern->SetMatrix(aCTM * mFillMatrix);
         }
-        nsRefPtr<gfxPattern> fillPattern = mFillPattern;
+        RefPtr<gfxPattern> fillPattern = mFillPattern;
         return fillPattern.forget();
     }
 
@@ -270,7 +267,7 @@ public:
         if (mStrokePattern) {
             mStrokePattern->SetMatrix(aCTM * mStrokeMatrix);
         }
-        nsRefPtr<gfxPattern> strokePattern = mStrokePattern;
+        RefPtr<gfxPattern> strokePattern = mStrokePattern;
         return strokePattern.forget();
     }
 
@@ -283,8 +280,8 @@ public:
     }
 
 private:
-    nsRefPtr<gfxPattern> mFillPattern;
-    nsRefPtr<gfxPattern> mStrokePattern;
+    RefPtr<gfxPattern> mFillPattern;
+    RefPtr<gfxPattern> mStrokePattern;
 
     // Device space to pattern space transforms
     gfxMatrix mFillMatrix;

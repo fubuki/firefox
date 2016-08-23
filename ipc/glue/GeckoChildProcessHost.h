@@ -10,6 +10,7 @@
 #include "base/waitable_event.h"
 #include "chrome/common/child_process_host.h"
 
+#include "mozilla/Atomics.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/Monitor.h"
@@ -22,8 +23,6 @@
 #if defined(XP_WIN) && defined(MOZ_SANDBOX)
 #include "sandboxBroker.h"
 #endif
-
-class nsIFile;
 
 namespace mozilla {
 namespace ipc {
@@ -48,6 +47,8 @@ public:
   static nsresult GetArchitecturesForBinary(const char *path, uint32_t *result);
 
   static uint32_t GetSupportedArchitecturesForProcessType(GeckoProcessType type);
+
+  static uint32_t GetUniqueID();
 
   // Block until the IPC channel for our subprocess is initialized,
   // but no longer.  The child process may or may not have been
@@ -82,7 +83,7 @@ public:
                                   base::ProcessArchitecture aArch=base::GetCurrentProcessArchitecture());
 
   virtual void OnChannelConnected(int32_t peer_pid);
-  virtual void OnMessageReceived(const IPC::Message& aMsg);
+  virtual void OnMessageReceived(IPC::Message&& aMsg);
   virtual void OnChannelError();
   virtual void GetQueuedMessages(std::queue<IPC::Message>& queue);
 
@@ -106,18 +107,6 @@ public:
     return mChildProcessHandle;
   }
 
-  // Returns an "owned" handle to the child process - the handle returned
-  // by this function must be closed by the caller.
-  ProcessHandle GetOwnedChildProcessHandle() {
-    ProcessHandle handle;
-    // We use OpenPrivilegedProcessHandle as that is where our
-    // mChildProcessHandle initially came from.
-    bool ok = base::OpenPrivilegedProcessHandle(base::GetProcId(mChildProcessHandle),
-                                                &handle);
-    NS_ASSERTION(ok, "Failed to get owned process handle");
-    return ok ? handle : 0;
-  }
-
   GeckoProcessType GetProcessType() {
     return mProcessType;
   }
@@ -136,6 +125,14 @@ public:
 
   // For bug 943174: Skip the EnsureProcessTerminated call in the destructor.
   void SetAlreadyDead();
+
+  // This associates an actor telling the process host to stay alive at least
+  // until DissociateActor has been called.
+  void AssociateActor() { mAssociatedActors++; }
+
+  // This gets called when actors get destroyed and will schedule the object
+  // for deletion when all actors have cleared their associations.
+  void DissociateActor();
 
 protected:
   GeckoProcessType mProcessType;
@@ -171,15 +168,10 @@ protected:
 #ifdef MOZ_SANDBOX
   SandboxBroker mSandboxBroker;
   std::vector<std::wstring> mAllowedFilesRead;
+  std::vector<std::wstring> mAllowedFilesReadWrite;
+  std::vector<std::wstring> mAllowedDirectories;
   bool mEnableSandboxLogging;
-
-  // XXX: Bug 1124167: We should get rid of the process specific logic for
-  // sandboxing in this class at some point. Unfortunately it will take a bit
-  // of reorganizing so I don't think this patch is the right time.
-  bool mEnableNPAPISandbox;
-#if defined(MOZ_CONTENT_SANDBOX)
-  bool mMoreStrictContentSandbox;
-#endif
+  int32_t mSandboxLevel;
 #endif
 #endif // XP_WIN
 
@@ -208,6 +200,8 @@ private:
 
   static void GetPathToBinary(FilePath& exePath);
 
+  void SetChildLogName(const char* varName, const char* origLogName);
+
   // In between launching the subprocess and handing off its IPC
   // channel, there's a small window of time in which *we* might still
   // be the channel listener, and receive messages.  That's bad
@@ -216,10 +210,16 @@ private:
   //
   // FIXME/cjones: this strongly indicates bad design.  Shame on us.
   std::queue<IPC::Message> mQueue;
+
+  // This tracks how many actors are associated with this process that require
+  // it to stay alive and have not yet been destroyed.
+  Atomic<int32_t> mAssociatedActors;
+
+  static uint32_t sNextUniqueID;
 };
 
 #ifdef MOZ_NUWA_PROCESS
-class GeckoExistingProcessHost MOZ_FINAL : public GeckoChildProcessHost
+class GeckoExistingProcessHost final : public GeckoChildProcessHost
 {
 public:
   GeckoExistingProcessHost(GeckoProcessType aProcessType,
@@ -230,9 +230,9 @@ public:
   ~GeckoExistingProcessHost();
 
   virtual bool PerformAsyncLaunch(StringVector aExtraOpts=StringVector(),
-          base::ProcessArchitecture aArch=base::GetCurrentProcessArchitecture()) MOZ_OVERRIDE;
+          base::ProcessArchitecture aArch=base::GetCurrentProcessArchitecture()) override;
 
-  virtual void InitializeChannel() MOZ_OVERRIDE;
+  virtual void InitializeChannel() override;
 
 private:
   base::ProcessHandle mExistingProcessHandle;

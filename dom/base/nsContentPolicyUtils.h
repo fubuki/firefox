@@ -14,6 +14,7 @@
 #ifndef __nsContentPolicyUtils_h__
 #define __nsContentPolicyUtils_h__
 
+#include "nsContentUtils.h"
 #include "nsIContentPolicy.h"
 #include "nsIContent.h"
 #include "nsIScriptSecurityManager.h"
@@ -29,6 +30,7 @@ class nsIPrincipal;
 
 #define NS_CONTENTPOLICY_CONTRACTID   "@mozilla.org/layout/content-policy;1"
 #define NS_CONTENTPOLICY_CATEGORY "content-policy"
+#define NS_SIMPLECONTENTPOLICY_CATEGORY "simple-content-policy"
 #define NS_CONTENTPOLICY_CID                              \
   {0x0e3afd3d, 0xeb60, 0x4c2b,                            \
      { 0x96, 0x3b, 0x56, 0xd7, 0xc4, 0x39, 0xf1, 0x24 }}
@@ -55,7 +57,6 @@ class nsIPrincipal;
   case nsIContentPolicy:: name :   \
     return #name
 
-#ifdef PR_LOGGING
 /**
  * Returns a string corresponding to the name of the response constant, or
  * "<Unknown Response>" if an unknown response value is given.
@@ -92,33 +93,50 @@ inline const char *
 NS_CP_ContentTypeName(uint32_t contentType)
 {
   switch (contentType) {
-    CASE_RETURN( TYPE_OTHER             );
-    CASE_RETURN( TYPE_SCRIPT            );
-    CASE_RETURN( TYPE_IMAGE             );
-    CASE_RETURN( TYPE_STYLESHEET        );
-    CASE_RETURN( TYPE_OBJECT            );
-    CASE_RETURN( TYPE_DOCUMENT          );
-    CASE_RETURN( TYPE_SUBDOCUMENT       );
-    CASE_RETURN( TYPE_REFRESH           );
-    CASE_RETURN( TYPE_XBL               );
-    CASE_RETURN( TYPE_PING              );
-    CASE_RETURN( TYPE_XMLHTTPREQUEST    );
-    CASE_RETURN( TYPE_OBJECT_SUBREQUEST );
-    CASE_RETURN( TYPE_DTD               );
-    CASE_RETURN( TYPE_FONT              );
-    CASE_RETURN( TYPE_MEDIA             );
-    CASE_RETURN( TYPE_WEBSOCKET         );
-    CASE_RETURN( TYPE_CSP_REPORT        );
-    CASE_RETURN( TYPE_XSLT              );
-    CASE_RETURN( TYPE_BEACON            );
-    CASE_RETURN( TYPE_FETCH             );
-    CASE_RETURN( TYPE_IMAGESET          );
+    CASE_RETURN( TYPE_OTHER                       );
+    CASE_RETURN( TYPE_SCRIPT                      );
+    CASE_RETURN( TYPE_IMAGE                       );
+    CASE_RETURN( TYPE_STYLESHEET                  );
+    CASE_RETURN( TYPE_OBJECT                      );
+    CASE_RETURN( TYPE_DOCUMENT                    );
+    CASE_RETURN( TYPE_SUBDOCUMENT                 );
+    CASE_RETURN( TYPE_REFRESH                     );
+    CASE_RETURN( TYPE_XBL                         );
+    CASE_RETURN( TYPE_PING                        );
+    CASE_RETURN( TYPE_XMLHTTPREQUEST              );
+    CASE_RETURN( TYPE_OBJECT_SUBREQUEST           );
+    CASE_RETURN( TYPE_DTD                         );
+    CASE_RETURN( TYPE_FONT                        );
+    CASE_RETURN( TYPE_MEDIA                       );
+    CASE_RETURN( TYPE_WEBSOCKET                   );
+    CASE_RETURN( TYPE_CSP_REPORT                  );
+    CASE_RETURN( TYPE_XSLT                        );
+    CASE_RETURN( TYPE_BEACON                      );
+    CASE_RETURN( TYPE_FETCH                       );
+    CASE_RETURN( TYPE_IMAGESET                    );
+    CASE_RETURN( TYPE_WEB_MANIFEST                );
+    CASE_RETURN( TYPE_INTERNAL_SCRIPT             );
+    CASE_RETURN( TYPE_INTERNAL_WORKER             );
+    CASE_RETURN( TYPE_INTERNAL_SHARED_WORKER      );
+    CASE_RETURN( TYPE_INTERNAL_EMBED              );
+    CASE_RETURN( TYPE_INTERNAL_OBJECT             );
+    CASE_RETURN( TYPE_INTERNAL_FRAME              );
+    CASE_RETURN( TYPE_INTERNAL_IFRAME             );
+    CASE_RETURN( TYPE_INTERNAL_AUDIO              );
+    CASE_RETURN( TYPE_INTERNAL_VIDEO              );
+    CASE_RETURN( TYPE_INTERNAL_TRACK              );
+    CASE_RETURN( TYPE_INTERNAL_XMLHTTPREQUEST     );
+    CASE_RETURN( TYPE_INTERNAL_EVENTSOURCE        );
+    CASE_RETURN( TYPE_INTERNAL_SERVICE_WORKER     );
+    CASE_RETURN( TYPE_INTERNAL_SCRIPT_PRELOAD     );
+    CASE_RETURN( TYPE_INTERNAL_IMAGE              );
+    CASE_RETURN( TYPE_INTERNAL_IMAGE_PRELOAD      );
+    CASE_RETURN( TYPE_INTERNAL_STYLESHEET         );
+    CASE_RETURN( TYPE_INTERNAL_STYLESHEET_PRELOAD );
    default:
     return "<Unknown Type>";
   }
 }
-
-#endif // defined(PR_LOGGING)
 
 #undef CASE_RETURN
 
@@ -166,7 +184,7 @@ NS_CP_ContentTypeName(uint32_t contentType)
               *decision = nsIContentPolicy::ACCEPT;                           \
               nsCOMPtr<nsINode> n = do_QueryInterface(context);               \
               if (!n) {                                                       \
-                  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(context);   \
+                  nsCOMPtr<nsPIDOMWindowOuter> win = do_QueryInterface(context);\
                   n = win ? win->GetExtantDoc() : nullptr;                    \
               }                                                               \
               if (n) {                                                        \
@@ -177,7 +195,9 @@ NS_CP_ContentTypeName(uint32_t contentType)
                           do_GetService(                                      \
                               "@mozilla.org/data-document-content-policy;1"); \
                       if (dataPolicy) {                                       \
-                          dataPolicy-> action (contentType, contentLocation,  \
+                          nsContentPolicyType externalType =                  \
+                              nsContentUtils::InternalContentPolicyTypeToExternal(contentType);\
+                          dataPolicy-> action (externalType, contentLocation, \
                                                requestOrigin, context,        \
                                                mimeType, extra,               \
                                                originPrincipal, decision);    \
@@ -279,7 +299,7 @@ NS_CP_GetDocShellFromContext(nsISupports *aContext)
         return nullptr;
     }
 
-    nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aContext);
+    nsCOMPtr<nsPIDOMWindowOuter> window = do_QueryInterface(aContext);
 
     if (!window) {
         // our context might be a document (which also QIs to nsIDOMNode), so

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:set et sw=2 sts=2 cin:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,6 +23,7 @@
 #include "mozilla/dom/HTMLObjectElement.h"
 #endif
 
+
 NS_IMPL_NS_NEW_HTML_ELEMENT_CHECK_PARSER(SharedObject)
 
 namespace mozilla {
@@ -41,7 +42,7 @@ HTMLSharedObjectElement::HTMLSharedObjectElement(already_AddRefed<mozilla::dom::
 }
 
 void
-HTMLSharedObjectElement::GetItemValueText(nsAString& aValue)
+HTMLSharedObjectElement::GetItemValueText(DOMString& aValue)
 {
   if (mNodeInfo->Equals(nsGkAtoms::applet)) {
     nsGenericHTMLElement::GetItemValueText(aValue);
@@ -62,6 +63,9 @@ HTMLSharedObjectElement::SetItemValueText(const nsAString& aValue)
 
 HTMLSharedObjectElement::~HTMLSharedObjectElement()
 {
+#ifdef XP_MACOSX
+  HTMLObjectElement::OnFocusBlurPlugin(this, false);
+#endif
   UnregisterActivityObserver();
   DestroyImageLoadingContent();
 }
@@ -80,7 +84,7 @@ HTMLSharedObjectElement::DoneAddingChildren(bool aHaveNotified)
 
     // If we're already in a document, we need to trigger the load
     // Otherwise, BindToTree takes care of that.
-    if (IsInDoc()) {
+    if (IsInComposedDoc()) {
       StartObjectLoad(aHaveNotified);
     }
   }
@@ -159,6 +163,14 @@ void
 HTMLSharedObjectElement::UnbindFromTree(bool aDeep,
                                         bool aNullParent)
 {
+#ifdef XP_MACOSX
+  // When a page is reloaded (when an nsIDocument's content is removed), the
+  // focused element isn't necessarily sent an eBlur event. See
+  // nsFocusManager::ContentRemoved(). This means that a widget may think it
+  // still contains a focused plugin when it doesn't -- which in turn can
+  // disable text input in the browser window. See bug 1137229.
+  HTMLObjectElement::OnFocusBlurPlugin(this, false);
+#endif
   nsObjectLoadingContent::UnbindFromTree(aDeep, aNullParent);
   nsGenericHTMLElement::UnbindFromTree(aDeep, aNullParent);
 }
@@ -180,8 +192,9 @@ HTMLSharedObjectElement::SetAttr(int32_t aNameSpaceID, nsIAtom *aName,
   // We also don't want to start loading the object when we're not yet in
   // a document, just in case that the caller wants to set additional
   // attributes before inserting the node into the document.
-  if (aNotify && IsInDoc() && mIsDoneAddingChildren &&
-      aNameSpaceID == kNameSpaceID_None && aName == URIAttrName()) {
+  if (aNotify && IsInComposedDoc() && mIsDoneAddingChildren &&
+      aNameSpaceID == kNameSpaceID_None && aName == URIAttrName()
+      && !BlockEmbedContentLoading()) {
     return LoadObject(aNotify, true);
   }
 
@@ -313,7 +326,8 @@ HTMLSharedObjectElement::StartObjectLoad(bool aNotify)
 {
   // BindToTree can call us asynchronously, and we may be removed from the tree
   // in the interim
-  if (!IsInDoc() || !OwnerDoc()->IsActive()) {
+  if (!IsInComposedDoc() || !OwnerDoc()->IsActive() ||
+      BlockEmbedContentLoading()) {
     return;
   }
 
@@ -332,7 +346,7 @@ HTMLSharedObjectElement::GetCapabilities() const
 {
   uint32_t capabilities = eSupportPlugins | eAllowPluginSkipChannel;
   if (mNodeInfo->Equals(nsGkAtoms::embed)) {
-    capabilities |= eSupportSVG | eSupportImages;
+    capabilities |= eSupportImages | eSupportDocuments;
   }
 
   return capabilities;
@@ -359,14 +373,14 @@ HTMLSharedObjectElement::CopyInnerTo(Element* aDest)
 }
 
 JSObject*
-HTMLSharedObjectElement::WrapNode(JSContext* aCx)
+HTMLSharedObjectElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   JSObject* obj;
   if (mNodeInfo->Equals(nsGkAtoms::applet)) {
-    obj = HTMLAppletElementBinding::Wrap(aCx, this);
+    obj = HTMLAppletElementBinding::Wrap(aCx, this, aGivenProto);
   } else {
     MOZ_ASSERT(mNodeInfo->Equals(nsGkAtoms::embed));
-    obj = HTMLEmbedElementBinding::Wrap(aCx, this);
+    obj = HTMLEmbedElementBinding::Wrap(aCx, this, aGivenProto);
   }
   if (!obj) {
     return nullptr;
@@ -374,6 +388,36 @@ HTMLSharedObjectElement::WrapNode(JSContext* aCx)
   JS::Rooted<JSObject*> rootedObj(aCx, obj);
   SetupProtoChain(aCx, rootedObj);
   return rootedObj;
+}
+
+nsContentPolicyType
+HTMLSharedObjectElement::GetContentPolicyType() const
+{
+  if (mNodeInfo->Equals(nsGkAtoms::applet)) {
+    // We use TYPE_INTERNAL_OBJECT for applet too, since it is not exposed
+    // through RequestContext yet.
+    return nsIContentPolicy::TYPE_INTERNAL_OBJECT;
+  } else {
+    MOZ_ASSERT(mNodeInfo->Equals(nsGkAtoms::embed));
+    return nsIContentPolicy::TYPE_INTERNAL_EMBED;
+  }
+}
+
+bool
+HTMLSharedObjectElement::BlockEmbedContentLoading()
+{
+  // Only check on embed elements
+  if (!IsHTMLElement(nsGkAtoms::embed)) {
+    return false;
+  }
+  // Traverse up the node tree to see if we have any ancestors that may block us
+  // from loading
+  for (nsIContent* parent = GetParent(); parent; parent = parent->GetParent()) {
+    if (parent->IsAnyOfHTMLElements(nsGkAtoms::video, nsGkAtoms::audio)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace dom

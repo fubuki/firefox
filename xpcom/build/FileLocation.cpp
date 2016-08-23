@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -31,7 +33,8 @@ FileLocation::FileLocation(const FileLocation& aFile, const char* aPath)
   if (aFile.IsZip()) {
     if (aFile.mBaseFile) {
       Init(aFile.mBaseFile, aFile.mPath.get());
-    } else {
+    }
+    else {
       Init(aFile.mBaseZip, aFile.mPath.get());
     }
     if (aPath) {
@@ -98,7 +101,7 @@ FileLocation::GetURIString(nsACString& aResult) const
   if (mBaseFile) {
     net_GetURLSpecFromActualFile(mBaseFile, aResult);
   } else if (mBaseZip) {
-    nsRefPtr<nsZipHandle> handler = mBaseZip->GetFD();
+    RefPtr<nsZipHandle> handler = mBaseZip->GetFD();
     handler->mFile.GetURIString(aResult);
   }
   if (IsZip()) {
@@ -112,7 +115,7 @@ already_AddRefed<nsIFile>
 FileLocation::GetBaseFile()
 {
   if (IsZip() && mBaseZip) {
-    nsRefPtr<nsZipHandle> handler = mBaseZip->GetFD();
+    RefPtr<nsZipHandle> handler = mBaseZip->GetFD();
     if (handler) {
       return handler->mFile.GetBaseFile();
     }
@@ -138,13 +141,14 @@ FileLocation::Equals(const FileLocation& aFile) const
   const FileLocation* a = this;
   const FileLocation* b = &aFile;
   if (a->mBaseZip) {
-    nsRefPtr<nsZipHandle> handler = a->mBaseZip->GetFD();
+    RefPtr<nsZipHandle> handler = a->mBaseZip->GetFD();
     a = &handler->mFile;
   }
   if (b->mBaseZip) {
-    nsRefPtr<nsZipHandle> handler = b->mBaseZip->GetFD();
+    RefPtr<nsZipHandle> handler = b->mBaseZip->GetFD();
     b = &handler->mFile;
   }
+
   return a->Equals(*b);
 }
 
@@ -181,7 +185,8 @@ FileLocation::Data::GetSize(uint32_t* aResult)
 
     *aResult = fileInfo.size;
     return NS_OK;
-  } else if (mItem) {
+  }
+  else if (mItem) {
     *aResult = mItem->RealSize();
     return NS_OK;
   }
@@ -201,12 +206,17 @@ FileLocation::Data::Copy(char* aBuf, uint32_t aLen)
       totalRead += read;
     }
     return NS_OK;
-  } else if (mItem) {
+  }
+  else if (mItem) {
     nsZipCursor cursor(mItem, mZip, reinterpret_cast<uint8_t*>(aBuf),
                        aLen, true);
     uint32_t readLen;
     cursor.Copy(&readLen);
-    return (readLen == aLen) ? NS_OK : NS_ERROR_FILE_CORRUPTED;
+    if (readLen != aLen) {
+      nsZipArchive::sFileCorruptedReason = "FileLocation::Data: insufficient data";
+      return NS_ERROR_FILE_CORRUPTED;
+    }
+    return NS_OK;
   }
   return NS_ERROR_NOT_INITIALIZED;
 }

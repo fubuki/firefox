@@ -10,17 +10,18 @@ using namespace mozilla;
 namespace mozilla {
   namespace layer {
     class Image;
-  }
-}
+  } // namespace layer
+} // namespace mozilla
 
 TEST(VideoSegment, TestAppendFrameForceBlack)
 {
-  nsRefPtr<layers::Image> testImage = nullptr;
+  RefPtr<layers::Image> testImage = nullptr;
 
   VideoSegment segment;
   segment.AppendFrame(testImage.forget(),
                       mozilla::StreamTime(90000),
                       mozilla::gfx::IntSize(640, 480),
+                      PRINCIPAL_HANDLE_NONE,
                       true);
 
   VideoSegment::ChunkIterator iter(segment);
@@ -33,12 +34,13 @@ TEST(VideoSegment, TestAppendFrameForceBlack)
 
 TEST(VideoSegment, TestAppendFrameNotForceBlack)
 {
-  nsRefPtr<layers::Image> testImage = nullptr;
+  RefPtr<layers::Image> testImage = nullptr;
 
   VideoSegment segment;
   segment.AppendFrame(testImage.forget(),
                       mozilla::StreamTime(90000),
-                      mozilla::gfx::IntSize(640, 480));
+                      mozilla::gfx::IntSize(640, 480),
+                      PRINCIPAL_HANDLE_NONE);
 
   VideoSegment::ChunkIterator iter(segment);
   while (!iter.IsEnded()) {

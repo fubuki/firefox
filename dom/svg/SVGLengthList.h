@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -58,7 +59,7 @@ public:
   bool operator==(const SVGLengthList& rhs) const;
 
   bool SetCapacity(uint32_t size) {
-    return mLengths.SetCapacity(size);
+    return mLengths.SetCapacity(size, fallible);
   }
 
   void Compact() {
@@ -89,7 +90,7 @@ protected:
    * increased, in which case the list will be left unmodified.
    */
   bool SetLength(uint32_t aNumberOfItems) {
-    return mLengths.SetLength(aNumberOfItems);
+    return mLengths.SetLength(aNumberOfItems, fallible);
   }
 
 private:
@@ -106,43 +107,43 @@ private:
 
   bool InsertItem(uint32_t aIndex, const SVGLength &aLength) {
     if (aIndex >= mLengths.Length()) aIndex = mLengths.Length();
-    return !!mLengths.InsertElementAt(aIndex, aLength);
+    return !!mLengths.InsertElementAt(aIndex, aLength, fallible);
   }
 
   void ReplaceItem(uint32_t aIndex, const SVGLength &aLength) {
-    NS_ABORT_IF_FALSE(aIndex < mLengths.Length(),
-                      "DOM wrapper caller should have raised INDEX_SIZE_ERR");
+    MOZ_ASSERT(aIndex < mLengths.Length(),
+               "DOM wrapper caller should have raised INDEX_SIZE_ERR");
     mLengths[aIndex] = aLength;
   }
 
   void RemoveItem(uint32_t aIndex) {
-    NS_ABORT_IF_FALSE(aIndex < mLengths.Length(),
-                      "DOM wrapper caller should have raised INDEX_SIZE_ERR");
+    MOZ_ASSERT(aIndex < mLengths.Length(),
+               "DOM wrapper caller should have raised INDEX_SIZE_ERR");
     mLengths.RemoveElementAt(aIndex);
   }
 
   bool AppendItem(SVGLength aLength) {
-    return !!mLengths.AppendElement(aLength);
+    return !!mLengths.AppendElement(aLength, fallible);
   }
 
 protected:
 
   /* Rationale for using nsTArray<SVGLength> and not nsTArray<SVGLength, 1>:
    *
-   * It might seem like we should use nsAutoTArray<SVGLength, 1> instead of
+   * It might seem like we should use AutoTArray<SVGLength, 1> instead of
    * nsTArray<SVGLength>. That would preallocate space for one SVGLength and
    * avoid an extra memory allocation call in the common case of the 'x'
    * and 'y' attributes each containing a single length (and the 'dx' and 'dy'
    * attributes being empty). However, consider this:
    *
-   * An empty nsTArray uses sizeof(Header*). An nsAutoTArray<class E,
+   * An empty nsTArray uses sizeof(Header*). An AutoTArray<class E,
    * uint32_t N> on the other hand uses sizeof(Header*) +
    * (2 * sizeof(uint32_t)) + (N * sizeof(E)), which for one SVGLength is
    * sizeof(Header*) + 16 bytes.
    *
    * Now consider that for text elements we have four length list attributes
    * (x, y, dx, dy), each of which can have a baseVal and an animVal list. If
-   * we were to go the nsAutoTArray<SVGLength, 1> route for each of these, we'd
+   * we were to go the AutoTArray<SVGLength, 1> route for each of these, we'd
    * end up using at least 160 bytes for these four attributes alone, even
    * though we only need storage for two SVGLengths (16 bytes) in the common
    * case!!
@@ -203,14 +204,14 @@ public:
    */
   bool IsIdentity() const {
     if (!mElement) {
-      NS_ABORT_IF_FALSE(IsEmpty(), "target element propagation failure");
+      MOZ_ASSERT(IsEmpty(), "target element propagation failure");
       return true;
     }
     return false;
   }
 
   uint8_t Axis() const {
-    NS_ABORT_IF_FALSE(mElement, "Axis() isn't valid");
+    MOZ_ASSERT(mElement, "Axis() isn't valid");
     return mAxis;
   }
 

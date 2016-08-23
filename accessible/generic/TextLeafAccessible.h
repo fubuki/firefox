@@ -21,18 +21,14 @@ public:
   virtual ~TextLeafAccessible();
 
   // Accessible
-  virtual mozilla::a11y::role NativeRole() MOZ_OVERRIDE;
+  virtual mozilla::a11y::role NativeRole() override;
   virtual void AppendTextTo(nsAString& aText, uint32_t aStartOffset = 0,
-                            uint32_t aLength = UINT32_MAX) MOZ_OVERRIDE;
-  virtual ENameValueFlag Name(nsString& aName) MOZ_OVERRIDE;
+                            uint32_t aLength = UINT32_MAX) override;
+  virtual ENameValueFlag Name(nsString& aName) override;
 
   // TextLeafAccessible
   void SetText(const nsAString& aText) { mText = aText; }
   const nsString& Text() const { return mText; }
-
-protected:
-  // Accessible
-  virtual void CacheChildren() MOZ_OVERRIDE;
 
 protected:
   nsString mText;

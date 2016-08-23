@@ -45,8 +45,8 @@ public:
     }
 private:
     // Reserve inline storage for one quad (2 triangles, 3 coords).
-    nsAutoTArray<coord, 6> mVertexCoords;
-    nsAutoTArray<coord, 6> mTexCoords;
+    AutoTArray<coord, 6> mVertexCoords;
+    AutoTArray<coord, 6> mTexCoords;
 
     static void
     AppendRectToCoordArray(InfallibleTArray<coord>& array, GLfloat x0, GLfloat y0, GLfloat x1, GLfloat y1);
@@ -66,12 +66,12 @@ private:
   * The resulting vertex coordinates should be drawn using GL_TRIANGLES,
   * and rects.numRects * 3 * 6
   */
-void DecomposeIntoNoRepeatTriangles(const nsIntRect& aTexCoordRect,
-                                    const nsIntSize& aTexSize,
+void DecomposeIntoNoRepeatTriangles(const gfx::IntRect& aTexCoordRect,
+                                    const gfx::IntSize& aTexSize,
                                     RectTriangles& aRects,
                                     bool aFlipY = false);
 
-}
-}
+} // namespace gl
+} // namespace mozilla
 
 #endif // DecomposeIntoNoRepeatTriangles_h_

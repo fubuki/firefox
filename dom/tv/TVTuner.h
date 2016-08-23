@@ -11,6 +11,8 @@
 // Include TVTunerBinding.h since enum TVSourceType can't be forward declared.
 #include "mozilla/dom/TVTunerBinding.h"
 
+#define VIDEO_TAG NS_LITERAL_STRING("video")
+
 class nsITVService;
 class nsITVTunerData;
 
@@ -23,18 +25,19 @@ namespace dom {
 class Promise;
 class TVSource;
 
-class TVTuner MOZ_FINAL : public DOMEventTargetHelper
+class TVTuner final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TVTuner, DOMEventTargetHelper)
 
-  static already_AddRefed<TVTuner> Create(nsPIDOMWindow* aWindow,
+  static already_AddRefed<TVTuner> Create(nsPIDOMWindowInner* aWindow,
                                           nsITVTunerData* aData);
+  nsresult NotifyImageSizeChanged(uint32_t aWidth, uint32_t aHeight);
 
   // WebIDL (internal functions)
 
-  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   nsresult SetCurrentSource(TVSourceType aSourceType);
 
@@ -58,8 +61,10 @@ public:
 
   IMPL_EVENT_HANDLER(currentsourcechanged);
 
+  nsresult ReloadMediaStream();
+
 private:
-  explicit TVTuner(nsPIDOMWindow* aWindow);
+  explicit TVTuner(nsPIDOMWindowInner* aWindow);
 
   ~TVTuner();
 
@@ -67,12 +72,15 @@ private:
 
   nsresult InitMediaStream();
 
+  already_AddRefed<DOMMediaStream> CreateSimulatedMediaStream();
+
   nsresult DispatchCurrentSourceChangedEvent(TVSource* aSource);
 
   nsCOMPtr<nsITVService> mTVService;
-  nsRefPtr<DOMMediaStream> mStream;
-  nsRefPtr<TVSource> mCurrentSource;
-  nsTArray<nsRefPtr<TVSource>> mSources;
+  RefPtr<DOMMediaStream> mStream;
+  uint16_t mStreamType;
+  RefPtr<TVSource> mCurrentSource;
+  nsTArray<RefPtr<TVSource>> mSources;
   nsString mId;
   nsTArray<TVSourceType> mSupportedSourceTypes;
 };

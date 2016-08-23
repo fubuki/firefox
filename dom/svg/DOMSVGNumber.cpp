@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -52,7 +53,7 @@ NS_INTERFACE_MAP_END
 // Helper class: AutoChangeNumberNotifier
 // Stack-based helper class to pair calls to WillChangeNumberList and
 // DidChangeNumberList.
-class MOZ_STACK_CLASS AutoChangeNumberNotifier
+class MOZ_RAII AutoChangeNumberNotifier
 {
 public:
   explicit AutoChangeNumberNotifier(DOMSVGNumber* aNumber MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
@@ -93,11 +94,12 @@ DOMSVGNumber::DOMSVGNumber(DOMSVGNumberList *aList,
   , mValue(0.0f)
 {
   // These shifts are in sync with the members in the header.
-  NS_ABORT_IF_FALSE(aList &&
-                    aAttrEnum < (1 << 4) &&
-                    aListIndex <= MaxListIndex(), "bad arg");
+  MOZ_ASSERT(aList &&
+             aAttrEnum < (1 << 4) &&
+             aListIndex <= MaxListIndex(),
+             "bad arg");
 
-  NS_ABORT_IF_FALSE(IndexIsValid(), "Bad index for DOMSVGNumber!");
+  MOZ_ASSERT(IndexIsValid(), "Bad index for DOMSVGNumber!");
 }
 
 DOMSVGNumber::DOMSVGNumber(nsISupports* aParent)
@@ -113,13 +115,14 @@ DOMSVGNumber::DOMSVGNumber(nsISupports* aParent)
 /* static */ already_AddRefed<DOMSVGNumber>
 DOMSVGNumber::Constructor(const dom::GlobalObject& aGlobal, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window =
+    do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
-  nsRefPtr<DOMSVGNumber> number = new DOMSVGNumber(window);
+  RefPtr<DOMSVGNumber> number = new DOMSVGNumber(window);
   return number.forget();
 }
 
@@ -127,13 +130,14 @@ DOMSVGNumber::Constructor(const dom::GlobalObject& aGlobal, ErrorResult& aRv)
 DOMSVGNumber::Constructor(const dom::GlobalObject& aGlobal, float aValue,
                           ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window =
+    do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
-  nsRefPtr<DOMSVGNumber> number = new DOMSVGNumber(window);
+  RefPtr<DOMSVGNumber> number = new DOMSVGNumber(window);
   number->SetValue(aValue, aRv);
   return number.forget();
 }
@@ -180,7 +184,7 @@ DOMSVGNumber::InsertingIntoList(DOMSVGNumberList *aList,
   mListIndex = aListIndex;
   mIsAnimValItem = aIsAnimValItem;
 
-  NS_ABORT_IF_FALSE(IndexIsValid(), "Bad index for DOMSVGNumber!");
+  MOZ_ASSERT(IndexIsValid(), "Bad index for DOMSVGNumber!");
 }
 
 void
@@ -219,9 +223,9 @@ DOMSVGNumber::IndexIsValid()
 #endif
 
 JSObject*
-DOMSVGNumber::WrapObject(JSContext* aCx)
+DOMSVGNumber::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return dom::SVGNumberBinding::Wrap(aCx, this);
+  return dom::SVGNumberBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace mozilla

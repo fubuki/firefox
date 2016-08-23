@@ -3,21 +3,12 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-let disableWorkerTest = "This test uses SpecialPowers";
+var disableWorkerTest = "This test uses SpecialPowers";
 
-let testGenerator = testSteps();
-
-function createFileReader() {
-  return SpecialPowers.Cc["@mozilla.org/files/filereader;1"]
-                      .createInstance(SpecialPowers.Ci.nsIDOMFileReader);
-}
+var testGenerator = testSteps();
 
 function testSteps()
 {
-  const fileIOFlags = 0x02 | // PR_WRONLY
-                      0x08 | // PR_CREATEFILE
-                      0x20;  // PR_TRUNCATE
-  const filePerms = 0664;
   const fileData = "abcdefghijklmnopqrstuvwxyz";
   const fileType = "text/plain";
 
@@ -28,27 +19,17 @@ function testSteps()
 
   info("Creating temp file");
 
-  let dirSvc =
-    SpecialPowers.Cc["@mozilla.org/file/directory_service;1"]
-                 .getService(SpecialPowers.Ci.nsIProperties);
-  let testFile = dirSvc.get("ProfD", SpecialPowers.Ci.nsIFile);
-  testFile.createUnique(SpecialPowers.Ci.nsIFile.NORMAL_FILE_TYPE, filePerms);
+  SpecialPowers.createFiles([{data:fileData, options:{type:fileType}}], function (files) {
+      testGenerator.next(files[0]);
+  });
 
-  info("Writing temp file");
+  let file = yield undefined;
 
-  let outStream =
-    SpecialPowers.Cc["@mozilla.org/network/file-output-stream;1"]
-                 .createInstance(SpecialPowers.Ci.nsIFileOutputStream);
-  outStream.init(testFile, fileIOFlags, filePerms, 0);
-  outStream.write(fileData, fileData.length);
-  outStream.close();
-
-  let file = SpecialPowers.createDOMFile(testFile.path, { type: fileType });
   ok(file instanceof File, "Got a File object");
   is(file.size, fileData.length, "Correct size");
   is(file.type, fileType, "Correct type");
 
-  let fileReader = createFileReader();
+  let fileReader = new FileReader();
   fileReader.onload = grabEventAndContinueHandler;
   fileReader.readAsText(file);
 
@@ -72,7 +53,6 @@ function testSteps()
   db = event.target.result;
 
   file = null;
-  testFile.remove(false);
 
   objectStore = db.transaction(objectStoreName).objectStore(objectStoreName);
   objectStore.get(objectStoreKey).onsuccess = grabEventAndContinueHandler;
@@ -85,7 +65,7 @@ function testSteps()
   is(file.size, fileData.length, "Correct size");
   is(file.type, fileType, "Correct type");
 
-  fileReader = createFileReader();
+  fileReader = new FileReader();
   fileReader.onload = grabEventAndContinueHandler;
   fileReader.readAsText(file);
 

@@ -70,7 +70,15 @@ public:
         // by default do nothing - only multiplexed protocols need to overload
         return;
     }
-    //
+
+    // This is the companion to *HasDataToWrite() for the case
+    // when a gecko caller has called ResumeRecv() after being paused
+    virtual void TransactionHasDataToRecv(nsAHttpTransaction *)
+    {
+        // by default do nothing - only multiplexed protocols need to overload
+        return;
+    }
+
     // called by the connection manager to close a transaction being processed
     // by this connection.
     //
@@ -119,7 +127,7 @@ public:
 
     // Transfer the base http connection object along with a
     // reference to it to the caller.
-    virtual nsHttpConnection *TakeHttpConnection() = 0;
+    virtual already_AddRefed<nsHttpConnection> TakeHttpConnection() = 0;
 
     // Get the nsISocketTransport used by the connection without changing
     //  references or ownership.
@@ -148,105 +156,105 @@ public:
 NS_DEFINE_STATIC_IID_ACCESSOR(nsAHttpConnection, NS_AHTTPCONNECTION_IID)
 
 #define NS_DECL_NSAHTTPCONNECTION(fwdObject)                    \
-    nsresult OnHeadersAvailable(nsAHttpTransaction *, nsHttpRequestHead *, nsHttpResponseHead *, bool *reset) MOZ_OVERRIDE; \
-    void CloseTransaction(nsAHttpTransaction *, nsresult) MOZ_OVERRIDE; \
+    nsresult OnHeadersAvailable(nsAHttpTransaction *, nsHttpRequestHead *, nsHttpResponseHead *, bool *reset) override; \
+    void CloseTransaction(nsAHttpTransaction *, nsresult) override; \
     nsresult TakeTransport(nsISocketTransport **,    \
                            nsIAsyncInputStream **,   \
-                           nsIAsyncOutputStream **) MOZ_OVERRIDE; \
-    bool IsPersistent() MOZ_OVERRIDE; \
-    bool IsReused() MOZ_OVERRIDE; \
-    void DontReuse() MOZ_OVERRIDE;  \
-    nsresult PushBack(const char *, uint32_t) MOZ_OVERRIDE; \
-    nsHttpConnection *TakeHttpConnection() MOZ_OVERRIDE; \
-    uint32_t CancelPipeline(nsresult originalReason) MOZ_OVERRIDE;   \
-    nsAHttpTransaction::Classifier Classification() MOZ_OVERRIDE;      \
+                           nsIAsyncOutputStream **) override; \
+    bool IsPersistent() override;                         \
+    bool IsReused() override;                             \
+    void DontReuse() override;                            \
+    nsresult PushBack(const char *, uint32_t) override;   \
+    already_AddRefed<nsHttpConnection> TakeHttpConnection() override; \
+    uint32_t CancelPipeline(nsresult originalReason) override; \
+    nsAHttpTransaction::Classifier Classification() override; \
     /*                                                    \
        Thes methods below have automatic definitions that just forward the \
        function to a lower level connection object        \
     */                                                    \
     void GetConnectionInfo(nsHttpConnectionInfo **result) \
-      MOZ_OVERRIDE                                        \
+      override                                            \
     {                                                     \
       if (!(fwdObject)) {                                 \
-          *result = nullptr;                               \
+          *result = nullptr;                              \
           return;                                         \
       }                                                   \
         return (fwdObject)->GetConnectionInfo(result);    \
     }                                                     \
-    void GetSecurityInfo(nsISupports **result)            \
-      MOZ_OVERRIDE                                        \
+    void GetSecurityInfo(nsISupports **result) override   \
     {                                                     \
       if (!(fwdObject)) {                                 \
-          *result = nullptr;                               \
+          *result = nullptr;                              \
           return;                                         \
       }                                                   \
       return (fwdObject)->GetSecurityInfo(result);        \
     }                                                     \
-    nsresult ResumeSend() MOZ_OVERRIDE     \
+    nsresult ResumeSend() override     \
     {                                      \
         if (!(fwdObject))                  \
             return NS_ERROR_FAILURE;       \
         return (fwdObject)->ResumeSend();  \
     }                                      \
-    nsresult ResumeRecv() MOZ_OVERRIDE     \
+    nsresult ResumeRecv() override     \
     {                                      \
         if (!(fwdObject))                  \
             return NS_ERROR_FAILURE;       \
         return (fwdObject)->ResumeRecv();  \
     }                                      \
-    nsresult ForceSend() MOZ_OVERRIDE      \
+    nsresult ForceSend() override      \
     {                                      \
         if (!(fwdObject))                  \
             return NS_ERROR_FAILURE;       \
         return (fwdObject)->ForceSend();   \
     }                                      \
-    nsresult ForceRecv() MOZ_OVERRIDE      \
+    nsresult ForceRecv() override      \
     {                                      \
         if (!(fwdObject))                  \
             return NS_ERROR_FAILURE;       \
         return (fwdObject)->ForceRecv();   \
     }                                      \
     nsISocketTransport *Transport()        \
-      MOZ_OVERRIDE                         \
+      override                         \
     {                                      \
         if (!(fwdObject))                  \
             return nullptr;                 \
         return (fwdObject)->Transport();   \
     }                                      \
-    uint32_t Version() MOZ_OVERRIDE        \
+    uint32_t Version() override        \
     {                                      \
         return (fwdObject) ?               \
             (fwdObject)->Version() :       \
             NS_HTTP_VERSION_UNKNOWN;       \
     }                                      \
-    bool IsProxyConnectInProgress() MOZ_OVERRIDE            \
+    bool IsProxyConnectInProgress() override                \
     {                                                       \
         return (fwdObject)->IsProxyConnectInProgress();     \
     }                                                       \
-    bool LastTransactionExpectedNoContent() MOZ_OVERRIDE    \
+    bool LastTransactionExpectedNoContent() override        \
     {                                                       \
         return (fwdObject)->LastTransactionExpectedNoContent(); \
     }                                                       \
     void SetLastTransactionExpectedNoContent(bool val)      \
-      MOZ_OVERRIDE                                          \
+      override                                              \
     {                                                       \
         return (fwdObject)->SetLastTransactionExpectedNoContent(val); \
     }                                                       \
     void Classify(nsAHttpTransaction::Classifier newclass)  \
-      MOZ_OVERRIDE                                          \
+      override                                              \
     {                                                       \
     if (fwdObject)                                          \
         return (fwdObject)->Classify(newclass);             \
     }                                                       \
-    int64_t BytesWritten() MOZ_OVERRIDE                     \
+    int64_t BytesWritten() override                         \
     {     return fwdObject ? (fwdObject)->BytesWritten() : 0; } \
     void SetSecurityCallbacks(nsIInterfaceRequestor* aCallbacks) \
-      MOZ_OVERRIDE                                          \
+      override                                              \
     {                                                       \
         if (fwdObject)                                      \
             (fwdObject)->SetSecurityCallbacks(aCallbacks);  \
     }
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // nsAHttpConnection_h__

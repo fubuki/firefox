@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,7 +18,7 @@ void
 nsReferencedElement::Reset(nsIContent* aFromContent, nsIURI* aURI,
                            bool aWatch, bool aReferenceImage)
 {
-  NS_ABORT_IF_FALSE(aFromContent, "Reset() expects non-null content pointer");
+  MOZ_ASSERT(aFromContent, "Reset() expects non-null content pointer");
 
   Unlink();
 
@@ -47,7 +47,7 @@ nsReferencedElement::Reset(nsIContent* aFromContent, nsIURI* aURI,
     return;
 
   // Get the current document
-  nsIDocument *doc = aFromContent->GetComposedDoc();
+  nsIDocument *doc = aFromContent->OwnerDoc();
   if (!doc)
     return;
 
@@ -89,7 +89,7 @@ nsReferencedElement::Reset(nsIContent* aFromContent, nsIURI* aURI,
   bool isEqualExceptRef;
   rv = aURI->EqualsExceptRef(doc->GetDocumentURI(), &isEqualExceptRef);
   if (NS_FAILED(rv) || !isEqualExceptRef) {
-    nsRefPtr<nsIDocument::ExternalResourceLoad> load;
+    RefPtr<nsIDocument::ExternalResourceLoad> load;
     doc = doc->RequestExternalResource(aURI, aFromContent,
                                        getter_AddRefs(load));
     if (!doc) {
@@ -109,7 +109,7 @@ nsReferencedElement::Reset(nsIContent* aFromContent, nsIURI* aURI,
   }
 
   if (aWatch) {
-    nsCOMPtr<nsIAtom> atom = do_GetAtom(ref);
+    nsCOMPtr<nsIAtom> atom = NS_Atomize(ref);
     if (!atom)
       return;
     atom.swap(mWatchID);
@@ -124,14 +124,14 @@ void
 nsReferencedElement::ResetWithID(nsIContent* aFromContent, const nsString& aID,
                                  bool aWatch)
 {
-  nsIDocument *doc = aFromContent->GetComposedDoc();
+  nsIDocument *doc = aFromContent->OwnerDoc();
   if (!doc)
     return;
 
   // XXX Need to take care of XBL/XBL2
 
   if (aWatch) {
-    nsCOMPtr<nsIAtom> atom = do_GetAtom(aID);
+    nsCOMPtr<nsIAtom> atom = NS_Atomize(aID);
     if (!atom)
       return;
     atom.swap(mWatchID);

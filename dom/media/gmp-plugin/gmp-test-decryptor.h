@@ -16,56 +16,56 @@ public:
 
   explicit FakeDecryptor(GMPDecryptorHost* aHost);
 
-  virtual void Init(GMPDecryptorCallback* aCallback) MOZ_OVERRIDE {
+  void Init(GMPDecryptorCallback* aCallback) override {
     mCallback = aCallback;
   }
 
-  virtual void CreateSession(uint32_t aCreateSessionToken,
-                             uint32_t aPromiseId,
-                             const char* aInitDataType,
-                             uint32_t aInitDataTypeSize,
-                             const uint8_t* aInitData,
-                             uint32_t aInitDataSize,
-                             GMPSessionType aSessionType) MOZ_OVERRIDE
+  void CreateSession(uint32_t aCreateSessionToken,
+                     uint32_t aPromiseId,
+                     const char* aInitDataType,
+                     uint32_t aInitDataTypeSize,
+                     const uint8_t* aInitData,
+                     uint32_t aInitDataSize,
+                     GMPSessionType aSessionType) override
   {
   }
 
-  virtual void LoadSession(uint32_t aPromiseId,
-                           const char* aSessionId,
-                           uint32_t aSessionIdLength) MOZ_OVERRIDE
+  void LoadSession(uint32_t aPromiseId,
+                   const char* aSessionId,
+                   uint32_t aSessionIdLength) override
   {
   }
 
-  virtual void UpdateSession(uint32_t aPromiseId,
-                             const char* aSessionId,
-                             uint32_t aSessionIdLength,
-                             const uint8_t* aResponse,
-                             uint32_t aResponseSize) MOZ_OVERRIDE;
+  void UpdateSession(uint32_t aPromiseId,
+                     const char* aSessionId,
+                     uint32_t aSessionIdLength,
+                     const uint8_t* aResponse,
+                     uint32_t aResponseSize) override;
 
-  virtual void CloseSession(uint32_t aPromiseId,
-                            const char* aSessionId,
-                            uint32_t aSessionIdLength) MOZ_OVERRIDE
+  void CloseSession(uint32_t aPromiseId,
+                    const char* aSessionId,
+                    uint32_t aSessionIdLength) override
   {
   }
 
-  virtual void RemoveSession(uint32_t aPromiseId,
-                             const char* aSessionId,
-                             uint32_t aSessionIdLength) MOZ_OVERRIDE
+  void RemoveSession(uint32_t aPromiseId,
+                     const char* aSessionId,
+                     uint32_t aSessionIdLength) override
   {
   }
 
-  virtual void SetServerCertificate(uint32_t aPromiseId,
-                                    const uint8_t* aServerCert,
-                                    uint32_t aServerCertSize) MOZ_OVERRIDE
+  void SetServerCertificate(uint32_t aPromiseId,
+                            const uint8_t* aServerCert,
+                            uint32_t aServerCertSize) override
   {
   }
 
-  virtual void Decrypt(GMPBuffer* aBuffer,
-                       GMPEncryptedBufferMetadata* aMetadata) MOZ_OVERRIDE
+  void Decrypt(GMPBuffer* aBuffer,
+               GMPEncryptedBufferMetadata* aMetadata) override
   {
   }
 
-  virtual void DecryptingComplete() MOZ_OVERRIDE;
+  void DecryptingComplete() override;
 
   static void Message(const std::string& aMessage);
 
@@ -89,7 +89,7 @@ public:
     : mHost(aHost)
   {
   }
-  virtual void BeginShutdown() MOZ_OVERRIDE;
+  void BeginShutdown() override;
 private:
   GMPAsyncShutdownHost* mHost;
 };

@@ -180,7 +180,7 @@
                   children: [
                     {
                       // #document ("about:newtab" preloaded)
-                      role: ROLE_APPLICATION
+                      role: ROLE_DOCUMENT
                       // children: [ ... ] // Ignore document content.
                     }
                   ]
@@ -201,6 +201,9 @@
 
     ////////////////////////////////////////////////////////////////////////////
     // Test
+    //gA11yEventDumpToConsole = true;
+    //enableLogging("tree,verbose,stack");
+
     var gQueue = null;
     function doTest()
     {

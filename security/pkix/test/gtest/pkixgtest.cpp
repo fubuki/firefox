@@ -26,15 +26,21 @@
 
 #include <ctime>
 
-#include "pkix/nullptr.h"
 #include "pkix/Time.h"
 
 namespace mozilla { namespace pkix { namespace test {
 
+static const std::time_t ONE_DAY_IN_SECONDS_AS_TIME_T =
+  static_cast<std::time_t>(Time::ONE_DAY_IN_SECONDS);
+
 // This assumes that time/time_t are POSIX-compliant in that time() returns
 // the number of seconds since the Unix epoch.
-const std::time_t now(time(nullptr));
-const std::time_t oneDayBeforeNow(time(nullptr) - Time::ONE_DAY_IN_SECONDS);
-const std::time_t oneDayAfterNow(time(nullptr) + Time::ONE_DAY_IN_SECONDS);
+static const std::time_t now(time(nullptr));
+const std::time_t oneDayBeforeNow(now - ONE_DAY_IN_SECONDS_AS_TIME_T);
+const std::time_t oneDayAfterNow(now + ONE_DAY_IN_SECONDS_AS_TIME_T);
+const std::time_t twoDaysBeforeNow(now - (2 * ONE_DAY_IN_SECONDS_AS_TIME_T));
+const std::time_t twoDaysAfterNow(now + (2 * ONE_DAY_IN_SECONDS_AS_TIME_T));
+const std::time_t tenDaysBeforeNow(now - (10 * ONE_DAY_IN_SECONDS_AS_TIME_T));
+const std::time_t tenDaysAfterNow(now + (10 * ONE_DAY_IN_SECONDS_AS_TIME_T));
 
 } } } // namespace mozilla::pkix::test

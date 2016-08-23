@@ -14,13 +14,13 @@
 
 #include "nsCOMPtr.h"
 #include "nsString.h"
+#include "mozilla/Logging.h"
 
 class nsIRequest;
 class PendingDBLookup;
 class PendingLookup;
-struct PRLogModuleInfo;
 
-class ApplicationReputationService MOZ_FINAL :
+class ApplicationReputationService final :
   public nsIApplicationReputationService {
 public:
   NS_DECL_ISUPPORTS
@@ -39,7 +39,7 @@ private:
   /**
    * NSPR_LOG_MODULES=ApplicationReputation:5
    */
-  static PRLogModuleInfo* prlog;
+  static mozilla::LazyLogModule prlog;
   /**
    * This is a singleton, so disallow construction.
    */

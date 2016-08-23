@@ -77,12 +77,12 @@ nsProgressMeterFrame :: ~nsProgressMeterFrame ( )
 {
 }
 
-class nsAsyncProgressMeterInit MOZ_FINAL : public nsIReflowCallback
+class nsAsyncProgressMeterInit final : public nsIReflowCallback
 {
 public:
   explicit nsAsyncProgressMeterInit(nsIFrame* aFrame) : mWeakFrame(aFrame) {}
 
-  virtual bool ReflowFinished() MOZ_OVERRIDE
+  virtual bool ReflowFinished() override
   {
     bool shouldFlush = false;
     nsIFrame* frame = mWeakFrame.GetFrame();
@@ -95,7 +95,7 @@ public:
     return shouldFlush;
   }
 
-  virtual void ReflowCallbackCanceled() MOZ_OVERRIDE
+  virtual void ReflowCallbackCanceled() override
   {
     delete this;
   }
@@ -104,7 +104,7 @@ public:
 };
 
 NS_IMETHODIMP
-nsProgressMeterFrame::DoLayout(nsBoxLayoutState& aState)
+nsProgressMeterFrame::DoXULLayout(nsBoxLayoutState& aState)
 {
   if (mNeedsReflowCallback) {
     nsIReflowCallback* cb = new nsAsyncProgressMeterInit(this);
@@ -113,7 +113,7 @@ nsProgressMeterFrame::DoLayout(nsBoxLayoutState& aState)
     }
     mNeedsReflowCallback = false;
   }
-  return nsBoxFrame::DoLayout(aState);
+  return nsBoxFrame::DoXULLayout(aState);
 }
 
 nsresult
@@ -135,7 +135,7 @@ nsProgressMeterFrame::AttributeChanged(int32_t aNameSpaceID,
   if (nsGkAtoms::mode == aAttribute ||
       (!undetermined &&
        (nsGkAtoms::value == aAttribute || nsGkAtoms::max == aAttribute))) {
-    nsIFrame* barChild = GetFirstPrincipalChild();
+    nsIFrame* barChild = PrincipalChildList().FirstChild();
     if (!barChild) return NS_OK;
     nsIFrame* remainderChild = barChild->GetNextSibling();
     if (!remainderChild) return NS_OK;

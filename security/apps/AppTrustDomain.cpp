@@ -8,7 +8,13 @@
 #include "certdb.h"
 #include "pkix/pkixnss.h"
 #include "mozilla/ArrayUtils.h"
+#include "MainThreadUtils.h"
+#include "mozilla/Preferences.h"
+#include "nsComponentManagerUtils.h"
+#include "nsIFile.h"
+#include "nsIFileStreams.h"
 #include "nsIX509CertDB.h"
+#include "nsNetUtil.h"
 #include "nsNSSCertificate.h"
 #include "prerror.h"
 #include "secerr.h"
@@ -23,21 +29,30 @@
 // Trusted Hosted Apps Certificates
 #include "manifest-signing-root.inc"
 #include "manifest-signing-test-root.inc"
+// Add-on signing Certificates
+#include "addons-public.inc"
+#include "addons-stage.inc"
+// Privileged Package Certificates
+#include "privileged-package-root.inc"
 
 using namespace mozilla::pkix;
 
-#ifdef PR_LOGGING
-extern PRLogModuleInfo* gPIPNSSLog;
-#endif
+extern mozilla::LazyLogModule gPIPNSSLog;
 
-static const unsigned int DEFAULT_MINIMUM_NON_ECC_BITS = 2048;
+static const unsigned int DEFAULT_MIN_RSA_BITS = 2048;
+static char kDevImportedDER[] =
+  "network.http.signed-packages.developer-root";
 
 namespace mozilla { namespace psm {
+
+StaticMutex AppTrustDomain::sMutex;
+UniquePtr<unsigned char[]> AppTrustDomain::sDevImportedDERData;
+unsigned int AppTrustDomain::sDevImportedDERLen = 0;
 
 AppTrustDomain::AppTrustDomain(ScopedCERTCertList& certChain, void* pinArg)
   : mCertChain(certChain)
   , mPinArg(pinArg)
-  , mMinimumNonECCBits(DEFAULT_MINIMUM_NON_ECC_BITS)
+  , mMinRSABits(DEFAULT_MIN_RSA_BITS)
 {
 }
 
@@ -75,7 +90,7 @@ AppTrustDomain::SetTrustedRoot(AppTrustedRoot trustedRoot)
       trustedDER.data = const_cast<uint8_t*>(marketplaceStageRoot);
       trustedDER.len = mozilla::ArrayLength(marketplaceStageRoot);
       // The staging root was generated with a 1024-bit key.
-      mMinimumNonECCBits = 1024u;
+      mMinRSABits = 1024u;
       break;
 
     case nsIX509CertDB::AppXPCShellRoot:
@@ -83,23 +98,75 @@ AppTrustDomain::SetTrustedRoot(AppTrustedRoot trustedRoot)
       trustedDER.len = mozilla::ArrayLength(xpcshellRoot);
       break;
 
-    case nsIX509CertDB::TrustedHostedAppPublicRoot:
-      trustedDER.data = const_cast<uint8_t*>(trustedAppPublicRoot);
-      trustedDER.len = mozilla::ArrayLength(trustedAppPublicRoot);
+    case nsIX509CertDB::AddonsPublicRoot:
+      trustedDER.data = const_cast<uint8_t*>(addonsPublicRoot);
+      trustedDER.len = mozilla::ArrayLength(addonsPublicRoot);
       break;
 
-    case nsIX509CertDB::TrustedHostedAppTestRoot:
-      trustedDER.data = const_cast<uint8_t*>(trustedAppTestRoot);
-      trustedDER.len = mozilla::ArrayLength(trustedAppTestRoot);
+    case nsIX509CertDB::AddonsStageRoot:
+      trustedDER.data = const_cast<uint8_t*>(addonsStageRoot);
+      trustedDER.len = mozilla::ArrayLength(addonsStageRoot);
       break;
+
+    case nsIX509CertDB::PrivilegedPackageRoot:
+      trustedDER.data = const_cast<uint8_t*>(privilegedPackageRoot);
+      trustedDER.len = mozilla::ArrayLength(privilegedPackageRoot);
+      break;
+
+    case nsIX509CertDB::DeveloperImportedRoot: {
+      StaticMutexAutoLock lock(sMutex);
+      if (!sDevImportedDERData) {
+        MOZ_ASSERT(!NS_IsMainThread());
+        nsCOMPtr<nsIFile> file(do_CreateInstance("@mozilla.org/file/local;1"));
+        if (!file) {
+          PR_SetError(SEC_ERROR_IO, 0);
+          return SECFailure;
+        }
+        nsresult rv = file->InitWithNativePath(
+            Preferences::GetCString(kDevImportedDER));
+        if (NS_FAILED(rv)) {
+          PR_SetError(SEC_ERROR_IO, 0);
+          return SECFailure;
+        }
+
+        nsCOMPtr<nsIInputStream> inputStream;
+        NS_NewLocalFileInputStream(getter_AddRefs(inputStream), file, -1, -1,
+                                   nsIFileInputStream::CLOSE_ON_EOF);
+        if (!inputStream) {
+          PR_SetError(SEC_ERROR_IO, 0);
+          return SECFailure;
+        }
+
+        uint64_t length;
+        rv = inputStream->Available(&length);
+        if (NS_FAILED(rv)) {
+          PR_SetError(SEC_ERROR_IO, 0);
+          return SECFailure;
+        }
+
+        auto data = MakeUnique<char[]>(length);
+        rv = inputStream->Read(data.get(), length, &sDevImportedDERLen);
+        if (NS_FAILED(rv)) {
+          PR_SetError(SEC_ERROR_IO, 0);
+          return SECFailure;
+        }
+
+        MOZ_ASSERT(length == sDevImportedDERLen);
+        sDevImportedDERData.reset(reinterpret_cast<unsigned char*>(data.release()));
+      }
+
+      trustedDER.data = sDevImportedDERData.get();
+      trustedDER.len = sDevImportedDERLen;
+      break;
+    }
 
     default:
       PR_SetError(SEC_ERROR_INVALID_ARGS, 0);
       return SECFailure;
   }
 
-  mTrustedRoot = CERT_NewTempCertificate(CERT_GetDefaultCertDB(),
-                                         &trustedDER, nullptr, false, true);
+  mTrustedRoot.reset(CERT_NewTempCertificate(CERT_GetDefaultCertDB(),
+                                             &trustedDER, nullptr, false, true));
   if (!mTrustedRoot) {
     return SECFailure;
   }
@@ -177,7 +244,7 @@ AppTrustDomain::GetCertTrust(EndEntityOrCA endEntityOrCA,
   // expose it in any other easy-to-use fashion.
   SECItem candidateCertDERSECItem =
     UnsafeMapInputToSECItem(candidateCertDER);
-  ScopedCERTCertificate candidateCert(
+  UniqueCERTCertificate candidateCert(
     CERT_NewTempCertificate(CERT_GetDefaultCertDB(), &candidateCertDERSECItem,
                             nullptr, false, true));
   if (!candidateCert) {
@@ -214,22 +281,16 @@ AppTrustDomain::GetCertTrust(EndEntityOrCA endEntityOrCA,
 }
 
 Result
-AppTrustDomain::VerifySignedData(const SignedDataWithSignature& signedData,
-                                 Input subjectPublicKeyInfo)
-{
-  return ::mozilla::pkix::VerifySignedDataNSS(signedData, subjectPublicKeyInfo,
-                                              mMinimumNonECCBits, mPinArg);
-}
-
-Result
-AppTrustDomain::DigestBuf(Input item, /*out*/ uint8_t* digestBuf,
+AppTrustDomain::DigestBuf(Input item,
+                          DigestAlgorithm digestAlg,
+                          /*out*/ uint8_t* digestBuf,
                           size_t digestBufLen)
 {
-  return ::mozilla::pkix::DigestBufNSS(item, digestBuf, digestBufLen);
+  return DigestBufNSS(item, digestAlg, digestBuf, digestBufLen);
 }
 
 Result
-AppTrustDomain::CheckRevocation(EndEntityOrCA, const CertID&, Time,
+AppTrustDomain::CheckRevocation(EndEntityOrCA, const CertID&, Time, Duration,
                                 /*optional*/ const Input*,
                                 /*optional*/ const Input*)
 {
@@ -250,10 +311,61 @@ AppTrustDomain::IsChainValid(const DERArray& certChain, Time time)
 }
 
 Result
-AppTrustDomain::CheckPublicKey(Input subjectPublicKeyInfo)
+AppTrustDomain::CheckSignatureDigestAlgorithm(DigestAlgorithm,
+                                              EndEntityOrCA,
+                                              Time)
 {
-  return ::mozilla::pkix::CheckPublicKeyNSS(subjectPublicKeyInfo,
-                                            mMinimumNonECCBits);
+  // TODO: We should restrict signatures to SHA-256 or better.
+  return Success;
+}
+
+Result
+AppTrustDomain::CheckRSAPublicKeyModulusSizeInBits(
+  EndEntityOrCA /*endEntityOrCA*/, unsigned int modulusSizeInBits)
+{
+  if (modulusSizeInBits < mMinRSABits) {
+    return Result::ERROR_INADEQUATE_KEY_SIZE;
+  }
+  return Success;
+}
+
+Result
+AppTrustDomain::VerifyRSAPKCS1SignedDigest(const SignedDigest& signedDigest,
+                                           Input subjectPublicKeyInfo)
+{
+  // TODO: We should restrict signatures to SHA-256 or better.
+  return VerifyRSAPKCS1SignedDigestNSS(signedDigest, subjectPublicKeyInfo,
+                                       mPinArg);
+}
+
+Result
+AppTrustDomain::CheckECDSACurveIsAcceptable(EndEntityOrCA /*endEntityOrCA*/,
+                                            NamedCurve curve)
+{
+  switch (curve) {
+    case NamedCurve::secp256r1: // fall through
+    case NamedCurve::secp384r1: // fall through
+    case NamedCurve::secp521r1:
+      return Success;
+  }
+
+  return Result::ERROR_UNSUPPORTED_ELLIPTIC_CURVE;
+}
+
+Result
+AppTrustDomain::VerifyECDSASignedDigest(const SignedDigest& signedDigest,
+                                        Input subjectPublicKeyInfo)
+{
+  return VerifyECDSASignedDigestNSS(signedDigest, subjectPublicKeyInfo,
+                                    mPinArg);
+}
+
+Result
+AppTrustDomain::CheckValidityIsAcceptable(Time /*notBefore*/, Time /*notAfter*/,
+                                          EndEntityOrCA /*endEntityOrCA*/,
+                                          KeyPurposeId /*keyPurpose*/)
+{
+  return Success;
 }
 
 } } // namespace mozilla::psm

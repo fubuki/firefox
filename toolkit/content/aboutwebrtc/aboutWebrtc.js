@@ -1,532 +1,841 @@
-/** @jsx React.DOM */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-/* jshint newcap:false */
-/* global React, WebrtcGlobalInformation, document */
-
 "use strict";
 
-var Tabs = React.createClass({displayName: "Tabs",
-  getDefaultProps: function() {
-    return {selectedIndex: 0};
-  },
+/* global WebrtcGlobalInformation, document */
 
-  getInitialState: function() {
-    return {selectedIndex: this.props.selectedIndex};
-  },
+var Cu = Components.utils;
 
-  selectTab: function(index) {
-    return function(event) {
-      event.preventDefault();
-      this.setState({selectedIndex: index});
-    }.bind(this);
-  },
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
-  _findSelectedTabContent: function() {
-    // Using map() to filter children…
-    // https://github.com/facebook/react/issues/1644#issuecomment-45138113
-    return React.Children.map(this.props.children, function(tab, i) {
-      return i === this.state.selectedIndex ? tab : null;
-    }.bind(this));
-  },
-
-  render: function() {
-    var cx = React.addons.classSet;
-    return (
-      React.createElement("div", {className: "tabs"}, 
-        React.createElement("ul", null, 
-          React.Children.map(this.props.children, function(tab, i) {
-            return (
-              React.createElement("li", {className: cx({active: i === this.state.selectedIndex})}, 
-                React.createElement("a", {href: "#", key: i, onClick: this.selectTab(i)}, 
-                  tab.props.title
-                )
-              )
-            );
-          }.bind(this))
-        ), 
-        this._findSelectedTabContent()
-      )
-    );
-  }
+XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
+                                  "resource://gre/modules/FileUtils.jsm");
+XPCOMUtils.defineLazyServiceGetter(this, "FilePicker",
+                                   "@mozilla.org/filepicker;1", "nsIFilePicker");
+XPCOMUtils.defineLazyGetter(this, "strings", () => {
+  return Services.strings.createBundle("chrome://global/locale/aboutWebrtc.properties");
 });
 
-var Tab = React.createClass({displayName: "Tab",
-  render: function() {
-    return React.createElement("section", null, this.props.children);
-  }
-});
+const getString = strings.GetStringFromName;
+const formatString = strings.formatStringFromName;
 
-var AboutWebRTC = React.createClass({displayName: "AboutWebRTC",
-  getInitialState: function() {
-    return {logs: null, reports: this.props.reports};
+const LOGFILE_NAME_DEFAULT = "aboutWebrtc.html";
+const WEBRTC_TRACE_ALL = 65535;
+
+function getStats() {
+  return new Promise(resolve =>
+    WebrtcGlobalInformation.getAllStats(stats => resolve(stats)));
+}
+
+function getLog() {
+  return new Promise(resolve =>
+    WebrtcGlobalInformation.getLogging("", log => resolve(log)));
+}
+
+// Begin initial data queries as page loads. Store returned Promises for
+// later use.
+var reportsRetrieved = getStats();
+var logRetrieved = getLog();
+
+function onLoad() {
+  document.title = getString("document_title");
+  let controls = document.querySelector("#controls");
+  if (controls) {
+    let set = ControlSet.render();
+    ControlSet.add(new SavePage());
+    ControlSet.add(new DebugMode());
+    ControlSet.add(new AecLogging());
+    controls.appendChild(set);
+  }
+
+  let contentElem = document.querySelector("#content");
+  if (!contentElem) {
+    return;
+  }
+
+  let contentInit = function(data) {
+    AboutWebRTC.init(onClearStats, onClearLog);
+    AboutWebRTC.render(contentElem, data);
+  };
+
+  Promise.all([reportsRetrieved, logRetrieved])
+    .then(([stats, log]) => contentInit({reports: stats.reports, log: log}))
+    .catch(error => contentInit({error: error}));
+}
+
+function onClearLog() {
+  WebrtcGlobalInformation.clearLogging();
+  getLog()
+    .then(log => AboutWebRTC.refresh({log: log}))
+    .catch(error => AboutWebRTC.refresh({logError: error}));
+}
+
+function onClearStats() {
+  WebrtcGlobalInformation.clearAllStats();
+  getStats()
+    .then(stats => AboutWebRTC.refresh({reports: stats.reports}))
+    .catch(error => AboutWebRTC.refresh({reportError: error}));
+}
+
+var ControlSet = {
+  render: function() {
+    let controls = document.createElement("div");
+    let control = document.createElement("div");
+    let message = document.createElement("div");
+
+    controls.className = "controls";
+    control.className = "control";
+    message.className = "message";
+    controls.appendChild(control);
+    controls.appendChild(message);
+
+    this.controlSection = control;
+    this.messageSection = message;
+    return controls;
   },
 
-  displayLogs: function() {
-    WebrtcGlobalInformation.getLogging('', function(logs) {
-      this.setState({logs: logs, reports: this.state.reports});
-    }.bind(this));
+  add: function(controlObj) {
+    let [controlElem, messageElem] = controlObj.render();
+    this.controlSection.appendChild(controlElem);
+    this.messageSection.appendChild(messageElem);
+  }
+};
+
+function Control() {
+  this._label = null;
+  this._message = null;
+  this._messageHeader = null;
+}
+
+Control.prototype = {
+  render: function () {
+    let controlElem = document.createElement("button");
+    let messageElem = document.createElement("p");
+
+    this.ctrl = controlElem;
+    controlElem.onclick = this.onClick.bind(this);
+    this.msg = messageElem;
+    this.update();
+
+    return [controlElem, messageElem];
   },
 
-  render: function() {
-    return (
-      React.createElement("div", null, 
-        React.createElement("div", {id: "stats"}, 
-          React.createElement(PeerConnections, {reports: this.state.reports})
-        ), 
-        React.createElement("div", {id: "buttons"}, 
-          React.createElement(LogsButton, {handler: this.displayLogs}), 
-          React.createElement(DebugButton, null), 
-          React.createElement(AECButton, null)
-        ), 
-        React.createElement("div", {id: "logs"}, 
-          this.state.logs ? React.createElement(Logs, {logs: this.state.logs}) : null
-        )
-      )
-    );
-  }
-});
+  set label(val) {
+    return this._labelVal = val || "\xA0";
+  },
 
-var PeerConnections = React.createClass({displayName: "PeerConnections",
-  getInitialState: function() {
-    // Sort the reports to have the more recent at the top
-    var reports = this.props.reports.slice().sort(function(r1, r2) {
-      return r2.timestamp - r1.timestamp;
+  get label() {
+    return this._labelVal;
+  },
+
+  set message(val) {
+    return this._messageVal = val;
+  },
+
+  get message() {
+    return this._messageVal;
+  },
+
+  update: function() {
+    this.ctrl.textContent = this._label;
+
+    if (this._message) {
+      this.msg.innerHTML =
+        `<span class="info-label">${this._messageHeader}:</span> ${this._message}`;
+    } else {
+      this.msg.innerHTML = null;
+    }
+  },
+
+  onClick: function(event) {
+    return true;
+  }
+};
+
+function SavePage() {
+  Control.call(this);
+  this._messageHeader = getString("save_page_label");
+  this._label = getString("save_page_label");
+}
+
+SavePage.prototype = Object.create(Control.prototype);
+SavePage.prototype.constructor = SavePage;
+
+SavePage.prototype.onClick = function() {
+  let content = document.querySelector("#content");
+
+  if (!content)
+    return;
+
+  FoldEffect.expandAll();
+  FilePicker.init(window, getString("save_page_dialog_title"), FilePicker.modeSave);
+  FilePicker.defaultString = LOGFILE_NAME_DEFAULT;
+  let rv = FilePicker.show();
+
+  if (rv == FilePicker.returnOK || rv == FilePicker.returnReplace) {
+    let fout = FileUtils.openAtomicFileOutputStream(
+      FilePicker.file, FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE);
+
+    let nodes = content.querySelectorAll(".no-print");
+    let noPrintList = [];
+    for (let node of nodes) {
+      noPrintList.push(node);
+      node.style.setProperty("display", "none");
+    }
+
+    fout.write(content.outerHTML, content.outerHTML.length);
+    FileUtils.closeAtomicFileOutputStream(fout);
+
+    for (let node of noPrintList) {
+      node.style.removeProperty("display");
+    }
+
+    this._message = formatString("save_page_msg", [FilePicker.file.path], 1);
+    this.update();
+  }
+};
+
+function DebugMode() {
+  Control.call(this);
+  this._messageHeader = getString("debug_mode_msg_label");
+
+  if (WebrtcGlobalInformation.debugLevel > 0) {
+    this.onState();
+  } else {
+    this._label = getString("debug_mode_off_state_label");
+    this._message = null;
+  }
+}
+
+DebugMode.prototype = Object.create(Control.prototype);
+DebugMode.prototype.constructor = DebugMode;
+
+DebugMode.prototype.onState = function() {
+  this._label = getString("debug_mode_on_state_label");
+  try {
+    let file = Services.prefs.getCharPref("media.webrtc.debug.log_file");
+    this._message = formatString("debug_mode_on_state_msg", [file], 1);
+  } catch (e) {
+    this._message = null;
+  }
+};
+
+DebugMode.prototype.offState = function() {
+  this._label = getString("debug_mode_off_state_label");
+  try {
+    let file = Services.prefs.getCharPref("media.webrtc.debug.log_file");
+    this._message = formatString("debug_mode_off_state_msg", [file], 1);
+  } catch (e) {
+    this._message = null;
+  }
+};
+
+DebugMode.prototype.onClick = function() {
+  if (WebrtcGlobalInformation.debugLevel > 0) {
+    WebrtcGlobalInformation.debugLevel = 0;
+    this.offState();
+  } else {
+    WebrtcGlobalInformation.debugLevel = WEBRTC_TRACE_ALL;
+    this.onState();
+  }
+
+  this.update();
+};
+
+function AecLogging() {
+  Control.call(this);
+  this._messageHeader = getString("aec_logging_msg_label");
+
+  if (WebrtcGlobalInformation.aecDebug) {
+    this.onState();
+  } else {
+    this._label = getString("aec_logging_off_state_label");
+    this._message = null;
+  }
+}
+
+AecLogging.prototype = Object.create(Control.prototype);
+AecLogging.prototype.constructor = AecLogging;
+
+AecLogging.prototype.offState = function () {
+  this._label = getString("aec_logging_off_state_label");
+  try {
+    let file = Services.prefs.getCharPref("media.webrtc.debug.aec_log_dir");
+    this._message = formatString("aec_logging_off_state_msg", [file], 1);
+  } catch (e) {
+    this._message = null;
+  }
+};
+
+AecLogging.prototype.onState = function () {
+  this._label = getString("aec_logging_on_state_label");
+  try {
+    let file = Services.prefs.getCharPref("media.webrtc.debug.aec_log_dir");
+    this._message = getString("aec_logging_on_state_msg");
+  } catch (e) {
+    this._message = null;
+  }
+};
+
+AecLogging.prototype.onClick = function () {
+  if (WebrtcGlobalInformation.aecDebug) {
+    WebrtcGlobalInformation.aecDebug = false;
+    this.offState();
+  } else {
+    WebrtcGlobalInformation.aecDebug = true;
+    this.onState();
+  }
+  this.update();
+};
+
+var AboutWebRTC = {
+  _reports: [],
+  _log: [],
+
+  init: function(onClearStats, onClearLog) {
+    this._onClearStats = onClearStats;
+    this._onClearLog = onClearLog;
+  },
+
+  render: function(parent, data) {
+    this._content = parent;
+    this._setData(data);
+
+    if (data.error) {
+      let msg = document.createElement("h3");
+      msg.textContent = getString("cannot_retrieve_log");
+      parent.appendChild(msg);
+      msg = document.createElement("p");
+      msg.innerHTML = `${data.error.name}: ${data.error.message}`;
+      parent.appendChild(msg);
+      return;
+    }
+
+    this._peerConnections = this.renderPeerConnections();
+    this._connectionLog = this.renderConnectionLog();
+    this._content.appendChild(this._peerConnections);
+    this._content.appendChild(this._connectionLog);
+  },
+
+  _setData: function(data) {
+    if (data.reports) {
+      this._reports = data.reports;
+    }
+
+    if (data.log) {
+      this._log = data.log;
+    }
+  },
+
+  refresh: function(data) {
+    this._setData(data);
+    let pc = this._peerConnections;
+    this._peerConnections = this.renderPeerConnections();
+    let log = this._connectionLog;
+    this._connectionLog = this.renderConnectionLog();
+    this._content.replaceChild(this._peerConnections, pc);
+    this._content.replaceChild(this._connectionLog, log);
+  },
+
+  renderPeerConnections: function() {
+    let connections = document.createElement("div");
+    connections.className = "stats";
+
+    let heading = document.createElement("span");
+    heading.className = "section-heading";
+    let elem = document.createElement("h3");
+    elem.textContent = getString("stats_heading");
+    heading.appendChild(elem);
+
+    elem = document.createElement("button");
+    elem.textContent = "Clear History";
+    elem.className = "no-print";
+    elem.onclick = this._onClearStats;
+    heading.appendChild(elem);
+    connections.appendChild(heading);
+
+    if (!this._reports || !this._reports.length) {
+      return connections;
+    }
+
+    let reports = [...this._reports];
+    reports.sort((a, b) => b.timestamp - a.timestamp);
+    for (let report of reports) {
+      let peerConnection = new PeerConnection(report);
+      connections.appendChild(peerConnection.render());
+    }
+
+    return connections;
+  },
+
+  renderConnectionLog: function() {
+    let content = document.createElement("div");
+    content.className = "log";
+
+    let heading = document.createElement("span");
+    heading.className = "section-heading";
+    let elem = document.createElement("h3");
+    elem.textContent = getString("log_heading");
+    heading.appendChild(elem);
+    elem = document.createElement("button");
+    elem.textContent = "Clear Log";
+    elem.className = "no-print";
+    elem.onclick = this._onClearLog;
+    heading.appendChild(elem);
+    content.appendChild(heading);
+
+    if (!this._log || !this._log.length) {
+      return content;
+    }
+
+    let div = document.createElement("div");
+    let sectionCtrl = document.createElement("div");
+    sectionCtrl.className = "section-ctrl no-print";
+    let foldEffect = new FoldEffect(div, {
+      showMsg: getString("log_show_msg"),
+      hideMsg: getString("log_hide_msg")
     });
+    sectionCtrl.appendChild(foldEffect.render());
+    content.appendChild(sectionCtrl);
 
-    return {reports: reports};
+    for (let line of this._log) {
+      elem = document.createElement("p");
+      elem.textContent = line;
+      div.appendChild(elem);
+    }
+
+    content.appendChild(div);
+    return content;
+  }
+};
+
+function PeerConnection(report) {
+  this._report = report;
+}
+
+PeerConnection.prototype = {
+  render: function() {
+    let pc = document.createElement("div");
+    pc.className = "peer-connection";
+    pc.appendChild(this.renderHeading());
+
+    let div = document.createElement("div");
+    let sectionCtrl = document.createElement("div");
+    sectionCtrl.className = "section-ctrl no-print";
+    let foldEffect = new FoldEffect(div);
+    sectionCtrl.appendChild(foldEffect.render());
+    pc.appendChild(sectionCtrl);
+
+    div.appendChild(this.renderDesc());
+    div.appendChild(new ICEStats(this._report).render());
+    div.appendChild(new SDPStats(this._report).render());
+    div.appendChild(new RTPStats(this._report).render());
+
+    pc.appendChild(div);
+    return pc;
   },
 
-  render: function() {
-    return (
-      React.createElement("div", {className: "peer-connections"}, 
-        
-          this.state.reports.map(function(report, i) {
-            return React.createElement(PeerConnection, {key: i, report: report});
-          })
-        
-      )
-    );
-  }
-});
+  renderHeading: function () {
+    let pcInfo = this.getPCInfo(this._report);
+    let heading = document.createElement("h3");
+    let now = new Date(this._report.timestamp).toTimeString();
+    heading.textContent =
+      `[ ${pcInfo.id} ] ${pcInfo.url} ${pcInfo.closed ? `(${getString("connection_closed")})` : ""} ${now}`;
+    return heading;
+  },
 
-var PeerConnection = React.createClass({displayName: "PeerConnection",
+  renderDesc: function() {
+    let info = document.createElement("div");
+    let label = document.createElement("span");
+    let body = document.createElement("span");
+
+    label.className = "info-label";
+    label.textContent = `${getString("peer_connection_id_label")}: `;
+    info.appendChild(label);
+
+    body.className = "info-body";
+    body.textContent = this._report.pcid;
+    info.appendChild(body);
+
+    return info;
+  },
+
   getPCInfo: function(report) {
     return {
       id: report.pcid.match(/id=(\S+)/)[1],
       url: report.pcid.match(/url=([^)]+)/)[1],
       closed: report.closed
     };
-  },
-
-  getIceCandidatePairs: function(report) {
-    var candidates =
-      report.iceCandidateStats.reduce(function(candidates, candidate) {
-        candidates[candidate.id] = candidate;
-
-        return candidates;
-      }, {});
-
-    var pairs = report.iceCandidatePairStats.map(function(pair) {
-      var localCandidate = candidates[pair.localCandidateId];
-      var remoteCandidate = candidates[pair.remoteCandidateId];
-
-      return {
-        localCandidate: candidateToString(localCandidate),
-        remoteCandidate: candidateToString(remoteCandidate),
-        state: pair.state,
-        priority: pair.mozPriority,
-        nominated: pair.nominated,
-        selected: pair.selected
-      };
-    });
-
-    var pairedCandidates = pairs.reduce(function(paired, pair) {
-      paired.add(pair.localCandidate.id);
-      paired.add(pair.remoteCandidate.id);
-
-      return paired;
-    }, new Set());
-
-    var unifiedPairs =
-      report.iceCandidateStats.reduce(function(pairs, candidate) {
-        if (pairedCandidates.has(candidate)) {
-            return pairs;
-        }
-
-        var isLocal = candidate.type === "localcandidate";
-
-        pairs.push({
-          localCandidate:  isLocal ? candidateToString(candidate) : null,
-          remoteCandidate: isLocal ? null : candidateToString(candidate),
-          state: null,
-          priority: null,
-          nominated: null,
-          selected: null
-        });
-
-        return pairs;
-      }, pairs);
-
-    return unifiedPairs;
-  },
-
-  getInitialState: function() {
-    return {
-      unfolded: false
-    };
-  },
-
-  onFold: function() {
-    this.setState({unfolded: !this.state.unfolded});
-  },
-
-  body: function(report, pairs) {
-    return (
-      React.createElement("div", null, 
-        React.createElement("p", {className: "pcid"}, "PeerConnection ID: ", report.pcid), 
-        React.createElement(Tabs, null, 
-          React.createElement(Tab, {title: "Ice Stats"}, 
-            React.createElement(IceStats, {pairs: pairs})
-          ), 
-          React.createElement(Tab, {title: "SDP"}, 
-            React.createElement(SDP, {type: "local", sdp: report.localSdp}), 
-            React.createElement(SDP, {type: "remote", sdp: report.remoteSdp})
-          ), 
-          React.createElement(Tab, {title: "RTP Stats"}, 
-            React.createElement(RTPStats, {report: report})
-          )
-        )
-      )
-    );
-  },
-
-  render: function() {
-    var report = this.props.report;
-    var pcInfo = this.getPCInfo(report);
-    var pairs  = this.getIceCandidatePairs(report);
-
-    return (
-      React.createElement("div", {className: "peer-connection"}, 
-        React.createElement("h3", {onClick: this.onFold}, 
-          "[", pcInfo.id, "] ", pcInfo.url, " ", pcInfo.closed ? "(closed)" : null, 
-          new Date(report.timestamp).toTimeString()
-        ), 
-        this.state.unfolded ? this.body(report, pairs) : undefined
-      )
-    );
   }
-});
+};
 
-var IceStats = React.createClass({displayName: "IceStats",
-  sortHeadings: {
-    "Local candidate":  "localCandidate",
-    "Remote candidate": "remoteCandidate",
-    "Ice State":        "state",
-    "Priority":         "priority",
-    "Nominated":        "nominated",
-    "Selected":         "selected"
-  },
+function SDPStats(report) {
+  this._report = report;
+}
 
-  sort: function(key) {
-    var sorting = this.state.sorting;
-    var pairs = this.state.pairs.slice().sort(function(pair1, pair2) {
-      var value1 = pair1[key] ? pair1[key].toString() : "";
-      var value2 = pair2[key] ? pair2[key].toString() : "";
-
-      // Reverse sorting
-      if (key === sorting) {
-        return value2.localeCompare(value1);
-      }
-
-      return value1.localeCompare(value2);
-    }.bind(this));
-
-    sorting = (key === sorting) ? null : key;
-    this.setState({pairs: pairs, sorting: sorting});
-  },
-
-  generateSortHeadings: function() {
-    return Object.keys(this.sortHeadings).map(function(heading, i) {
-      var sortKey = this.sortHeadings[heading];
-      return (
-        React.createElement("th", null, 
-          React.createElement("a", {href: "#", onClick: this.sort.bind(this, sortKey)}, 
-            heading
-          )
-        )
-      );
-    }.bind(this));
-  },
-
-  getInitialState: function() {
-    return {pairs: this.props.pairs, sorting: null};
-  },
-
+SDPStats.prototype = {
   render: function() {
-    return (
-      React.createElement("table", null, 
-        React.createElement("tbody", null, 
-          React.createElement("tr", null, this.generateSortHeadings()), 
-          this.state.pairs.map(function(pair, i) {
-            return React.createElement(IceCandidatePair, {key: i, pair: pair});
-          })
-        )
-      )
-    );
-  }
-});
+    let div = document.createElement("div");
+    let elem = document.createElement("h4");
 
-var IceCandidatePair = React.createClass({displayName: "IceCandidatePair",
+    elem.textContent = getString("sdp_heading");
+    div.appendChild(elem);
+
+    elem = document.createElement("h5");
+    elem.textContent = getString("local_sdp_heading");
+    div.appendChild(elem);
+
+    elem = document.createElement("pre");
+    elem.textContent = this._report.localSdp;
+    div.appendChild(elem);
+
+    elem = document.createElement("h5");
+    elem.textContent = getString("remote_sdp_heading");
+    div.appendChild(elem);
+
+    elem = document.createElement("pre");
+    elem.textContent = this._report.remoteSdp;
+    div.appendChild(elem);
+
+    return div;
+  }
+};
+
+function RTPStats(report) {
+  this._report = report;
+  this._stats = [];
+}
+
+RTPStats.prototype = {
   render: function() {
-    var pair = this.props.pair;
-    return (
-      React.createElement("tr", null, 
-        React.createElement("td", null, pair.localCandidate), 
-        React.createElement("td", null, pair.remoteCandidate), 
-        React.createElement("td", null, pair.state), 
-        React.createElement("td", null, pair.priority), 
-        React.createElement("td", null, pair.nominated ? '✔' : null), 
-        React.createElement("td", null, pair.selected ? '✔' : null)
-      )
-    );
-  }
-});
+    let div = document.createElement("div");
+    let heading = document.createElement("h4");
 
-var SDP = React.createClass({displayName: "SDP",
-  render: function() {
-    var type = labelize(this.props.type);
+    heading.textContent = getString("rtp_stats_heading");
+    div.appendChild(heading);
 
-    return (
-      React.createElement("div", null, 
-        React.createElement("h4", null, type, " SDP"), 
-        React.createElement("pre", null, 
-          this.props.sdp
-        )
-      )
-    );
-  }
-});
+    this.generateRTPStats();
 
-var RTPStats = React.createClass({displayName: "RTPStats",
-  getRtpStats: function(report) {
-    var remoteRtpStats = {};
-    var rtpStats = [];
+    for (let statSet of this._stats) {
+      div.appendChild(this.renderRTPStatSet(statSet));
+    }
 
-    rtpStats = rtpStats.concat(report.inboundRTPStreamStats  || []);
-    rtpStats = rtpStats.concat(report.outboundRTPStreamStats || []);
+    return div;
+  },
 
-    rtpStats.forEach(function(stats) {
+  generateRTPStats: function() {
+    let remoteRtpStats = {};
+    let rtpStats = [].concat((this._report.inboundRTPStreamStats  || []),
+                             (this._report.outboundRTPStreamStats || []));
+
+    // Generate an id-to-streamStat index for each streamStat that is marked
+    // as a remote. This will be used next to link the remote to its local side.
+    for (let stats of rtpStats) {
       if (stats.isRemote) {
         remoteRtpStats[stats.id] = stats;
       }
-    });
+    }
 
-    rtpStats.forEach(function(stats) {
+    // If a streamStat has a remoteId attribute, create a remoteRtpStats
+    // attribute that references the remote streamStat entry directly.
+    // That is, the index generated above is merged into the returned list.
+    for (let stats of rtpStats) {
       if (stats.remoteId) {
         stats.remoteRtpStats = remoteRtpStats[stats.remoteId];
       }
-    });
+    }
 
-    return rtpStats;
+    this._stats = rtpStats;
   },
 
-  dumpAvStats: function(stats) {
-    var statsString = "";
+  renderAvStats: function(stats) {
+    let statsString = "";
+
     if (stats.mozAvSyncDelay) {
-      statsString += `A/V sync: ${stats.mozAvSyncDelay} ms `;
+      statsString += `${getString("av_sync_label")}: ${stats.mozAvSyncDelay} ms `;
     }
     if (stats.mozJitterBufferDelay) {
-      statsString += `Jitter-buffer delay: ${stats.mozJitterBufferDelay} ms`;
+      statsString += `${getString("jitter_buffer_delay_label")}: ${stats.mozJitterBufferDelay} ms`;
     }
 
-    return React.createElement("div", null, statsString);
+    let line = document.createElement("p");
+    line.textContent = statsString;
+    return line;
   },
 
-  dumpCoderStats: function(stats) {
-    var statsString = "";
-    var label;
+  renderCoderStats: function(stats) {
+    let statsString = "";
+    let label;
 
     if (stats.bitrateMean) {
-      statsString += ` Avg. bitrate: ${(stats.bitrateMean/1000000).toFixed(2)} Mbps`;
+      statsString += ` ${getString("avg_bitrate_label")}: ${(stats.bitrateMean / 1000000).toFixed(2)} Mbps`;
       if (stats.bitrateStdDev) {
-        statsString += ` (${(stats.bitrateStdDev/1000000).toFixed(2)} SD)`;
+        statsString += ` (${(stats.bitrateStdDev / 1000000).toFixed(2)} SD)`;
       }
     }
 
     if (stats.framerateMean) {
-      statsString += ` Avg. framerate: ${(stats.framerateMean).toFixed(2)} fps`;
+      statsString += ` ${getString("avg_framerate_label")}: ${(stats.framerateMean).toFixed(2)} fps`;
       if (stats.framerateStdDev) {
         statsString += ` (${stats.framerateStdDev.toFixed(2)} SD)`;
       }
     }
 
     if (stats.droppedFrames) {
-      statsString += ` Dropped frames: ${stats.droppedFrames}`;
+      statsString += ` ${getString("dropped_frames_label")}: ${stats.droppedFrames}`;
     }
     if (stats.discardedPackets) {
-      statsString += ` Discarded packets: ${stats.discardedPackets}`;
+      statsString += ` ${getString("discarded_packets_label")}: ${stats.discardedPackets}`;
     }
 
     if (statsString) {
-      label = (stats.packetsReceived)? " Decoder:" : " Encoder:";
+      label = (stats.packetsReceived ? ` ${getString("decoder_label")}:` : ` ${getString("encoder_label")}:`);
       statsString = label + statsString;
     }
 
-    return React.createElement("div", null, statsString);
+    let line = document.createElement("p");
+    line.textContent = statsString;
+    return line;
   },
 
-  dumpRtpStats: function(stats, type) {
-    var label = labelize(type);
-    var time  = new Date(stats.timestamp).toTimeString();
-
-    var statsString = `${label}: ${time} ${stats.type} SSRC: ${stats.ssrc}`;
+  renderTransportStats: function(stats, typeLabel) {
+    let time  = new Date(stats.timestamp).toTimeString();
+    let statsString = `${typeLabel}: ${time} ${stats.type} SSRC: ${stats.ssrc}`;
 
     if (stats.packetsReceived) {
-      statsString += ` Received: ${stats.packetsReceived} packets`;
+      statsString += ` ${getString("received_label")}: ${stats.packetsReceived} ${getString("packets")}`;
 
       if (stats.bytesReceived) {
-        statsString += ` (${round00(stats.bytesReceived/1024)} Kb)`;
+        statsString += ` (${(stats.bytesReceived / 1024).toFixed(2)} Kb)`;
       }
 
-      statsString += ` Lost: ${stats.packetsLost} Jitter: ${stats.jitter}`;
+      statsString += ` ${getString("lost_label")}: ${stats.packetsLost} ${getString("jitter_label")}: ${stats.jitter}`;
 
       if (stats.mozRtt) {
         statsString += ` RTT: ${stats.mozRtt} ms`;
       }
     } else if (stats.packetsSent) {
-      statsString += ` Sent: ${stats.packetsSent} packets`;
+      statsString += ` ${getString("sent_label")}: ${stats.packetsSent} ${getString("packets")}`;
       if (stats.bytesSent) {
-        statsString += ` (${round00(stats.bytesSent/1024)} Kb)`;
+        statsString += ` (${(stats.bytesSent / 1024).toFixed(2)} Kb)`;
       }
     }
 
-    return React.createElement("div", null, statsString);
+    let line = document.createElement("p");
+    line.textContent = statsString;
+    return line;
+  },
+
+  renderRTPStatSet: function(stats) {
+    let div = document.createElement("div");
+    let heading = document.createElement("h5");
+
+    heading.textContent = stats.id;
+    div.appendChild(heading);
+
+    if (stats.MozAvSyncDelay || stats.mozJitterBufferDelay) {
+      div.appendChild(this.renderAvStats(stats));
+    }
+
+    div.appendChild(this.renderCoderStats(stats));
+    div.appendChild(this.renderTransportStats(stats, getString("typeLocal")));
+
+    if (stats.remoteId && stats.remoteRtpStats) {
+      div.appendChild(this.renderTransportStats(stats.remoteRtpStats, getString("typeRemote")));
+    }
+
+    return div;
+  },
+};
+
+function ICEStats(report) {
+  this._report = report;
+}
+
+ICEStats.prototype = {
+  render: function() {
+    let tbody = [];
+    for (let stat of this.generateICEStats()) {
+      tbody.push([
+        stat.localcandidate || "",
+        stat.remotecandidate || "",
+        stat.state || "",
+        stat.priority || "",
+        stat.nominated || "",
+        stat.selected || ""
+      ]);
+    }
+
+    let statsTable = new SimpleTable(
+      [getString("local_candidate"), getString("remote_candidate"), getString("ice_state"),
+       getString("priority"), getString("nominated"), getString("selected")],
+      tbody);
+
+    let div = document.createElement("div");
+    let heading = document.createElement("h4");
+
+    heading.textContent = getString("ice_stats_heading");
+    div.appendChild(heading);
+    div.appendChild(statsTable.render());
+
+    return div;
+  },
+
+  generateICEStats: function() {
+    // Create an index based on candidate ID for each element in the
+    // iceCandidateStats array.
+    let candidates = new Map();
+
+    for (let candidate of this._report.iceCandidateStats) {
+      candidates.set(candidate.id, candidate);
+    }
+
+    // A component may have a remote or local candidate address or both.
+    // Combine those with both; these will be the peer candidates.
+    let matched = {};
+    let stats = [];
+    let stat;
+
+    for (let pair of this._report.iceCandidatePairStats) {
+      let local = candidates.get(pair.localCandidateId);
+      let remote = candidates.get(pair.remoteCandidateId);
+
+      if (local) {
+        stat = {
+          localcandidate: this.candidateToString(local),
+          state: pair.state,
+          priority: pair.priority,
+          nominated: pair.nominated,
+          selected: pair.selected
+        };
+        matched[local.id] = true;
+
+        if (remote) {
+          stat.remotecandidate = this.candidateToString(remote);
+          matched[remote.id] = true;
+        }
+        stats.push(stat);
+      }
+    }
+
+    for (let c of candidates.values()) {
+      if (matched[c.id])
+        continue;
+
+      stat = {};
+      stat[c.type] = this.candidateToString(c);
+      stats.push(stat);
+    }
+
+    return stats.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+  },
+
+  candidateToString: function(c) {
+    if (!c) {
+      return "*";
+    }
+
+    var type = c.candidateType;
+
+    if (c.type == "localcandidate" && c.candidateType == "relayed") {
+      type = `${c.candidateType}-${c.mozLocalTransport}`;
+    }
+
+    return `${c.ipAddress}:${c.portNumber}/${c.transport}(${type})`;
+  }
+};
+
+function SimpleTable(heading, data) {
+  this._heading = heading || [];
+  this._data = data;
+}
+
+SimpleTable.prototype = {
+  renderRow: function(list) {
+    let row = document.createElement("tr");
+
+    for (let elem of list) {
+      let cell = document.createElement("td");
+      cell.textContent = elem;
+      row.appendChild(cell);
+    }
+
+    return row;
   },
 
   render: function() {
-    var rtpStats = this.getRtpStats(this.props.report);
+    let table = document.createElement("table");
 
-    return (
-      React.createElement("div", null, 
-        rtpStats.map(function(stats) {
-          var isAvStats = (stats.mozAvSyncDelay || stats.mozJitterBufferDelay);
-          var remoteRtpStats = stats.remoteId ? stats.remoteRtpStats : null;
+    if (this._heading) {
+      table.appendChild(this.renderRow(this._heading));
+    }
 
-          return [
-            React.createElement("h5", null, stats.id),
-            isAvStats ? this.dumpAvStats(stats) : null,
-            this.dumpCoderStats(stats),
-            this.dumpRtpStats(stats, "local"),
-            remoteRtpStats ? this.dumpRtpStats(remoteRtpStats, "remote") : null
-          ];
-        }.bind(this))
-      )
-    );
+    for (let row of this._data) {
+      table.appendChild(this.renderRow(row));
+    }
+
+    return table;
   }
-});
+};
 
-var LogsButton = React.createClass({displayName: "LogsButton",
+function FoldEffect(targetElem, options = {}) {
+  if (targetElem) {
+    this._showMsg = "\u25BC " + (options.showMsg || getString("fold_show_msg"));
+    this._showHint = options.showHint || getString("fold_show_hint");
+    this._hideMsg = "\u25B2 " + (options.hideMsg || getString("fold_hide_msg"));
+    this._hideHint = options.hideHint || getString("fold_hide_hint");
+    this._target = targetElem;
+  }
+}
+
+FoldEffect.prototype = {
   render: function() {
-    return (
-      React.createElement("button", {onClick: this.props.handler}, "Connection log")
-    );
-  }
-});
+    this._target.classList.add("fold-target");
 
-var DebugButton = React.createClass({displayName: "DebugButton",
-  getInitialState: function() {
-    var on = (WebrtcGlobalInformation.debugLevel > 0);
-    return {on: on};
+    let ctrl = document.createElement("div");
+    this._trigger = ctrl;
+    ctrl.className = "fold-trigger";
+    ctrl.addEventListener("click", this.onClick.bind(this));
+    this.close();
+
+    FoldEffect._sections.push(this);
+    return ctrl;
   },
 
   onClick: function() {
-    if (this.state.on)
-      WebrtcGlobalInformation.debugLevel = 0;
-    else
-      WebrtcGlobalInformation.debugLevel = 65535;
-
-    this.setState({on: !this.state.on});
+    if (this._target.classList.contains("fold-closed")) {
+      this.open();
+    } else {
+      this.close();
+    }
+    return true;
   },
 
-  render: function() {
-    return (
-      React.createElement("button", {onClick: this.onClick}, 
-        this.state.on ? "Stop debug mode" : "Start debug mode"
-      )
-    );
-  }
-});
-
-var AECButton = React.createClass({displayName: "AECButton",
-  getInitialState: function() {
-    return {on: WebrtcGlobalInformation.aecDebug};
+  open: function() {
+    this._target.classList.remove("fold-closed");
+    this._trigger.setAttribute("title", this._hideHint);
+    this._trigger.textContent = this._hideMsg;
   },
 
-  onClick: function() {
-    WebrtcGlobalInformation.aecDebug = !this.state.on;
-    this.setState({on: WebrtcGlobalInformation.aecDebug});
-  },
-
-  render: function() {
-    return (
-      React.createElement("button", {onClick: this.onClick}, 
-        this.state.on ? "Stop AEC logging" : "Start AEC logging"
-      )
-    );
+  close: function() {
+    this._target.classList.add("fold-closed");
+    this._trigger.setAttribute("title", this._showHint);
+    this._trigger.textContent = this._showMsg;
   }
-});
+};
 
-var Logs = React.createClass({displayName: "Logs",
-  render: function() {
-    return (
-      React.createElement("div", null, 
-        React.createElement("h3", null, "Logging:"), 
-        React.createElement("div", null, 
-          this.props.logs.map(function(line, i) {
-            return React.createElement("div", {key: i}, line);
-          })
-        )
-      )
-    );
+FoldEffect._sections = [];
+
+FoldEffect.expandAll = function() {
+  for (let section of this._sections) {
+    section.open();
   }
-});
+};
 
-function iceCandidateMapping(iceCandidates) {
-  var candidates = {};
-  iceCandidates = iceCandidates || [];
-
-  iceCandidates.forEach(function(candidate) {
-    candidates[candidate.id] = candidate;
-  });
-
-  return candidates;
-}
-
-function round00(num) {
-  return Math.round(num * 100) / 100;
-}
-
-function labelize(label) {
-  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
-}
-
-function candidateToString(c) {
-  var type = c.candidateType;
-
-  if (c.type == "localcandidate" && c.candidateType == "relayed") {
-    type = `${c.candidateType}-${c.mozLocalTransport}`;
+FoldEffect.collapseAll = function() {
+  for (let section of this._sections) {
+    section.close();
   }
-
-  return `${c.ipAddress}:${c.portNumber}/${c.transport}(${type})`;
-}
-
-function onLoad() {
-  WebrtcGlobalInformation.getAllStats(function(globalReport) {
-    var reports = globalReport.reports;
-    React.render(React.createElement(AboutWebRTC, {reports: reports}),
-                 document.querySelector("#body"));
-  });
-}
+};

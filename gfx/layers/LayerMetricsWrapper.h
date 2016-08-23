@@ -7,6 +7,7 @@
 #define GFX_LAYERMETRICSWRAPPER_H
 
 #include "Layers.h"
+#include "UnitTransforms.h"
 
 namespace mozilla {
 namespace layers {
@@ -141,7 +142,7 @@ public:
 
     switch (aStart) {
       case StartAt::TOP:
-        mIndex = mLayer->GetFrameMetricsCount();
+        mIndex = mLayer->GetScrollMetadataCount();
         if (mIndex > 0) {
           mIndex--;
         }
@@ -160,7 +161,7 @@ public:
     , mIndex(aMetricsIndex)
   {
     MOZ_ASSERT(mLayer);
-    MOZ_ASSERT(mIndex == 0 || mIndex < mLayer->GetFrameMetricsCount());
+    MOZ_ASSERT(mIndex == 0 || mIndex < mLayer->GetScrollMetadataCount());
   }
 
   bool IsValid() const
@@ -239,21 +240,26 @@ public:
     return LayerMetricsWrapper(nullptr);
   }
 
-  const FrameMetrics& Metrics() const
+  const ScrollMetadata& Metadata() const
   {
     MOZ_ASSERT(IsValid());
 
-    if (mIndex >= mLayer->GetFrameMetricsCount()) {
-      return FrameMetrics::sNullMetrics;
+    if (mIndex >= mLayer->GetScrollMetadataCount()) {
+      return *ScrollMetadata::sNullMetadata;
     }
-    return mLayer->GetFrameMetrics(mIndex);
+    return mLayer->GetScrollMetadata(mIndex);
+  }
+
+  const FrameMetrics& Metrics() const
+  {
+    return Metadata().GetMetrics();
   }
 
   AsyncPanZoomController* GetApzc() const
   {
     MOZ_ASSERT(IsValid());
 
-    if (mIndex >= mLayer->GetFrameMetricsCount()) {
+    if (mIndex >= mLayer->GetScrollMetadataCount()) {
       return nullptr;
     }
     return mLayer->GetAsyncPanZoomController(mIndex);
@@ -263,12 +269,12 @@ public:
   {
     MOZ_ASSERT(IsValid());
 
-    if (mLayer->GetFrameMetricsCount() == 0) {
+    if (mLayer->GetScrollMetadataCount() == 0) {
       MOZ_ASSERT(mIndex == 0);
       MOZ_ASSERT(aApzc == nullptr);
       return;
     }
-    MOZ_ASSERT(mIndex < mLayer->GetFrameMetricsCount());
+    MOZ_ASSERT(mIndex < mLayer->GetScrollMetadataCount());
     mLayer->SetAsyncPanZoomController(mIndex, aApzc);
   }
 
@@ -299,6 +305,25 @@ public:
     return gfx::Matrix4x4();
   }
 
+  CSSTransformMatrix GetTransformTyped() const
+  {
+    return ViewAs<CSSTransformMatrix>(GetTransform());
+  }
+
+  bool TransformIsPerspective() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    // mLayer->GetTransformIsPerspective() tells us whether
+    // mLayer->GetTransform() is a perspective transform. Since
+    // mLayer->GetTransform() is only used at the bottom layer, we only
+    // need to check GetTransformIsPerspective() at the bottom layer too.
+    if (AtBottomLayer()) {
+      return mLayer->GetTransformIsPerspective();
+    }
+    return false;
+  }
+
   EventRegions GetEventRegions() const
   {
     MOZ_ASSERT(IsValid());
@@ -307,6 +332,16 @@ public:
       return mLayer->GetEventRegions();
     }
     return EventRegions();
+  }
+
+  bool HasTransformAnimation() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    if (AtBottomLayer()) {
+      return mLayer->HasTransformAnimation();
+    }
+    return false;
   }
 
   RefLayer* AsRefLayer() const
@@ -319,23 +354,91 @@ public:
     return nullptr;
   }
 
-  nsIntRegion GetVisibleRegion() const
+  LayerIntRegion GetVisibleRegion() const
   {
     MOZ_ASSERT(IsValid());
 
     if (AtBottomLayer()) {
       return mLayer->GetVisibleRegion();
     }
-    nsIntRegion region = mLayer->GetVisibleRegion();
-    region.Transform(gfx::To3DMatrix(mLayer->GetTransform()));
+    LayerIntRegion region = mLayer->GetVisibleRegion();
+    region.Transform(mLayer->GetTransform());
     return region;
   }
 
-  const nsIntRect* GetClipRect() const
+  Maybe<ParentLayerIntRect> GetClipRect() const
   {
     MOZ_ASSERT(IsValid());
 
-    return mLayer->GetClipRect();
+    Maybe<ParentLayerIntRect> result;
+
+    // The layer can have a clip rect, which is considered to apply
+    // only to the bottommost LayerMetrics.
+    if (AtBottomLayer()) {
+      result = mLayer->GetClipRect();
+    }
+
+    // The scroll metadata can have a clip rect as well.
+    result = IntersectMaybeRects(result, Metadata().GetClipRect());
+
+    return result;
+  }
+
+  float GetPresShellResolution() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    if (AtTopLayer() && mLayer->AsContainerLayer()) {
+      return mLayer->AsContainerLayer()->GetPresShellResolution();
+    }
+
+    return 1.0f;
+  }
+
+  EventRegionsOverride GetEventRegionsOverride() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    if (mLayer->AsContainerLayer()) {
+      return mLayer->AsContainerLayer()->GetEventRegionsOverride();
+    }
+    return EventRegionsOverride::NoOverride;
+  }
+
+  Layer::ScrollDirection GetScrollbarDirection() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    return mLayer->GetScrollbarDirection();
+  }
+
+  FrameMetrics::ViewID GetScrollbarTargetContainerId() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    return mLayer->GetScrollbarTargetContainerId();
+  }
+
+  int32_t GetScrollbarSize() const
+  {
+    if (GetScrollbarDirection() == Layer::VERTICAL) {
+      return mLayer->GetVisibleRegion().GetBounds().height;
+    } else {
+      return mLayer->GetVisibleRegion().GetBounds().width;
+    }
+  }
+
+  bool IsScrollbarContainer() const
+  {
+    MOZ_ASSERT(IsValid());
+    return mLayer->IsScrollbarContainer();
+  }
+
+  FrameMetrics::ViewID GetFixedPositionScrollContainerId() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    return mLayer->GetFixedPositionScrollContainerId();
   }
 
   // Expose an opaque pointer to the layer. Mostly used for printf
@@ -361,30 +464,30 @@ public:
 
   static const FrameMetrics& TopmostScrollableMetrics(Layer* aLayer)
   {
-    for (uint32_t i = aLayer->GetFrameMetricsCount(); i > 0; i--) {
+    for (uint32_t i = aLayer->GetScrollMetadataCount(); i > 0; i--) {
       if (aLayer->GetFrameMetrics(i - 1).IsScrollable()) {
         return aLayer->GetFrameMetrics(i - 1);
       }
     }
-    return FrameMetrics::sNullMetrics;
+    return ScrollMetadata::sNullMetadata->GetMetrics();
   }
 
   static const FrameMetrics& BottommostScrollableMetrics(Layer* aLayer)
   {
-    for (uint32_t i = 0; i < aLayer->GetFrameMetricsCount(); i++) {
+    for (uint32_t i = 0; i < aLayer->GetScrollMetadataCount(); i++) {
       if (aLayer->GetFrameMetrics(i).IsScrollable()) {
         return aLayer->GetFrameMetrics(i);
       }
     }
-    return FrameMetrics::sNullMetrics;
+    return ScrollMetadata::sNullMetadata->GetMetrics();
   }
 
   static const FrameMetrics& BottommostMetrics(Layer* aLayer)
   {
-    if (aLayer->GetFrameMetricsCount() > 0) {
+    if (aLayer->GetScrollMetadataCount() > 0) {
       return aLayer->GetFrameMetrics(0);
     }
-    return FrameMetrics::sNullMetrics;
+    return ScrollMetadata::sNullMetadata->GetMetrics();
   }
 
 private:
@@ -395,7 +498,7 @@ private:
 
   bool AtTopLayer() const
   {
-    return mLayer->GetFrameMetricsCount() == 0 || mIndex == mLayer->GetFrameMetricsCount() - 1;
+    return mLayer->GetScrollMetadataCount() == 0 || mIndex == mLayer->GetScrollMetadataCount() - 1;
   }
 
 private:
@@ -403,7 +506,7 @@ private:
   uint32_t mIndex;
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif /* GFX_LAYERMETRICSWRAPPER_H */

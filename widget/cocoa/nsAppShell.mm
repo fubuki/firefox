@@ -33,6 +33,9 @@
 #include "mozilla/HangMonitor.h"
 #include "GeckoProfiler.h"
 #include "pratom.h"
+#if !defined(RELEASE_BUILD) || defined(DEBUG)
+#include "nsSandboxViolationSink.h"
+#endif
 
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #include "nsIDOMWakeLockListener.h"
@@ -44,7 +47,7 @@ using namespace mozilla::widget;
 // Gecko. For example when we're playing video in a foreground tab we
 // don't want the screen saver to turn on.
 
-class MacWakeLockListener MOZ_FINAL : public nsIDOMMozWakeLockListener {
+class MacWakeLockListener final : public nsIDOMMozWakeLockListener {
 public:
   NS_DECL_ISUPPORTS;
 
@@ -53,7 +56,7 @@ private:
 
   IOPMAssertionID mAssertionID = kIOPMNullAssertionID;
 
-  NS_IMETHOD Callback(const nsAString& aTopic, const nsAString& aState) MOZ_OVERRIDE {
+  NS_IMETHOD Callback(const nsAString& aTopic, const nsAString& aState) override {
     if (!aTopic.EqualsASCII("screen")) {
       return NS_OK;
     }
@@ -115,8 +118,12 @@ static bool gAppShellMethodsSwizzled = false;
   if (expiration) {
     mozilla::HangMonitor::Suspend();
   }
-  return [super nextEventMatchingMask:mask
-          untilDate:expiration inMode:mode dequeue:flag];
+  NSEvent* nextEvent = [super nextEventMatchingMask:mask
+                        untilDate:expiration inMode:mode dequeue:flag];
+  if (expiration) {
+    mozilla::HangMonitor::NotifyActivity();
+  }
+  return nextEvent;
 }
 
 @end
@@ -315,6 +322,13 @@ nsAppShell::Init()
     CGSSetDebugOptions(0x80000007);
   }
 
+#if !defined(RELEASE_BUILD) || defined(DEBUG)
+  if (nsCocoaFeatures::OnMavericksOrLater() &&
+      Preferences::GetBool("security.sandbox.mac.track.violations", false)) {
+    nsSandboxViolationSink::Start();
+  }
+#endif
+
   [localPool release];
 
   return rv;
@@ -350,7 +364,7 @@ nsAppShell::ProcessGeckoEvents(void* aInfo)
     // presentable.
     //
     // But _don't_ set windowNumber to '-1' -- that can lead to nasty
-    // wierdness like bmo bug 397039 (a crash in [NSApp sendEvent:] on one of
+    // weirdness like bmo bug 397039 (a crash in [NSApp sendEvent:] on one of
     // these fake events, because the -1 has gotten changed into the number
     // of an actual NSWindow object, and that NSWindow object has just been
     // destroyed).  Setting windowNumber to '0' seems to work fine -- this
@@ -668,6 +682,12 @@ nsAppShell::Exit(void)
 
   mTerminated = true;
 
+#if !defined(RELEASE_BUILD) || defined(DEBUG)
+  if (nsCocoaFeatures::OnMavericksOrLater()) {
+    nsSandboxViolationSink::Stop();
+  }
+#endif
+
   // Quoting from Apple's doc on the [NSApplication stop:] method (from their
   // doc on the NSApplication class):  "If this method is invoked during a
   // modal event loop, it will break that loop but not the main event loop."
@@ -713,8 +733,7 @@ nsAppShell::Exit(void)
 //
 // public
 NS_IMETHODIMP
-nsAppShell::OnProcessNextEvent(nsIThreadInternal *aThread, bool aMayWait,
-                               uint32_t aRecursionDepth)
+nsAppShell::OnProcessNextEvent(nsIThreadInternal *aThread, bool aMayWait)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
 
@@ -724,7 +743,7 @@ nsAppShell::OnProcessNextEvent(nsIThreadInternal *aThread, bool aMayWait,
   NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
   ::CFArrayAppendValue(mAutoreleasePools, pool);
 
-  return nsBaseAppShell::OnProcessNextEvent(aThread, aMayWait, aRecursionDepth);
+  return nsBaseAppShell::OnProcessNextEvent(aThread, aMayWait);
 
   NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
@@ -738,7 +757,6 @@ nsAppShell::OnProcessNextEvent(nsIThreadInternal *aThread, bool aMayWait,
 // public
 NS_IMETHODIMP
 nsAppShell::AfterProcessNextEvent(nsIThreadInternal *aThread,
-                                  uint32_t aRecursionDepth,
                                   bool aEventWasProcessed)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
@@ -753,8 +771,7 @@ nsAppShell::AfterProcessNextEvent(nsIThreadInternal *aThread,
   ::CFArrayRemoveValueAtIndex(mAutoreleasePools, count - 1);
   [pool release];
 
-  return nsBaseAppShell::AfterProcessNextEvent(aThread, aRecursionDepth,
-                                               aEventWasProcessed);
+  return nsBaseAppShell::AfterProcessNextEvent(aThread, aEventWasProcessed);
 
   NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }

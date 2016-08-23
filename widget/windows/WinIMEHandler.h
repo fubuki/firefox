@@ -8,6 +8,7 @@
 
 #include "nscore.h"
 #include "nsIWidget.h"
+#include "npapi.h"
 #include <windows.h>
 #include <inputscope.h>
 
@@ -27,16 +28,16 @@ struct MSGResult;
  * API set. By using this class, non-IME handler classes don't need to worry
  * that we're in which mode.
  */
-class IMEHandler MOZ_FINAL
+class IMEHandler final
 {
 public:
   static void Initialize();
   static void Terminate();
 
   /**
-   * Returns TSF related native data.
+   * Returns TSF related native data or native IME context.
    */
-  static void* GetNativeData(uint32_t aDataType);
+  static void* GetNativeData(nsWindow* aWindow, uint32_t aDataType);
 
   /**
    * ProcessRawKeyMessage() message is called before calling TranslateMessage()
@@ -76,6 +77,11 @@ public:
   static nsIMEUpdatePreference GetUpdatePreference();
 
   /**
+   * Returns native text event dispatcher listener.
+   */
+  static TextEventDispatcherListener* GetNativeTextEventDispatcherListener();
+
+  /**
    * Returns IME open state on the window.
    */
   static bool GetOpenState(nsWindow* aWindow);
@@ -103,6 +109,17 @@ public:
    */
   static void InitInputContext(nsWindow* aWindow, InputContext& aInputContext);
 
+  /*
+   * For windowless plugin helper.
+   */
+  static void SetCandidateWindow(nsWindow* aWindow, CANDIDATEFORM* aForm);
+
+  /*
+   * For WM_IME_*COMPOSITION messages and e10s with windowless plugin
+   */
+  static void DefaultProcOfPluginEvent(nsWindow* aWindow,
+                                       const NPEvent* aPluginEvent);
+
 #ifdef DEBUG
   /**
    * Returns true when current keyboard layout has IME.  Otherwise, false.
@@ -111,18 +128,50 @@ public:
 #endif // #ifdef DEBUG
 
 private:
+  static nsWindow* sFocusedWindow;
+  static InputContextAction::Cause sLastContextActionCause;
+
+  static bool sPluginHasFocus;
+
 #ifdef NS_ENABLE_TSF
   static decltype(SetInputScopes)* sSetInputScopes;
   static void SetInputScopeForIMM32(nsWindow* aWindow,
-                                    const nsAString& aHTMLInputType);
+                                    const nsAString& aHTMLInputType,
+                                    const nsAString& aHTMLInputInputmode);
   static bool sIsInTSFMode;
   // If sIMMEnabled is false, any IME messages are not handled in TSF mode.
   // Additionally, IME context is always disassociated from focused window.
   static bool sIsIMMEnabled;
-  static bool sPluginHasFocus;
 
   static bool IsTSFAvailable() { return (sIsInTSFMode && !sPluginHasFocus); }
   static bool IsIMMActive();
+
+  static void MaybeShowOnScreenKeyboard();
+  static void MaybeDismissOnScreenKeyboard(nsWindow* aWindow);
+  static bool WStringStartsWithCaseInsensitive(const std::wstring& aHaystack,
+                                               const std::wstring& aNeedle);
+  static bool NeedOnScreenKeyboard();
+  static bool IsKeyboardPresentOnSlate();
+  static bool IsInTabletMode();
+  static bool AutoInvokeOnScreenKeyboardInDesktopMode();
+
+  /**
+   * Show the Windows on-screen keyboard. Only allowed for
+   * chrome documents and Windows 8 and higher.
+   */
+  static void ShowOnScreenKeyboard();
+
+  /**
+   * Dismiss the Windows on-screen keyboard. Only allowed for
+   * Windows 8 and higher.
+   */
+  static void DismissOnScreenKeyboard();
+
+  /**
+   * Get the HWND for the on-screen keyboard, if it's up. Only
+   * allowed for Windows 8 and higher.
+   */
+  static HWND GetOnScreenKeyboardWindow();
 #endif // #ifdef NS_ENABLE_TSF
 };
 

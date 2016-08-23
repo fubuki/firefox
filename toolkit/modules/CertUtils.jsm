@@ -1,9 +1,7 @@
-#if 0
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#endif
 this.EXPORTED_SYMBOLS = [ "BadCertHandler", "checkCert", "readCertPrefs", "validateCert" ];
 
 const Ce = Components.Exception;
@@ -45,7 +43,7 @@ this.readCertPrefs =
       break;
 
     let certAttrs = {};
-    for each (let prefCertAttr in prefCertAttrs)
+    for (let prefCertAttr of prefCertAttrs)
       certAttrs[prefCertAttr] = prefBranchCert.getCharPref(prefCertAttr);
 
     certs.push(certAttrs);
@@ -204,7 +202,7 @@ BadCertHandler.prototype = {
     // Don't call checkCert for internal redirects. See bug 569648.
     if (!(flags & Ci.nsIChannelEventSink.REDIRECT_INTERNAL))
       checkCert(oldChannel);
-    
+
     callback.onRedirectVerifyCallback(Components.results.NS_OK);
   },
 

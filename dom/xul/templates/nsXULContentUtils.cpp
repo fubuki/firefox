@@ -40,17 +40,15 @@
 #include "nsXULContentUtils.h"
 #include "nsLayoutCID.h"
 #include "nsNameSpaceManager.h"
-#include "nsNetUtil.h"
 #include "nsRDFCID.h"
 #include "nsString.h"
 #include "nsXPIDLString.h"
 #include "nsGkAtoms.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "prtime.h"
 #include "rdf.h"
 #include "nsContentUtils.h"
 #include "nsIDateTimeFormat.h"
-#include "nsDateTimeFormatCID.h"
 #include "nsIScriptableDateFormat.h"
 #include "nsICollation.h"
 #include "nsCollationCID.h"
@@ -67,9 +65,7 @@ nsIRDFService* nsXULContentUtils::gRDF;
 nsIDateTimeFormat* nsXULContentUtils::gFormat;
 nsICollation *nsXULContentUtils::gCollation;
 
-#ifdef PR_LOGGING
-extern PRLogModuleInfo* gXULTemplateLog;
-#endif
+extern LazyLogModule gXULTemplateLog;
 
 #define XUL_RESOURCE(ident, uri) nsIRDFResource* nsXULContentUtils::ident
 #define XUL_LITERAL(ident, val) nsIRDFLiteral* nsXULContentUtils::ident
@@ -98,7 +94,7 @@ nsXULContentUtils::Init()
 
 #define XUL_LITERAL(ident, val)                                   \
   PR_BEGIN_MACRO                                                  \
-   rv = gRDF->GetLiteral(NS_LITERAL_STRING(val).get(), &(ident)); \
+   rv = gRDF->GetLiteral(MOZ_UTF16(val), &(ident));               \
    if (NS_FAILED(rv)) return rv;                                  \
   PR_END_MACRO
 
@@ -106,9 +102,9 @@ nsXULContentUtils::Init()
 #undef XUL_RESOURCE
 #undef XUL_LITERAL
 
-    rv = CallCreateInstance(NS_DATETIMEFORMAT_CONTRACTID, &gFormat);
-    if (NS_FAILED(rv)) {
-        return rv;
+    gFormat = nsIDateTimeFormat::Create().take();
+    if (!gFormat) {
+        return NS_ERROR_FAILURE;
     }
 
     return NS_OK;
@@ -365,6 +361,6 @@ nsXULContentUtils::LogTemplateError(const char* aStr)
   nsCOMPtr<nsIConsoleService> cs = do_GetService(NS_CONSOLESERVICE_CONTRACTID);
   if (cs) {
     cs->LogStringMessage(message.get());
-    PR_LOG(gXULTemplateLog, PR_LOG_ALWAYS, ("Error parsing template: %s", aStr));
+    MOZ_LOG(gXULTemplateLog, LogLevel::Info, ("Error parsing template: %s", aStr));
   }
 }

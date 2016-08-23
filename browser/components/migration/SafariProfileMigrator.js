@@ -4,10 +4,11 @@
 
 "use strict";
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let Cu = Components.utils;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -32,23 +33,21 @@ Bookmarks.prototype = {
   type: MigrationUtils.resourceTypes.BOOKMARKS,
 
   migrate: function B_migrate(aCallback) {
-    PropertyListUtils.read(this._file,
-      MigrationUtils.wrapMigrateFunction(function migrateBookmarks(aDict) {
-        if (!aDict)
-          throw new Error("Could not read Bookmarks.plist");
+    return Task.spawn(function* () {
+      let dict = yield new Promise(resolve =>
+        PropertyListUtils.read(this._file, resolve)
+      );
+      if (!dict)
+        throw new Error("Could not read Bookmarks.plist");
+      let children = dict.get("Children");
+      if (!children)
+        throw new Error("Invalid Bookmarks.plist format");
 
-        let children = aDict.get("Children");;
-        if (!children)
-          throw new Error("Invalid Bookmarks.plist format");
-
-        PlacesUtils.bookmarks.runInBatchMode({
-          runBatched: function() {
-            let collection = aDict.get("Title") == "com.apple.ReadingList" ?
-              this.READING_LIST_COLLECTION : this.ROOT_COLLECTION;
-            this._migrateCollection(children, collection);
-          }.bind(this)
-        }, null);
-      }.bind(this), aCallback));
+      let collection = dict.get("Title") == "com.apple.ReadingList" ?
+        this.READING_LIST_COLLECTION : this.ROOT_COLLECTION;
+      yield this._migrateCollection(children, collection);
+    }.bind(this)).then(() => aCallback(true),
+                        e => { Cu.reportError(e); aCallback(false) });
   },
 
   // Bookmarks collections in Safari.  Constants for migrateCollection.
@@ -65,7 +64,7 @@ Bookmarks.prototype = {
    * @param aCollection
    *        one of the values above.
    */
-  _migrateCollection: function B__migrateCollection(aEntries, aCollection) {
+  _migrateCollection: Task.async(function* (aEntries, aCollection) {
     // A collection of bookmarks in Safari resembles places roots.  In the
     // property list files (Bookmarks.plist, ReadingList.plist) they are
     // stored as regular bookmarks folders, and thus can only be distinguished
@@ -79,11 +78,11 @@ Bookmarks.prototype = {
           let title = entry.get("Title");
           let children = entry.get("Children");
           if (title == "BookmarksBar")
-            this._migrateCollection(children, this.TOOLBAR_COLLECTION);
+            yield this._migrateCollection(children, this.TOOLBAR_COLLECTION);
           else if (title == "BookmarksMenu")
-            this._migrateCollection(children, this.MENU_COLLECTION);
+            yield this._migrateCollection(children, this.MENU_COLLECTION);
           else if (title == "com.apple.ReadingList")
-            this._migrateCollection(children, this.READING_LIST_COLLECTION);
+            yield this._migrateCollection(children, this.READING_LIST_COLLECTION);
           else if (entry.get("ShouldOmitFromUI") !== true)
             entriesFiltered.push(entry);
         }
@@ -99,31 +98,31 @@ Bookmarks.prototype = {
     if (entriesFiltered.length == 0)
       return;
 
-    let folder = -1;
+    let folderGuid = -1;
     switch (aCollection) {
       case this.ROOT_COLLECTION: {
         // In Safari, it is possible (though quite cumbersome) to move
         // bookmarks to the bookmarks root, which is the parent folder of
         // all bookmarks "collections".  That is somewhat in parallel with
-        // both the places root and the unfiled-bookmarks root. 
+        // both the places root and the unfiled-bookmarks root.
         // Because the former is only an implementation detail in our UI,
         // the unfiled root seems to be the best choice.
-        folder = PlacesUtils.unfiledBookmarksFolderId;
+        folderGuid = PlacesUtils.bookmarks.unfiledGuid;
         break;
       }
       case this.MENU_COLLECTION: {
-        folder = PlacesUtils.bookmarksMenuFolderId;
+        folderGuid = PlacesUtils.bookmarks.menuGuid;
         if (!MigrationUtils.isStartupMigration) {
-          folder = MigrationUtils.createImportedBookmarksFolder("Safari",
-                                                                folder);
+          folderGuid =
+            yield MigrationUtils.createImportedBookmarksFolder("Safari", folderGuid);
         }
         break;
       }
       case this.TOOLBAR_COLLECTION: {
-        folder = PlacesUtils.toolbarFolderId;
+        folderGuid = PlacesUtils.bookmarks.toolbarGuid;
         if (!MigrationUtils.isStartupMigration) {
-          folder = MigrationUtils.createImportedBookmarksFolder("Safari",
-                                                                folder);
+          folderGuid =
+            yield MigrationUtils.createImportedBookmarksFolder("Safari", folderGuid);
         }
         break;
       }
@@ -131,51 +130,52 @@ Bookmarks.prototype = {
         // Reading list items are imported as regular bookmarks.
         // They are imported under their own folder, created either under the
         // bookmarks menu (in the case of startup migration).
-        folder = PlacesUtils.bookmarks.createFolder(
-            PlacesUtils.bookmarksMenuFolderId,
-            MigrationUtils.getLocalizedString("importedSafariReadingList"),
-            PlacesUtils.bookmarks.DEFAULT_INDEX);
+        folderGuid = (yield PlacesUtils.bookmarks.insert({
+            parentGuid: PlacesUtils.bookmarks.menuGuid,
+            type: PlacesUtils.bookmarks.TYPE_FOLDER,
+            title: MigrationUtils.getLocalizedString("importedSafariReadingList"),
+          })).guid;
         break;
       }
       default:
         throw new Error("Unexpected value for aCollection!");
     }
+    if (folderGuid == -1)
+      throw new Error("Invalid folder GUID");
 
-    this._migrateEntries(entriesFiltered, folder);
-  },
+    yield this._migrateEntries(entriesFiltered, folderGuid);
+  }),
 
   // migrate the given array of safari bookmarks to the given places
   // folder.
-  _migrateEntries: function B__migrateEntries(aEntries, aFolderId) {
-    for (let entry of aEntries) {
+  _migrateEntries: Task.async(function* (entries, parentGuid) {
+    for (let entry of entries) {
       let type = entry.get("WebBookmarkType");
       if (type == "WebBookmarkTypeList" && entry.has("Children")) {
         let title = entry.get("Title");
-        let folderId = PlacesUtils.bookmarks.createFolder(
-           aFolderId, title, PlacesUtils.bookmarks.DEFAULT_INDEX);
+        let newFolderGuid = (yield PlacesUtils.bookmarks.insert({
+          parentGuid, type: PlacesUtils.bookmarks.TYPE_FOLDER, title
+        })).guid;
 
         // Empty folders may not have a children array.
         if (entry.has("Children"))
-          this._migrateEntries(entry.get("Children"), folderId, false);
+          yield this._migrateEntries(entry.get("Children"), newFolderGuid, false);
       }
       else if (type == "WebBookmarkTypeLeaf" && entry.has("URLString")) {
-        let title, uri;
+        let title;
         if (entry.has("URIDictionary"))
           title = entry.get("URIDictionary").get("title");
 
         try {
-          uri = NetUtil.newURI(entry.get("URLString"));
-        }
-        catch(ex) {
-          Cu.reportError("Invalid uri set for Safari bookmark: " + entry.get("URLString"));
-        }
-        if (uri) {
-          PlacesUtils.bookmarks.insertBookmark(aFolderId, uri,
-            PlacesUtils.bookmarks.DEFAULT_INDEX, title);
+          yield PlacesUtils.bookmarks.insert({
+            parentGuid, url: entry.get("URLString"), title
+          });
+        } catch(ex) {
+          Cu.reportError("Invalid Safari bookmark: " + ex);
         }
       }
     }
-  }
+  })
 };
 
 function History(aHistoryFile) {
@@ -298,7 +298,7 @@ MainPreferencesPropertyList.prototype = {
   _readSync: function MPPL__readSync() {
     if ("_dict" in this)
       return this._dict;
-  
+
     let inputStream = Cc["@mozilla.org/network/file-input-stream;1"].
                       createInstance(Ci.nsIFileInputStream);
     inputStream.init(this._file, -1, -1, 0);
@@ -326,7 +326,7 @@ Preferences.prototype = {
 
         this._dict = aDict;
 
-        let invert = function(webkitVal) !webkitVal;
+        let invert = webkitVal => !webkitVal;
         this._set("AutoFillPasswords", "signon.rememberSignons");
         this._set("OpenNewTabsInFront", "browser.tabs.loadInBackground", invert);
         this._set("WebKitJavaScriptCanOpenWindowsAutomatically",
@@ -343,19 +343,23 @@ Preferences.prototype = {
         // Allowed                          TRUE      1
         // Allowed, originating site only   --        3
         this._set("WebKitDisplayImagesKey", "permissions.default.image",
-                  function(webkitVal) webkitVal ? 1 : 2);
+                  webkitVal => webkitVal ? 1 : 2);
 
-#ifdef XP_WIN
-        // Cookie-accept policy.
-        // For the OS X version, see WebFoundationCookieBehavior.
-        // Setting                    Safari          Firefox
-        // Always Accept              0               0
-        // Accept from Originating    2               1
-        // Never Accept               1               2
-        this._set("WebKitCookieStorageAcceptPolicy",
-          "network.cookie.cookieBehavior",
-          function(webkitVal) webkitVal == 0 ? 0 : webkitVal == 1 ? 2 : 1);
-#endif
+        if (AppConstants.platform == "win") {
+          // Cookie-accept policy.
+          // For the OS X version, see WebFoundationCookieBehavior.
+          // Setting                    Safari          Firefox
+          // Always Accept              0               0
+          // Accept from Originating    2               1
+          // Never Accept               1               2
+          let firefoxVal = 0;
+          if (webkitVal != 0) {
+            firefoxVal = webkitVal == 1 ? 2 : 1;
+          }
+          this._set("WebKitCookieStorageAcceptPolicy",
+            "network.cookie.cookieBehavior",
+            firefoxVal);
+        }
 
         this._migrateFontSettings();
         yield this._migrateDownloadsFolder();
@@ -534,10 +538,10 @@ SearchStrings.prototype = {
         if (aDict.has("RecentSearchStrings")) {
           let recentSearchStrings = aDict.get("RecentSearchStrings");
           if (recentSearchStrings && recentSearchStrings.length > 0) {
-            let changes = [{op: "add",
+            let changes = recentSearchStrings.map((searchString) => (
+                           {op: "add",
                             fieldname: "searchbar-history",
-                            value: searchString}
-                           for (searchString of recentSearchStrings)];
+                            value: searchString}));
             FormHistory.update(changes);
           }
         }
@@ -545,7 +549,6 @@ SearchStrings.prototype = {
   }
 };
 
-#ifdef XP_MACOSX
 // On OS X, the cookie-accept policy preference is stored in a separate
 // property list.
 // For the Windows version, check Preferences.migrate.
@@ -567,15 +570,18 @@ WebFoundationCookieBehavior.prototype = {
           // Accept from Originating    current page    1
           // Never Accept               never           2
           let acceptCookies = aDict.get("NSHTTPAcceptCookies");
-          let cookieValue = acceptCookies == "never" ? 2 :
-                            acceptCookies == "current page" ? 1 : 0;
+          let cookieValue = 0;
+          if (acceptCookies == "never") {
+            cookieValue = 2;
+          } else if (acceptCookies == "current page") {
+            cookieValue = 1;
+          }
           Services.prefs.setIntPref("network.cookie.cookieBehavior",
                                     cookieValue);
         }
       }.bind(this), aCallback));
   }
 };
-#endif
 
 function SafariProfileMigrator() {
 }
@@ -583,12 +589,12 @@ function SafariProfileMigrator() {
 SafariProfileMigrator.prototype = Object.create(MigratorPrototype);
 
 SafariProfileMigrator.prototype.getResources = function SM_getResources() {
-  let profileDir =
-#ifdef XP_MACOSX
-    FileUtils.getDir("ULibDir", ["Safari"], false);
-#else
-    FileUtils.getDir("AppData", ["Apple Computer", "Safari"], false);
-#endif
+  let profileDir;
+  if (AppConstants.platform == "macosx") {
+    profileDir = FileUtils.getDir("ULibDir", ["Safari"], false);
+  } else {
+    profileDir = FileUtils.getDir("AppData", ["Apple Computer", "Safari"], false);
+  }
   if (!profileDir.exists())
     return null;
 
@@ -602,20 +608,20 @@ SafariProfileMigrator.prototype.getResources = function SM_getResources() {
 
   pushProfileFileResource("History.plist", History);
   pushProfileFileResource("Bookmarks.plist", Bookmarks);
-  
+
   // The Reading List feature was introduced at the same time in Windows and
   // Mac versions of Safari.  Not surprisingly, they are stored in the same
   // format in both versions.  Surpsingly, only on Windows there is a
-  // separate property list for it.  This isn't #ifdefed out on mac, because
+  // separate property list for it.  This code is used on mac too, because
   // Apple may fix this at some point.
   pushProfileFileResource("ReadingList.plist", Bookmarks);
 
-  let prefsDir = 
-#ifdef XP_MACOSX
-    FileUtils.getDir("UsrPrfs", [], false);
-#else
-    FileUtils.getDir("AppData", ["Apple Computer", "Preferences"], false);
-#endif
+  let prefsDir;
+  if (AppConstants.platform == "macosx") {
+    prefsDir = FileUtils.getDir("UsrPrfs", [], false);
+  } else {
+    prefsDir = FileUtils.getDir("AppData", ["Apple Computer", "Preferences"], false);
+  }
 
   let prefs = this.mainPreferencesPropertyList;
   if (prefs) {
@@ -623,13 +629,13 @@ SafariProfileMigrator.prototype.getResources = function SM_getResources() {
     resources.push(new SearchStrings(prefs));
   }
 
-#ifdef XP_MACOSX
-  // On OS X, the cookie-accept policy preference is stored in a separate
-  // property list.
-  let wfFile = FileUtils.getFile("UsrPrfs", ["com.apple.WebFoundation.plist"]);
-  if (wfFile.exists())
-    resources.push(new WebFoundationCookieBehavior(wfFile));
-#endif
+  if (AppConstants.platform == "macosx") {
+    // On OS X, the cookie-accept policy preference is stored in a separate
+    // property list.
+    let wfFile = FileUtils.getFile("UsrPrfs", ["com.apple.WebFoundation.plist"]);
+    if (wfFile.exists())
+      resources.push(new WebFoundationCookieBehavior(wfFile));
+  }
 
   return resources;
 };
@@ -637,12 +643,12 @@ SafariProfileMigrator.prototype.getResources = function SM_getResources() {
 Object.defineProperty(SafariProfileMigrator.prototype, "mainPreferencesPropertyList", {
   get: function get_mainPreferencesPropertyList() {
     if (this._mainPreferencesPropertyList === undefined) {
-      let file = 
-#ifdef XP_MACOSX
-        FileUtils.getDir("UsrPrfs", [], false);
-#else
-        FileUtils.getDir("AppData", ["Apple Computer", "Preferences"], false);
-#endif
+      let file;
+      if (AppConstants.platform == "macosx") {
+        file = FileUtils.getDir("UsrPrfs", [], false);
+      } else {
+        file = FileUtils.getDir("AppData", ["Apple Computer", "Preferences"], false);
+      }
       if (file.exists()) {
         file.append("com.apple.Safari.plist");
         if (file.exists()) {

@@ -9,7 +9,7 @@
 #include <cstring>
 
 #include "base/basictypes.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #ifdef NO_CHROMIUM_LOGGING
 #include <sstream>
@@ -45,8 +45,8 @@ public:
   void printf(const char* fmt, ...);
 
 private:
-  static PRLogModuleInfo* gChromiumPRLog;
-  static PRLogModuleInfo* GetLog();
+  static mozilla::LazyLogModule gChromiumPRLog;
+//  static PRLogModuleInfo* GetLog();
 
   LogSeverity mSeverity;
   const char* mFile;

@@ -2,13 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 var Social, SocialService;
 
-let manifests = [
+var manifests = [
   {
     name: "provider 1",
     origin: "https://example1.com",
@@ -28,52 +28,14 @@ const MANIFEST_PREFS = Services.prefs.getBranch("social.manifest.");
 // initApp below).
 const gProfD = do_get_profile();
 
-const XULAPPINFO_CONTRACTID = "@mozilla.org/xre/app-info;1";
-const XULAPPINFO_CID = Components.ID("{c763b610-9d49-455a-bbd2-ede71682a1ac}");
-
-function createAppInfo(id, name, version, platformVersion) {
-  gAppInfo = {
-    // nsIXULAppInfo
-    vendor: "Mozilla",
-    name: name,
-    ID: id,
-    version: version,
-    appBuildID: "2007010101",
-    platformVersion: platformVersion ? platformVersion : "1.0",
-    platformBuildID: "2007010101",
-
-    // nsIXULRuntime
-    inSafeMode: false,
-    logConsoleErrors: true,
-    OS: "XPCShell",
-    XPCOMABI: "noarch-spidermonkey",
-    invalidateCachesOnRestart: function invalidateCachesOnRestart() {
-      // Do nothing
-    },
-
-    // nsICrashReporter
-    annotations: {},
-
-    annotateCrashReport: function(key, data) {
-      this.annotations[key] = data;
-    },
-
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsIXULAppInfo,
-                                           Ci.nsIXULRuntime,
-                                           Ci.nsICrashReporter,
-                                           Ci.nsISupports])
-  };
-
-  var XULAppInfoFactory = {
-    createInstance: function (outer, iid) {
-      if (outer != null)
-        throw Components.results.NS_ERROR_NO_AGGREGATION;
-      return gAppInfo.QueryInterface(iid);
-    }
-  };
-  var registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-  registrar.registerFactory(XULAPPINFO_CID, "XULAppInfo",
-                            XULAPPINFO_CONTRACTID, XULAppInfoFactory);
+function createAppInfo(ID, name, version, platformVersion="1.0") {
+  let tmp = {};
+  Cu.import("resource://testing-common/AppInfo.jsm", tmp);
+  tmp.updateAppInfo({
+    ID, name, version, platformVersion,
+    crashReporter: true,
+  });
+  gAppInfo = tmp.getAppInfo();
 }
 
 function initApp() {

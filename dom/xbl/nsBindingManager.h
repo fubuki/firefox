@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,6 +17,7 @@
 #include "nsXBLBinding.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
+#include "mozilla/StyleSheetHandle.h"
 
 struct ElementDependentRuleProcessorData;
 class nsIXPConnectWrappedJS;
@@ -25,18 +27,12 @@ class nsIDocument;
 class nsIURI;
 class nsXBLDocumentInfo;
 class nsIStreamListener;
-class nsStyleSet;
 class nsXBLBinding;
-template<class E> class nsRefPtr;
-typedef nsTArray<nsRefPtr<nsXBLBinding> > nsBindingList;
+typedef nsTArray<RefPtr<nsXBLBinding> > nsBindingList;
 class nsIPrincipal;
 class nsITimer;
 
-namespace mozilla {
-class CSSStyleSheet;
-} // namespace mozilla
-
-class nsBindingManager MOZ_FINAL : public nsStubMutationObserver
+class nsBindingManager final : public nsStubMutationObserver
 {
   ~nsBindingManager();
 
@@ -63,15 +59,24 @@ public:
    * @param aContent the element that's being moved
    * @param aOldDocument the old document in which the
    *   content resided.
+   * @param aDestructorHandling whether or not to run the possible XBL
+   *        destructor.
    */
-  void RemovedFromDocument(nsIContent* aContent, nsIDocument* aOldDocument)
+
+ enum DestructorHandling {
+   eRunDtor,
+   eDoNotRunDtor
+ };
+  void RemovedFromDocument(nsIContent* aContent, nsIDocument* aOldDocument,
+                           DestructorHandling aDestructorHandling)
   {
     if (aContent->HasFlag(NODE_MAY_BE_IN_BINDING_MNGR)) {
-      RemovedFromDocumentInternal(aContent, aOldDocument);
+      RemovedFromDocumentInternal(aContent, aOldDocument, aDestructorHandling);
     }
   }
   void RemovedFromDocumentInternal(nsIContent* aContent,
-                                   nsIDocument* aOldDocument);
+                                   nsIDocument* aOldDocument,
+                                   DestructorHandling aDestructorHandling);
 
   nsIAtom* ResolveTag(nsIContent* aContent, int32_t* aNameSpaceID);
 
@@ -121,7 +126,7 @@ public:
   nsresult MediumFeaturesChanged(nsPresContext* aPresContext,
                                  bool* aRulesChanged);
 
-  void AppendAllSheets(nsTArray<mozilla::CSSStyleSheet*>& aArray);
+  void AppendAllSheets(nsTArray<mozilla::StyleSheetHandle>& aArray);
 
   void Traverse(nsIContent *aContent,
                             nsCycleCollectionTraversalCallback &cb);
@@ -199,7 +204,7 @@ protected:
 
   // Our posted event to process the attached queue, if any
   friend class nsRunnableMethod<nsBindingManager>;
-  nsRefPtr< nsRunnableMethod<nsBindingManager> > mProcessAttachedQueueEvent;
+  RefPtr< nsRunnableMethod<nsBindingManager> > mProcessAttachedQueueEvent;
 
   // Our document.  This is a weak ref; the document owns us
   nsIDocument* mDocument;

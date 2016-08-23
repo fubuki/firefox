@@ -16,8 +16,6 @@ class nsBlockReflowState;
 struct nsHTMLReflowState;
 class nsLineBox;
 class nsPresContext;
-class nsLineLayout;
-struct nsBlockHorizontalAlign;
 
 /**
  * An encapsulation of the state and algorithm for reflowing block frames.
@@ -28,15 +26,15 @@ public:
                        const nsHTMLReflowState& aParentRS);
   ~nsBlockReflowContext() { }
 
-  void ReflowBlock(const nsRect&       aSpace,
-                   bool                aApplyBStartMargin,
-                   nsCollapsingMargin& aPrevMargin,
-                   nscoord             aClearance,
-                   bool                aIsAdjacentWithBStart,
-                   nsLineBox*          aLine,
-                   nsHTMLReflowState&  aReflowState,
-                   nsReflowStatus&     aReflowStatus,
-                   nsBlockReflowState& aState);
+  void ReflowBlock(const mozilla::LogicalRect& aSpace,
+                   bool                        aApplyBStartMargin,
+                   nsCollapsingMargin&         aPrevMargin,
+                   nscoord                     aClearance,
+                   bool                        aIsAdjacentWithBStart,
+                   nsLineBox*                  aLine,
+                   nsHTMLReflowState&          aReflowState,
+                   nsReflowStatus&             aReflowStatus,
+                   nsBlockReflowState&         aState);
 
   bool PlaceBlock(const nsHTMLReflowState& aReflowState,
                   bool                     aForceFit,
@@ -85,7 +83,8 @@ protected:
   nsIFrame* mFrame;
   mozilla::LogicalRect mSpace;
 
-  nscoord mICoord, mBCoord, mContainerWidth;
+  nscoord mICoord, mBCoord;
+  nsSize mContainerSize;
   mozilla::WritingMode mWritingMode;
   nsHTMLReflowMetrics mMetrics;
   nsCollapsingMargin mBStartMargin;

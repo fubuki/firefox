@@ -7,7 +7,7 @@
 
 #include "base/message_pump.h"
 #include "base/time.h"
-#include "nsAutoPtr.h"
+#include "mozilla/UniquePtr.h"
 
 // Declare structs we need from libevent.h rather than including it
 struct event_base;
@@ -133,10 +133,10 @@ class MessagePumpLibevent : public MessagePump {
 
 
   // MessagePump methods:
-  virtual void Run(Delegate* delegate);
-  virtual void Quit();
-  virtual void ScheduleWork();
-  virtual void ScheduleDelayedWork(const TimeTicks& delayed_work_time);
+  virtual void Run(Delegate* delegate) override;
+  virtual void Quit() override;
+  virtual void ScheduleWork() override;
+  virtual void ScheduleDelayedWork(const TimeTicks& delayed_work_time) override;
 
  protected:
 
@@ -192,7 +192,7 @@ public:
     mBufferSize(aBufferSize),
     mTerminator(aTerminator)
   {
-    mReceiveBuffer = new char[mBufferSize];
+    mReceiveBuffer = mozilla::MakeUnique<char[]>(mBufferSize);
   }
 
   ~LineWatcher() {}
@@ -204,11 +204,11 @@ protected:
    */
   virtual void OnError() {}
   virtual void OnLineRead(int aFd, nsDependentCSubstring& aMessage) = 0;
-  virtual void OnFileCanWriteWithoutBlocking(int /* aFd */) {}
+  virtual void OnFileCanWriteWithoutBlocking(int /* aFd */) override {}
 private:
-  virtual void OnFileCanReadWithoutBlocking(int aFd) MOZ_FINAL;
+  virtual void OnFileCanReadWithoutBlocking(int aFd) final override;
 
-  nsAutoPtr<char> mReceiveBuffer;
+  mozilla::UniquePtr<char[]> mReceiveBuffer;
   int mReceivedIndex;
   int mBufferSize;
   char mTerminator;

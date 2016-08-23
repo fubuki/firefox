@@ -25,7 +25,7 @@ NS_IMPL_RELEASE_INHERITED(TVManager, DOMEventTargetHelper)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TVManager)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-TVManager::TVManager(nsPIDOMWindow* aWindow)
+TVManager::TVManager(nsPIDOMWindowInner* aWindow)
   : DOMEventTargetHelper(aWindow)
   , mIsReady(false)
 {
@@ -36,9 +36,9 @@ TVManager::~TVManager()
 }
 
 /* static */ already_AddRefed<TVManager>
-TVManager::Create(nsPIDOMWindow* aWindow)
+TVManager::Create(nsPIDOMWindowInner* aWindow)
 {
-  nsRefPtr<TVManager> manager = new TVManager(aWindow);
+  RefPtr<TVManager> manager = new TVManager(aWindow);
   return (manager->Init()) ? manager.forget() : nullptr;
 }
 
@@ -56,13 +56,13 @@ TVManager::Init()
 }
 
 /* virtual */ JSObject*
-TVManager::WrapObject(JSContext* aCx)
+TVManager::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return TVManagerBinding::Wrap(aCx, this);
+  return TVManagerBinding::Wrap(aCx, this, aGivenProto);
 }
 
 nsresult
-TVManager::SetTuners(const nsTArray<nsRefPtr<TVTuner>>& aTuners)
+TVManager::SetTuners(const nsTArray<RefPtr<TVTuner>>& aTuners)
 {
   // Should be called only when TV Manager hasn't been ready yet.
   if (mIsReady) {
@@ -104,7 +104,7 @@ TVManager::GetTuners(ErrorResult& aRv)
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetOwner());
   MOZ_ASSERT(global);
 
-  nsRefPtr<Promise> promise = Promise::Create(global, aRv);
+  RefPtr<Promise> promise = Promise::Create(global, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }

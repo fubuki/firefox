@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,9 +24,11 @@ class FileInfo
   ThreadSafeAutoRefCnt mDBRefCnt;
   ThreadSafeAutoRefCnt mSliceRefCnt;
 
-  nsRefPtr<FileManager> mFileManager;
+  RefPtr<FileManager> mFileManager;
 
 public:
+  class CustomCleanupCallback;
+
   static
   FileInfo* Create(FileManager* aFileManager, int64_t aId);
 
@@ -39,9 +41,9 @@ public:
   }
 
   void
-  Release()
+  Release(CustomCleanupCallback* aCustomCleanupCallback = nullptr)
   {
-    UpdateReferences(mRefCnt, -1);
+    UpdateReferences(mRefCnt, -1, aCustomCleanupCallback);
   }
 
   void
@@ -74,13 +76,25 @@ protected:
 private:
   void
   UpdateReferences(ThreadSafeAutoRefCnt& aRefCount,
-                   int32_t aDelta);
+                   int32_t aDelta,
+                   CustomCleanupCallback* aCustomCleanupCallback = nullptr);
 
   bool
   LockedClearDBRefs();
 
   void
   Cleanup();
+};
+
+class NS_NO_VTABLE FileInfo::CustomCleanupCallback
+{
+public:
+  virtual nsresult
+  Cleanup(FileManager* aFileManager, int64_t aId) = 0;
+
+protected:
+  CustomCleanupCallback()
+  { }
 };
 
 } // namespace indexedDB

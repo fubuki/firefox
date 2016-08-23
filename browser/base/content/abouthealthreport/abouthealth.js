@@ -4,22 +4,21 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 const prefs = new Preferences("datareporting.healthreport.");
 
-let healthReportWrapper = {
+const PREF_UNIFIED = "toolkit.telemetry.unified";
+const PREF_REPORTING_URL = "datareporting.healthreport.about.reportUrl";
+
+var healthReportWrapper = {
   init: function () {
     let iframe = document.getElementById("remote-report");
     iframe.addEventListener("load", healthReportWrapper.initRemotePage, false);
     iframe.src = this._getReportURI().spec;
-    iframe.onload = () => {
-      MozSelfSupport.getHealthReportPayload().then(this.updatePayload,
-                                                   this.handleInitFailure);
-    };
     prefs.observe("uploadEnabled", this.updatePrefState, healthReportWrapper);
   },
 
@@ -28,7 +27,7 @@ let healthReportWrapper = {
   },
 
   _getReportURI: function () {
-    let url = Services.urlFormatter.formatURLPref("datareporting.healthreport.about.reportUrl");
+    let url = Services.urlFormatter.formatURLPref(PREF_REPORTING_URL);
     return Services.io.newURI(url, null, null);
   },
 
@@ -49,18 +48,54 @@ let healthReportWrapper = {
     }
   },
 
-  refreshPayload: function () {
-    MozSelfSupport.getHealthReportPayload().then(this.updatePayload,
-                                                 this.handlePayloadFailure);
+  sendTelemetryPingList: function () {
+    console.log("AboutHealthReport: Collecting Telemetry ping list.");
+    MozSelfSupport.getTelemetryPingList().then((list) => {
+      console.log("AboutHealthReport: Sending Telemetry ping list.");
+      this.injectData("telemetry-ping-list", list);
+    }).catch((ex) => {
+      console.log("AboutHealthReport: Collecting ping list failed: " + ex);
+    });
   },
 
-  updatePayload: function (payload) {
-    healthReportWrapper.injectData("payload", JSON.stringify(payload));
+  sendTelemetryPingData: function (pingId) {
+    console.log("AboutHealthReport: Collecting Telemetry ping data.");
+    MozSelfSupport.getTelemetryPing(pingId).then((ping) => {
+      console.log("AboutHealthReport: Sending Telemetry ping data.");
+      this.injectData("telemetry-ping-data", {
+        id: pingId,
+        pingData: ping,
+      });
+    }).catch((ex) => {
+      console.log("AboutHealthReport: Loading ping data failed: " + ex);
+      this.injectData("telemetry-ping-data", {
+        id: pingId,
+        error: "error-generic",
+      });
+    });
+  },
+
+  sendCurrentEnvironment: function () {
+    console.log("AboutHealthReport: Sending Telemetry environment data.");
+    MozSelfSupport.getCurrentTelemetryEnvironment().then((environment) => {
+      this.injectData("telemetry-current-environment-data", environment);
+    }).catch((ex) => {
+      console.log("AboutHealthReport: Collecting current environment data failed: " + ex);
+    });
+  },
+
+  sendCurrentPingData: function () {
+    console.log("AboutHealthReport: Sending current Telemetry ping data.");
+    MozSelfSupport.getCurrentTelemetrySubsessionPing().then((ping) => {
+      this.injectData("telemetry-current-ping-data", ping);
+    }).catch((ex) => {
+      console.log("AboutHealthReport: Collecting current ping data failed: " + ex);
+    });
   },
 
   injectData: function (type, content) {
     let report = this._getReportURI();
-    
+
     // file URIs can't be used for targetOrigin, so we use "*" for this special case
     // in all other cases, pass in the URL to the report so we properly restrict the message dispatch
     let reportUrl = report.scheme == "file" ? "*" : report.spec;
@@ -75,6 +110,15 @@ let healthReportWrapper = {
   },
 
   handleRemoteCommand: function (evt) {
+    // Do an origin check to harden against the frame content being loaded from unexpected locations.
+    let allowedPrincipal = Services.scriptSecurityManager.getCodebasePrincipal(this._getReportURI());
+    let targetPrincipal = evt.target.nodePrincipal;
+    if (!allowedPrincipal.equals(targetPrincipal)) {
+      Cu.reportError(`Origin check failed for message "${evt.detail.command}": ` +
+                     `target origin is "${targetPrincipal.origin}", expected "${allowedPrincipal.origin}"`);
+      return;
+    }
+
     switch (evt.detail.command) {
       case "DisableDataSubmission":
         this.setDataSubmission(false);
@@ -85,8 +129,17 @@ let healthReportWrapper = {
       case "RequestCurrentPrefs":
         this.updatePrefState();
         break;
-      case "RequestCurrentPayload":
-        this.refreshPayload();
+      case "RequestTelemetryPingList":
+        this.sendTelemetryPingList();
+        break;
+      case "RequestTelemetryPingData":
+        this.sendTelemetryPingData(evt.detail.id);
+        break;
+      case "RequestCurrentEnvironment":
+        this.sendCurrentEnvironment();
+        break;
+      case "RequestCurrentPingData":
+        this.sendCurrentPingData();
         break;
       default:
         Cu.reportError("Unexpected remote command received: " + evt.detail.command + ". Ignoring command.");

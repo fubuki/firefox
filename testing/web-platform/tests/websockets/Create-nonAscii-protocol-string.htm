@@ -4,7 +4,7 @@
     <title>W3C WebSocket API - Create WebSocket - non ascii protocol string</title>
     <script type="text/javascript" src="/resources/testharness.js"></script>
     <script type="text/javascript" src="/resources/testharnessreport.js"></script>
-    <script type="text/javascript" src="websocket.js?pipe=sub"></script>
+    <script type="text/javascript" src="websocket.sub.js"></script>
 </head>
 <body>
     <div id="log"></div>
@@ -14,8 +14,8 @@
                 var nonAsciiProtocol = "\u0080echo";
                 var wsocket;
                 assert_throws("SYNTAX_ERR", function () { wsocket = CreateWebSocketNonAsciiProtocol(nonAsciiProtocol) });
-            }, "W3C WebSocket API - Create WebSocket - Pass a valid URL and a protocol string with non-ascii values - SYNTAX_ERR is thrown")            
-        }         
+            }, "W3C WebSocket API - Create WebSocket - Pass a valid URL and a protocol string with non-ascii values - SYNTAX_ERR is thrown")
+        }
     </script>
 </body>
 </html>

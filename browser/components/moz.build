@@ -6,12 +6,14 @@
 
 DIRS += [
     'about',
+    'contextualidentity',
     'customizableui',
     'dirprovider',
     'downloads',
+    'extensions',
     'feeds',
-    'loop',
     'migration',
+    'newtab',
     'places',
     'preferences',
     'privatebrowsing',
@@ -19,8 +21,7 @@ DIRS += [
     'sessionstore',
     'shell',
     'selfsupport',
-    'sidebar',
-    'tabview',
+    'syncedtabs',
     'uitour',
     'translation',
 ]
@@ -36,6 +37,9 @@ XPIDL_MODULE = 'browsercompsbase'
 
 EXTRA_PP_COMPONENTS += [
     'BrowserComponents.manifest',
+]
+
+EXTRA_COMPONENTS += [
     'nsBrowserContentHandler.js',
     'nsBrowserGlue.js',
 ]
@@ -45,8 +49,18 @@ EXTRA_JS_MODULES += [
 ]
 
 BROWSER_CHROME_MANIFESTS += [
-    'test/browser.ini'
+    'tests/browser/browser.ini'
+]
+
+XPCSHELL_TESTS_MANIFESTS += [
+    'tests/unit/xpcshell.ini'
 ]
 
 if CONFIG['MOZ_SAFE_BROWSING']:
     BROWSER_CHROME_MANIFESTS += ['safebrowsing/content/test/browser.ini']
+
+with Files('safebrowsing/*'):
+    BUG_COMPONENT = ('Toolkit', 'Phishing Protection')
+
+with Files('controlcenter/**'):
+    BUG_COMPONENT = ('Firefox', 'General')

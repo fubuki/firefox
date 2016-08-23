@@ -71,7 +71,7 @@ class RtspTrackBuffer;
 class RtspMediaResource : public BaseMediaResource
 {
 public:
-  RtspMediaResource(MediaDecoder* aDecoder, nsIChannel* aChannel, nsIURI* aURI,
+  RtspMediaResource(MediaResourceCallback* aCallback, nsIChannel* aChannel, nsIURI* aURI,
                     const nsACString& aContentType);
   virtual ~RtspMediaResource();
 
@@ -79,7 +79,7 @@ public:
 
   // Get the RtspMediaResource pointer if this MediaResource is a
   // RtspMediaResource. For calling Rtsp specific functions.
-  virtual RtspMediaResource* GetRtspPointer() MOZ_OVERRIDE MOZ_FINAL {
+  RtspMediaResource* GetRtspPointer() override final {
     return this;
   }
 
@@ -92,8 +92,10 @@ public:
     return mMediaStreamController;
   }
 
-  virtual bool IsRealTime() MOZ_OVERRIDE {
-    return mRealTime;
+  // Even it is a live stream, as long as it provides valid timestamps,
+  // we tell state machine it's not a live stream.
+  bool IsRealTime() override {
+    return !mHasTimestamp;
   }
 
   // Called by RtspOmxReader, dispatch a runnable to notify mDecoder.
@@ -122,82 +124,70 @@ public:
   void DisablePlayoutDelay();
 
   // dummy
-  virtual nsresult ReadAt(int64_t aOffset, char* aBuffer,
-                          uint32_t aCount, uint32_t* aBytes)  MOZ_OVERRIDE{
+  nsresult ReadAt(int64_t aOffset, char* aBuffer,
+                  uint32_t aCount, uint32_t* aBytes)  override{
     return NS_ERROR_FAILURE;
   }
   // dummy
-  virtual void     SetReadMode(MediaCacheStream::ReadMode aMode) MOZ_OVERRIDE {}
+  void     SetReadMode(MediaCacheStream::ReadMode aMode) override {}
   // dummy
-  virtual void     SetPlaybackRate(uint32_t aBytesPerSecond) MOZ_OVERRIDE {}
+  void     SetPlaybackRate(uint32_t aBytesPerSecond) override {}
   // dummy
-  virtual nsresult Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
-  MOZ_OVERRIDE {
-    return NS_OK;
-  }
-  // dummy
-  virtual nsresult Seek(int32_t aWhence, int64_t aOffset) MOZ_OVERRIDE {
-    return NS_OK;
-  }
-  // dummy
-  virtual int64_t  Tell() MOZ_OVERRIDE { return 0; }
+  int64_t  Tell() override { return 0; }
 
   // Any thread
-  virtual void    Pin() MOZ_OVERRIDE {}
-  virtual void    Unpin() MOZ_OVERRIDE {}
+  void    Pin() override {}
+  void    Unpin() override {}
 
-  virtual bool    IsSuspendedByCache() MOZ_OVERRIDE { return mIsSuspend; }
+  bool    IsSuspendedByCache() override { return mIsSuspend; }
 
-  virtual bool    IsSuspended() MOZ_OVERRIDE { return false; }
-  virtual bool    IsTransportSeekable() MOZ_OVERRIDE { return true; }
+  bool    IsSuspended() override { return false; }
+  bool    IsTransportSeekable() override { return true; }
   // dummy
-  virtual double  GetDownloadRate(bool* aIsReliable) MOZ_OVERRIDE { *aIsReliable = false; return 0; }
+  double  GetDownloadRate(bool* aIsReliable) override { *aIsReliable = false; return 0; }
 
-  virtual int64_t GetLength() MOZ_OVERRIDE {
-    if (mRealTime) {
+  int64_t GetLength() override {
+    if (mIsLiveStream) {
       return -1;
     }
     return 0;
   }
 
   // dummy
-  virtual int64_t GetNextCachedData(int64_t aOffset) MOZ_OVERRIDE { return 0; }
+  int64_t GetNextCachedData(int64_t aOffset) override { return 0; }
   // dummy
-  virtual int64_t GetCachedDataEnd(int64_t aOffset) MOZ_OVERRIDE { return 0; }
+  int64_t GetCachedDataEnd(int64_t aOffset) override { return 0; }
   // dummy
-  virtual bool    IsDataCachedToEndOfResource(int64_t aOffset) MOZ_OVERRIDE {
+  bool    IsDataCachedToEndOfResource(int64_t aOffset) override {
     return false;
   }
   // dummy
-  nsresult GetCachedRanges(nsTArray<MediaByteRange>& aRanges) MOZ_OVERRIDE {
+  nsresult GetCachedRanges(MediaByteRangeSet& aRanges) override {
     return NS_ERROR_FAILURE;
   }
 
   // The following methods can be called on main thread only.
 
-  virtual nsresult Open(nsIStreamListener** aStreamListener) MOZ_OVERRIDE;
-  virtual nsresult Close() MOZ_OVERRIDE;
-  virtual void     Suspend(bool aCloseImmediately) MOZ_OVERRIDE;
-  virtual void     Resume() MOZ_OVERRIDE;
-  virtual already_AddRefed<nsIPrincipal> GetCurrentPrincipal() MOZ_OVERRIDE;
-  virtual bool     CanClone() MOZ_OVERRIDE {
+  nsresult Open(nsIStreamListener** aStreamListener) override;
+  nsresult Close() override;
+  void     Suspend(bool aCloseImmediately) override;
+  void     Resume() override;
+  already_AddRefed<nsIPrincipal> GetCurrentPrincipal() override;
+  bool     CanClone() override {
     return false;
   }
-  virtual already_AddRefed<MediaResource> CloneData(MediaDecoder* aDecoder)
-  MOZ_OVERRIDE {
+  already_AddRefed<MediaResource> CloneData(MediaResourceCallback*) override {
     return nullptr;
   }
   // dummy
-  virtual nsresult ReadFromCache(char* aBuffer, int64_t aOffset,
-                                 uint32_t aCount) MOZ_OVERRIDE {
+  nsresult ReadFromCache(char* aBuffer, int64_t aOffset,
+                                 uint32_t aCount) override {
     return NS_ERROR_FAILURE;
   }
 
-  virtual size_t SizeOfExcludingThis(
-                      MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override;
 
-  virtual size_t SizeOfIncludingThis(
-                      MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE {
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override {
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
 
@@ -206,8 +196,8 @@ public:
   // It holds RtspMediaResource reference to notify the connection status and
   // data arrival. The Revoke function releases the reference when
   // RtspMediaResource::OnDisconnected is called.
-  class Listener MOZ_FINAL : public nsIInterfaceRequestor,
-                             public nsIStreamingProtocolListener
+  class Listener final : public nsIInterfaceRequestor,
+                         public nsIStreamingProtocolListener
   {
     ~Listener() {}
   public:
@@ -220,7 +210,7 @@ public:
     void Revoke();
 
   private:
-    nsRefPtr<RtspMediaResource> mResource;
+    RefPtr<RtspMediaResource> mResource;
   };
   friend class Listener;
 
@@ -233,7 +223,7 @@ protected:
   nsresult OnConnected(uint8_t aIndex, nsIStreamingProtocolMetaData* aMeta);
   nsresult OnDisconnected(uint8_t aIndex, nsresult aReason);
 
-  nsRefPtr<Listener> mListener;
+  RefPtr<Listener> mListener;
 
 private:
   // Notify mDecoder the rtsp stream is suspend. Main thread only.
@@ -247,8 +237,10 @@ private:
   // A flag that indicates the |RtspMediaResource::OnConnected| has already been
   // called.
   bool mIsConnected;
-  // live stream
-  bool mRealTime;
+  // Whether it's a live stream.
+  bool mIsLiveStream;
+  // Whether it provides timestamps.
+  bool mHasTimestamp;
   // Indicate the rtsp controller is suspended or not. Main thread only.
   bool mIsSuspend;
 };

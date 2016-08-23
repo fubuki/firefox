@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,7 +26,7 @@
 #include "nsDeque.h"
 #include "nsIUnicodeDecoder.h"
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 
@@ -33,20 +34,17 @@ class ErrorResult;
 
 namespace dom {
 
-class AsyncVerifyRedirectCallbackFwr;
 struct EventSourceInit;
 
-class EventSource MOZ_FINAL : public DOMEventTargetHelper
-                            , public nsIObserver
-                            , public nsIStreamListener
-                            , public nsIChannelEventSink
-                            , public nsIInterfaceRequestor
-                            , public nsSupportsWeakReference
+class EventSource final : public DOMEventTargetHelper
+                        , public nsIObserver
+                        , public nsIStreamListener
+                        , public nsIChannelEventSink
+                        , public nsIInterfaceRequestor
+                        , public nsSupportsWeakReference
 {
-friend class AsyncVerifyRedirectCallbackFwr;
-
 public:
-  explicit EventSource(nsPIDOMWindow* aOwnerWindow);
+  explicit EventSource(nsPIDOMWindowInner* aOwnerWindow);
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS_INHERITED(
     EventSource, DOMEventTargetHelper)
@@ -58,10 +56,10 @@ public:
   NS_DECL_NSIINTERFACEREQUESTOR
 
   // nsWrapperCache
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // WebIDL
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const
   {
     return GetOwner();
@@ -98,7 +96,7 @@ public:
   // Determine if preferences allow EventSource
   static bool PrefEnabled(JSContext* aCx = nullptr, JSObject* aGlobal = nullptr);
 
-  virtual void DisconnectFromOwner() MOZ_OVERRIDE;
+  virtual void DisconnectFromOwner() override;
 
 protected:
   virtual ~EventSource();
@@ -109,9 +107,8 @@ protected:
 
   nsresult GetBaseURI(nsIURI **aBaseURI);
 
-  net::ReferrerPolicy GetReferrerPolicy();
-
-  nsresult SetupHttpChannel();
+  void SetupHttpChannel();
+  nsresult SetupReferrerPolicy();
   nsresult InitChannelAndRequestEventSource();
   nsresult ResetConnection();
   nsresult DispatchFailConnection();
@@ -144,7 +141,6 @@ protected:
   nsresult ResetEvent();
   nsresult DispatchCurrentMessageEvent();
   nsresult ParseCharacter(char16_t aChr);
-  bool CheckCanRequestSrc(nsIURI* aSrc = nullptr);  // if null, it tests mSrc
   nsresult CheckHealthOfRequestCallback(nsIRequest *aRequestCallback);
   nsresult OnRedirectVerifyCallback(nsresult result);
 
@@ -232,13 +228,6 @@ protected:
 
   nsCOMPtr<nsILoadGroup> mLoadGroup;
 
-  /**
-   * The notification callbacks the channel had initially.
-   * We want to forward things here as needed.
-   */
-  nsCOMPtr<nsIInterfaceRequestor> mNotificationCallbacks;
-  nsCOMPtr<nsIChannelEventSink>   mChannelEventSink;
-
   nsCOMPtr<nsIHttpChannel> mHttpChannel;
 
   nsCOMPtr<nsITimer> mTimer;
@@ -249,18 +238,16 @@ protected:
   nsCOMPtr<nsIPrincipal> mPrincipal;
   nsString mOrigin;
 
-  uint32_t mRedirectFlags;
-  nsCOMPtr<nsIAsyncVerifyRedirectCallback> mRedirectCallback;
-  nsCOMPtr<nsIChannel> mNewRedirectChannel;
-
   // Event Source owner information:
   // - the script file name
-  // - source code line number where the Event Source object was constructed.
+  // - source code line number and column number where the Event Source object
+  //   was constructed.
   // - the ID of the inner window where the script lives. Note that this may not
   //   be the same as the Event Source owner window.
   // These attributes are used for error reporting.
   nsString mScriptFile;
   uint32_t mScriptLine;
+  uint32_t mScriptColumn;
   uint64_t mInnerWindowID;
 
 private:

@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,6 +9,7 @@
 #include <errno.h>
 #include <cutils/properties.h>
 #include "prinit.h"
+#include "mozilla/Snprintf.h"
 #include "js/CharacterEncoding.h"
 
 using namespace mozilla::dom;
@@ -143,7 +146,7 @@ convertToBytes(char* buf, uint32_t maxlen, const char* str)
       break;
     default:
       buf[len++] = *pos++;
-	  break;
+      break;
     }
   }
   return len;
@@ -366,10 +369,10 @@ public:
     char command[COMMAND_SIZE];
     if (!strcmp(iface, "p2p0")) {
       // Commands for p2p0 interface don't need prefix
-      snprintf(command, COMMAND_SIZE, "%s", cmd);
+      snprintf_literal(command, "%s", cmd);
     }
     else {
-      snprintf(command, COMMAND_SIZE, "IFNAME=%s %s", iface, cmd);
+      snprintf_literal(command, "IFNAME=%s %s", iface, cmd);
     }
     USE_DLFUNC(wifi_command)
     return wifi_command(command, buf, len);
@@ -384,13 +387,13 @@ WpaSupplicant::WpaSupplicant()
   mSdkVersion = strtol(propVersion, nullptr, 10);
 
   if (mSdkVersion < 16) {
-    mImpl = new ICSWpaSupplicantImpl();
+    mImpl = MakeUnique<ICSWpaSupplicantImpl>();
   } else if (mSdkVersion < 19) {
-    mImpl = new JBWpaSupplicantImpl();
+    mImpl = MakeUnique<JBWpaSupplicantImpl>();
   } else {
-    mImpl = new KKWpaSupplicantImpl();
+    mImpl = MakeUnique<KKWpaSupplicantImpl>();
   }
-  mWifiHotspotUtils = new WifiHotspotUtils();
+  mWifiHotspotUtils = MakeUnique<WifiHotspotUtils>();
 };
 
 void WpaSupplicant::WaitForEvent(nsAString& aEvent, const nsCString& aInterface)

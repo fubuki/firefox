@@ -108,8 +108,6 @@ SipccSdpAttributeList::LoadSimpleStrings(sdp_t* sdp, uint16_t level,
                    errorHolder);
   LoadSimpleString(sdp, level, SDP_ATTR_IDENTITY,
                    SdpAttribute::kIdentityAttribute, errorHolder);
-  LoadSimpleString(sdp, level, SDP_ATTR_MSID_SEMANTIC,
-                   SdpAttribute::kMsidSemanticAttribute, errorHolder);
 }
 
 void
@@ -361,6 +359,8 @@ SipccSdpAttributeList::GetCodecType(rtp_ptype type)
       return SdpRtpmapAttributeList::kOpus;
     case RTP_VP8:
       return SdpRtpmapAttributeList::kVP8;
+    case RTP_VP9:
+      return SdpRtpmapAttributeList::kVP9;
     case RTP_NONE:
     // Happens when sipcc doesn't know how to translate to the enum
     case RTP_CELP:
@@ -493,6 +493,74 @@ SipccSdpAttributeList::LoadSsrc(sdp_t* sdp, uint16_t level)
 }
 
 bool
+SipccSdpAttributeList::LoadImageattr(sdp_t* sdp,
+                                     uint16_t level,
+                                     SdpErrorHolder& errorHolder)
+{
+  UniquePtr<SdpImageattrAttributeList> imageattrs(
+      new SdpImageattrAttributeList);
+
+  for (uint16_t i = 1; i < UINT16_MAX; ++i) {
+    const char* imageattrRaw = sdp_attr_get_simple_string(sdp,
+                                                          SDP_ATTR_IMAGEATTR,
+                                                          level,
+                                                          0,
+                                                          i);
+    if (!imageattrRaw) {
+      break;
+    }
+
+    std::string error;
+    size_t errorPos;
+    if (!imageattrs->PushEntry(imageattrRaw, &error, &errorPos)) {
+      std::ostringstream fullError;
+      fullError << error << " at column " << errorPos;
+      errorHolder.AddParseError(
+        sdp_attr_line_number(sdp, SDP_ATTR_IMAGEATTR, level, 0, i),
+        fullError.str());
+      return false;
+    }
+  }
+
+  if (!imageattrs->mImageattrs.empty()) {
+    SetAttribute(imageattrs.release());
+  }
+  return true;
+}
+
+bool
+SipccSdpAttributeList::LoadSimulcast(sdp_t* sdp,
+                                     uint16_t level,
+                                     SdpErrorHolder& errorHolder)
+{
+  const char* simulcastRaw = sdp_attr_get_simple_string(sdp,
+                                                        SDP_ATTR_SIMULCAST,
+                                                        level,
+                                                        0,
+                                                        1);
+  if (!simulcastRaw) {
+    return true;
+  }
+
+  UniquePtr<SdpSimulcastAttribute> simulcast(
+      new SdpSimulcastAttribute);
+
+  std::istringstream is(simulcastRaw);
+  std::string error;
+  if (!simulcast->Parse(is, &error)) {
+    std::ostringstream fullError;
+    fullError << error << " at column " << is.tellg();
+    errorHolder.AddParseError(
+      sdp_attr_line_number(sdp, SDP_ATTR_SIMULCAST, level, 0, 1),
+      fullError.str());
+    return false;
+  }
+
+  SetAttribute(simulcast.release());
+  return true;
+}
+
+bool
 SipccSdpAttributeList::LoadGroups(sdp_t* sdp, uint16_t level,
                                   SdpErrorHolder& errorHolder)
 {
@@ -547,6 +615,38 @@ SipccSdpAttributeList::LoadGroups(sdp_t* sdp, uint16_t level,
   return true;
 }
 
+bool
+SipccSdpAttributeList::LoadMsidSemantics(sdp_t* sdp, uint16_t level,
+                                         SdpErrorHolder& errorHolder)
+{
+  auto msidSemantics = MakeUnique<SdpMsidSemanticAttributeList>();
+
+  for (uint16_t i = 1; i < UINT16_MAX; ++i) {
+    sdp_attr_t* attr = sdp_find_attr(sdp, level, 0, SDP_ATTR_MSID_SEMANTIC, i);
+
+    if (!attr) {
+      break;
+    }
+
+    sdp_msid_semantic_t* msid_semantic = &(attr->attr.msid_semantic);
+    std::vector<std::string> msids;
+    for (size_t i = 0; i < SDP_MAX_MEDIA_STREAMS; ++i) {
+      if (!msid_semantic->msids[i]) {
+        break;
+      }
+
+      msids.push_back(msid_semantic->msids[i]);
+    }
+
+    msidSemantics->PushEntry(msid_semantic->semantic, msids);
+  }
+
+  if (!msidSemantics->mMsidSemantics.empty()) {
+    SetAttribute(msidSemantics.release());
+  }
+  return true;
+}
+
 void
 SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
 {
@@ -566,21 +666,6 @@ SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
     // payload_num is the number in the fmtp attribute, verbatim
     osPayloadType << fmtp->payload_num;
 
-    // Get the serialized form of the parameters
-    flex_string fs;
-    flex_string_init(&fs);
-
-    // Very lame, but we need direct access so we can get the serialized form
-    sdp_result_e sdpres = sdp_build_attr_fmtp_params(sdp, fmtp, &fs);
-
-    if (sdpres != SDP_SUCCESS) {
-      flex_string_free(&fs);
-      continue;
-    }
-
-    std::string paramsString(fs.buffer);
-    flex_string_free(&fs);
-
     // Get parsed form of parameters, if supported
     UniquePtr<SdpFmtpAttributeList::Parameters> parameters;
 
@@ -599,14 +684,7 @@ SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
             !!(fmtp->level_asymmetry_allowed);
 
         h264Parameters->packetization_mode = fmtp->packetization_mode;
-// Copied from VcmSIPCCBinding
-#ifdef _WIN32
-        sscanf_s(fmtp->profile_level_id, "%x",
-                 &h264Parameters->profile_level_id, sizeof(unsigned*));
-#else
-        sscanf(fmtp->profile_level_id, "%xu",
-               &h264Parameters->profile_level_id);
-#endif
+        sscanf(fmtp->profile_level_id, "%x", &h264Parameters->profile_level_id);
         h264Parameters->max_mbps = fmtp->max_mbps;
         h264Parameters->max_fs = fmtp->max_fs;
         h264Parameters->max_cpb = fmtp->max_cpb;
@@ -615,20 +693,38 @@ SipccSdpAttributeList::LoadFmtp(sdp_t* sdp, uint16_t level)
 
         parameters.reset(h264Parameters);
       } break;
+      case RTP_VP9: {
+        SdpFmtpAttributeList::VP8Parameters* vp9Parameters(
+            new SdpFmtpAttributeList::VP8Parameters(
+              SdpRtpmapAttributeList::kVP9));
+
+        vp9Parameters->max_fs = fmtp->max_fs;
+        vp9Parameters->max_fr = fmtp->max_fr;
+
+        parameters.reset(vp9Parameters);
+      } break;
       case RTP_VP8: {
         SdpFmtpAttributeList::VP8Parameters* vp8Parameters(
-            new SdpFmtpAttributeList::VP8Parameters);
+            new SdpFmtpAttributeList::VP8Parameters(
+              SdpRtpmapAttributeList::kVP8));
 
         vp8Parameters->max_fs = fmtp->max_fs;
         vp8Parameters->max_fr = fmtp->max_fr;
 
         parameters.reset(vp8Parameters);
       } break;
+      case RTP_OPUS: {
+        SdpFmtpAttributeList::OpusParameters* opusParameters(
+            new SdpFmtpAttributeList::OpusParameters);
+        opusParameters->maxplaybackrate = fmtp->maxplaybackrate;
+        opusParameters->stereo = fmtp->stereo;
+        parameters.reset(opusParameters);
+      } break;
       default: {
       }
     }
 
-    fmtps->PushEntry(osPayloadType.str(), paramsString, Move(parameters));
+    fmtps->PushEntry(osPayloadType.str(), Move(parameters));
   }
 
   if (!fmtps->mFmtps.empty()) {
@@ -669,6 +765,41 @@ SipccSdpAttributeList::LoadMsids(sdp_t* sdp, uint16_t level,
   if (!msids->mMsids.empty()) {
     SetAttribute(msids.release());
   }
+}
+
+bool
+SipccSdpAttributeList::LoadRid(sdp_t* sdp,
+                                     uint16_t level,
+                                     SdpErrorHolder& errorHolder)
+{
+  UniquePtr<SdpRidAttributeList> rids(new SdpRidAttributeList);
+
+  for (uint16_t i = 1; i < UINT16_MAX; ++i) {
+    const char* ridRaw = sdp_attr_get_simple_string(sdp,
+                                                    SDP_ATTR_RID,
+                                                    level,
+                                                    0,
+                                                    i);
+    if (!ridRaw) {
+      break;
+    }
+
+    std::string error;
+    size_t errorPos;
+    if (!rids->PushEntry(ridRaw, &error, &errorPos)) {
+      std::ostringstream fullError;
+      fullError << error << " at column " << errorPos;
+      errorHolder.AddParseError(
+        sdp_attr_line_number(sdp, SDP_ATTR_RID, level, 0, i),
+        fullError.str());
+      return false;
+    }
+  }
+
+  if (!rids->mRids.empty()) {
+    SetAttribute(rids.release());
+  }
+  return true;
 }
 
 void
@@ -815,6 +946,38 @@ SipccSdpAttributeList::LoadRtcpFb(sdp_t* sdp, uint16_t level,
   }
 }
 
+void
+SipccSdpAttributeList::LoadRtcp(sdp_t* sdp, uint16_t level,
+                                SdpErrorHolder& errorHolder)
+{
+  sdp_attr_t* attr = sdp_find_attr(sdp, level, 0, SDP_ATTR_RTCP, 1);
+
+  if (!attr) {
+    return;
+  }
+
+  sdp_rtcp_t* rtcp = &attr->attr.rtcp;
+
+  if (rtcp->nettype != SDP_NT_INTERNET) {
+    return;
+  }
+
+  if (rtcp->addrtype != SDP_AT_IP4 && rtcp->addrtype != SDP_AT_IP6) {
+    return;
+  }
+
+  if (!strlen(rtcp->addr)) {
+    SetAttribute(new SdpRtcpAttribute(rtcp->port));
+  } else {
+    SetAttribute(
+        new SdpRtcpAttribute(
+          rtcp->port,
+          sdp::kInternet,
+          rtcp->addrtype == SDP_AT_IP4 ? sdp::kIPv4 : sdp::kIPv6,
+          rtcp->addr));
+  }
+}
+
 bool
 SipccSdpAttributeList::Load(sdp_t* sdp, uint16_t level,
                             SdpErrorHolder& errorHolder)
@@ -827,6 +990,10 @@ SipccSdpAttributeList::Load(sdp_t* sdp, uint16_t level,
 
   if (AtSessionLevel()) {
     if (!LoadGroups(sdp, level, errorHolder)) {
+      return false;
+    }
+
+    if (!LoadMsidSemantics(sdp, level, errorHolder)) {
       return false;
     }
   } else {
@@ -844,7 +1011,17 @@ SipccSdpAttributeList::Load(sdp_t* sdp, uint16_t level,
     LoadFmtp(sdp, level);
     LoadMsids(sdp, level, errorHolder);
     LoadRtcpFb(sdp, level, errorHolder);
+    LoadRtcp(sdp, level, errorHolder);
     LoadSsrc(sdp, level);
+    if (!LoadImageattr(sdp, level, errorHolder)) {
+      return false;
+    }
+    if (!LoadSimulcast(sdp, level, errorHolder)) {
+      return false;
+    }
+    if (!LoadRid(sdp, level, errorHolder)) {
+      return false;
+    }
   }
 
   LoadIceAttributes(sdp, level);
@@ -1002,7 +1179,21 @@ SipccSdpAttributeList::GetIdentity() const
 const SdpImageattrAttributeList&
 SipccSdpAttributeList::GetImageattr() const
 {
-  MOZ_CRASH("Not yet implemented.");
+  if (!HasAttribute(SdpAttribute::kImageattrAttribute)) {
+    MOZ_CRASH();
+  }
+  const SdpAttribute* attr = GetAttribute(SdpAttribute::kImageattrAttribute);
+  return *static_cast<const SdpImageattrAttributeList*>(attr);
+}
+
+const SdpSimulcastAttribute&
+SipccSdpAttributeList::GetSimulcast() const
+{
+  if (!HasAttribute(SdpAttribute::kSimulcastAttribute)) {
+    MOZ_CRASH();
+  }
+  const SdpAttribute* attr = GetAttribute(SdpAttribute::kSimulcastAttribute);
+  return *static_cast<const SdpSimulcastAttribute*>(attr);
 }
 
 const std::string&
@@ -1045,14 +1236,24 @@ SipccSdpAttributeList::GetMsid() const
   return *static_cast<const SdpMsidAttributeList*>(attr);
 }
 
-const std::string&
+const SdpMsidSemanticAttributeList&
 SipccSdpAttributeList::GetMsidSemantic() const
 {
   if (!HasAttribute(SdpAttribute::kMsidSemanticAttribute)) {
-    return kEmptyString;
+    MOZ_CRASH();
   }
   const SdpAttribute* attr = GetAttribute(SdpAttribute::kMsidSemanticAttribute);
-  return static_cast<const SdpStringAttribute*>(attr)->mValue;
+  return *static_cast<const SdpMsidSemanticAttributeList*>(attr);
+}
+
+const SdpRidAttributeList&
+SipccSdpAttributeList::GetRid() const
+{
+  if (!HasAttribute(SdpAttribute::kRidAttribute)) {
+    MOZ_CRASH();
+  }
+  const SdpAttribute* attr = GetAttribute(SdpAttribute::kRidAttribute);
+  return *static_cast<const SdpRidAttributeList*>(attr);
 }
 
 uint32_t
@@ -1068,7 +1269,11 @@ SipccSdpAttributeList::GetPtime() const
 const SdpRtcpAttribute&
 SipccSdpAttributeList::GetRtcp() const
 {
-  MOZ_CRASH("Not yet implemented");
+  if (!HasAttribute(SdpAttribute::kRtcpAttribute)) {
+    MOZ_CRASH();
+  }
+  const SdpAttribute* attr = GetAttribute(SdpAttribute::kRtcpAttribute);
+  return *static_cast<const SdpRtcpAttribute*>(attr);
 }
 
 const SdpRtcpFbAttributeList&

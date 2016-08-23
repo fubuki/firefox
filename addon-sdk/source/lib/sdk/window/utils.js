@@ -25,8 +25,9 @@ const FM = Cc["@mozilla.org/focus-manager;1"].
 
 const XUL_NS = 'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul';
 
+const prefs = require("../preferences/service");
 const BROWSER = 'navigator:browser',
-      URI_BROWSER = 'chrome://browser/content/browser.xul',
+      URI_BROWSER = prefs.get('browser.chromeURL', null),
       NAME = '_blank',
       FEATURES = 'chrome,all,dialog=no,non-private';
 
@@ -141,7 +142,9 @@ function getToplevelWindow(window) {
 }
 exports.getToplevelWindow = getToplevelWindow;
 
-function getWindowDocShell(window) window.gBrowser.docShell;
+function getWindowDocShell(window) {
+  return window.gBrowser.docShell;
+}
 exports.getWindowDocShell = getWindowDocShell;
 
 function getWindowLoadingContext(window) {
@@ -163,7 +166,7 @@ function serializeFeatures(options) {
     let value = options[name];
 
     // the chrome and private features are special
-    if ((name == 'private' || name == 'chrome'))
+    if ((name == 'private' || name == 'chrome' || name == 'all'))
       return result + ((value === true) ? ',' + name : '');
 
     return result + ',' + name + '=' +
@@ -185,6 +188,9 @@ function serializeFeatures(options) {
 function open(uri, options) {
   uri = uri || URI_BROWSER;
   options = options || {};
+
+  if (!uri)
+    throw new Error('browser.chromeURL is undefined, please provide an explicit uri');
 
   if (['chrome', 'resource', 'data'].indexOf(io.newURI(uri, null, null).scheme) < 0)
     throw new Error('only chrome, resource and data uris are allowed');
@@ -217,7 +223,7 @@ function onFocus(window) {
 }
 exports.onFocus = onFocus;
 
-let isFocused = dispatcher("window-isFocused");
+var isFocused = dispatcher("window-isFocused");
 isFocused.when(x => x instanceof Ci.nsIDOMWindow, (window) => {
   const FM = Cc["@mozilla.org/focus-manager;1"].
                 getService(Ci.nsIFocusManager);

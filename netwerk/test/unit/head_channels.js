@@ -208,9 +208,13 @@ ChannelEventSink.prototype = {
  * Class that implements nsILoadContext.  Use it as callbacks for channel when
  * test needs it.
  */
-function LoadContextCallback(appId, inBrowserElement, isPrivate, isContent) {
+function LoadContextCallback(appId, inIsolatedMozBrowser, isPrivate, isContent) {
   this.appId = appId;
-  this.isInBrowserElement = inBrowserElement;
+  this.isInIsolatedMozBrowserElement = inIsolatedMozBrowser;
+  this.originAttributes = {
+    appId: appId,
+    inIsolatedMozBrowser: inIsolatedMozBrowser
+  };
   this.usePrivateBrowsing = isPrivate;
   this.isContent = isContent;
 }
@@ -235,4 +239,3 @@ LoadContextCallback.prototype = {
     throw Cr.NS_ERROR_NO_INTERFACE;
   },
 }
-

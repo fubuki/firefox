@@ -37,17 +37,17 @@ add_test(function test_savedsearches_bookmarks() {
   // query for the test root, expandQueries=0
   // the query should show up as a regular bookmark
   try {
-    var options = PlacesUtils.history.getNewQueryOptions();
+    let options = PlacesUtils.history.getNewQueryOptions();
     options.expandQueries = 0;
-    var query = PlacesUtils.history.getNewQuery();
+    let query = PlacesUtils.history.getNewQuery();
     query.setFolders([testRoot], 1);
-    var result = PlacesUtils.history.executeQuery(query, options);
-    var rootNode = result.root;
+    let result = PlacesUtils.history.executeQuery(query, options);
+    let rootNode = result.root;
     rootNode.containerOpen = true;
-    var cc = rootNode.childCount;
+    let cc = rootNode.childCount;
     do_check_eq(cc, 1);
-    for (var i = 0; i < cc; i++) {
-      var node = rootNode.getChild(i);
+    for (let i = 0; i < cc; i++) {
+      let node = rootNode.getChild(i);
       // test that queries have valid itemId
       do_check_true(node.itemId > 0);
       // test that the container is closed
@@ -64,17 +64,17 @@ add_test(function test_savedsearches_bookmarks() {
   // query for the test root, expandQueries=1
   // the query should show up as a query container, with 1 child
   try {
-    var options = PlacesUtils.history.getNewQueryOptions();
+    let options = PlacesUtils.history.getNewQueryOptions();
     options.expandQueries = 1;
-    var query = PlacesUtils.history.getNewQuery();
+    let query = PlacesUtils.history.getNewQuery();
     query.setFolders([testRoot], 1);
-    var result = PlacesUtils.history.executeQuery(query, options);
-    var rootNode = result.root;
+    let result = PlacesUtils.history.executeQuery(query, options);
+    let rootNode = result.root;
     rootNode.containerOpen = true;
-    var cc = rootNode.childCount;
+    let cc = rootNode.childCount;
     do_check_eq(cc, 1);
-    for (var i = 0; i < cc; i++) {
-      var node = rootNode.getChild(i);
+    for (let i = 0; i < cc; i++) {
+      let node = rootNode.getChild(i);
       // test that query node type is container when expandQueries=1
       do_check_eq(node.type, node.RESULT_TYPE_QUERY);
       // test that queries (as containers) have valid itemId
@@ -123,10 +123,10 @@ add_test(function test_savedsearches_bookmarks() {
   run_next_test();
 });
 
-add_task(function test_savedsearches_history() {
+add_task(function* test_savedsearches_history() {
   // add a visit that matches the search term
   var testURI = uri("http://" + searchTerm + ".com");
-  yield promiseAddVisits({ uri: testURI, title: searchTerm });
+  yield PlacesTestUtils.addVisits({ uri: testURI, title: searchTerm });
 
   // create a saved-search that matches the visit we added
   var searchId = PlacesUtils.bookmarks.insertBookmark(testRoot,
@@ -166,7 +166,7 @@ add_task(function test_savedsearches_history() {
       do_check_eq(item.uri, testURI.spec); // history visit
 
       // test live-update of query results - add a history visit that matches the query
-      yield promiseAddVisits({
+      yield PlacesTestUtils.addVisits({
         uri: uri("http://foo.com"),
         title: searchTerm + "blah"
       });
@@ -196,7 +196,7 @@ add_task(function test_savedsearches_history() {
     // test live-update of deleted queries
     PlacesUtils.bookmarks.removeItem(searchId);
     try {
-      var tmpFolderNode = root.getChild(1);
+      tmpFolderNode = root.getChild(1);
       do_throw("query was not removed");
     } catch(ex) {}
 

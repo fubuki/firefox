@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/CheckedInt.h"
 #include "mozilla/double-conversion.h"
 #include "mozilla/MemoryReporting.h"
 
@@ -18,9 +19,7 @@ nsTSubstring_CharT::nsTSubstring_CharT(char_type* aData, size_type aLength,
 {
   if (aFlags & F_OWNED) {
     STRING_STAT_INCREMENT(Adopt);
-#ifdef NS_BUILD_REFCNT_LOGGING
-    NS_LogCtor(mData, "StringAdopt", 1);
-#endif
+    MOZ_LOG_CTOR(mData, "StringAdopt", 1);
   }
 }
 #endif /* XPCOM_STRING_CONSTRUCTOR_OUT_OF_LINE */
@@ -55,7 +54,8 @@ nsTSubstring_CharT::MutatePrep(size_type aCapacity, char_type** aOldData,
   // If |aCapacity > kMaxCapacity|, then our doubling algorithm may not be
   // able to allocate it.  Just bail out in cases like that.  We don't want
   // to be allocating 2GB+ strings anyway.
-  PR_STATIC_ASSERT((sizeof(nsStringBuffer) & 0x1) == 0);
+  static_assert((sizeof(nsStringBuffer) & 0x1) == 0,
+                "bad size for nsStringBuffer");
   const size_type kMaxCapacity =
     (size_type(-1) / 2 - sizeof(nsStringBuffer)) / sizeof(char_type) - 2;
   if (aCapacity > kMaxCapacity) {
@@ -162,6 +162,31 @@ nsTSubstring_CharT::Finalize()
 }
 
 bool
+nsTSubstring_CharT::ReplacePrep(index_type aCutStart,
+                                size_type aCutLength,
+                                size_type aNewLength)
+{
+  aCutLength = XPCOM_MIN(aCutLength, mLength - aCutStart);
+
+  mozilla::CheckedInt<size_type> newTotalLen = mLength;
+  newTotalLen += aNewLength;
+  newTotalLen -= aCutLength;
+  if (!newTotalLen.isValid()) {
+    return false;
+  }
+
+  if (aCutStart == mLength && Capacity() > newTotalLen.value()) {
+    mFlags &= ~F_VOIDED;
+    mData[newTotalLen.value()] = char_type(0);
+    mLength = newTotalLen.value();
+    return true;
+  }
+
+  return ReplacePrepInternal(aCutStart, aCutLength, aNewLength,
+                             newTotalLen.value());
+}
+
+bool
 nsTSubstring_CharT::ReplacePrepInternal(index_type aCutStart, size_type aCutLen,
                                         size_type aFragLen, size_type aNewLen)
 {
@@ -253,7 +278,7 @@ nsTSubstring_CharT::EnsureMutable(size_type aNewLen)
 
     aNewLen = mLength;
   }
-  return SetLength(aNewLen, fallible_t());
+  return SetLength(aNewLen, mozilla::fallible);
 }
 
 // ---------------------------------------------------------------------------
@@ -283,15 +308,21 @@ nsTSubstring_CharT::Assign(char_type aChar, const fallible_t&)
 void
 nsTSubstring_CharT::Assign(const char_type* aData)
 {
-  if (!Assign(aData, size_type(-1), fallible_t())) {
+  if (!Assign(aData, mozilla::fallible)) {
     AllocFailed(char_traits::length(aData));
   }
+}
+
+bool
+nsTSubstring_CharT::Assign(const char_type* aData, const fallible_t&)
+{
+  return Assign(aData, size_type(-1), mozilla::fallible);
 }
 
 void
 nsTSubstring_CharT::Assign(const char_type* aData, size_type aLength)
 {
-  if (!Assign(aData, aLength, fallible_t())) {
+  if (!Assign(aData, aLength, mozilla::fallible)) {
     AllocFailed(aLength == size_type(-1) ? char_traits::length(aData)
                                          : aLength);
   }
@@ -299,7 +330,7 @@ nsTSubstring_CharT::Assign(const char_type* aData, size_type aLength)
 
 bool
 nsTSubstring_CharT::Assign(const char_type* aData, size_type aLength,
-                           const fallible_t&)
+                           const fallible_t& aFallible)
 {
   if (!aData || aLength == 0) {
     Truncate();
@@ -311,7 +342,7 @@ nsTSubstring_CharT::Assign(const char_type* aData, size_type aLength,
   }
 
   if (IsDependentOn(aData, aData + aLength)) {
-    return Assign(string_type(aData, aLength), fallible_t());
+    return Assign(string_type(aData, aLength), aFallible);
   }
 
   if (!ReplacePrep(0, mLength, aLength)) {
@@ -325,20 +356,20 @@ nsTSubstring_CharT::Assign(const char_type* aData, size_type aLength,
 void
 nsTSubstring_CharT::AssignASCII(const char* aData, size_type aLength)
 {
-  if (!AssignASCII(aData, aLength, fallible_t())) {
+  if (!AssignASCII(aData, aLength, mozilla::fallible)) {
     AllocFailed(aLength);
   }
 }
 
 bool
 nsTSubstring_CharT::AssignASCII(const char* aData, size_type aLength,
-                                const fallible_t&)
+                                const fallible_t& aFallible)
 {
   // A Unicode string can't depend on an ASCII string buffer,
   // so this dependence check only applies to CStrings.
 #ifdef CharT_is_char
   if (IsDependentOn(aData, aData + aLength)) {
-    return Assign(string_type(aData, aLength), fallible_t());
+    return Assign(string_type(aData, aLength), aFallible);
   }
 #endif
 
@@ -362,13 +393,13 @@ nsTSubstring_CharT::AssignLiteral(const char_type* aData, size_type aLength)
 void
 nsTSubstring_CharT::Assign(const self_type& aStr)
 {
-  if (!Assign(aStr, fallible_t())) {
+  if (!Assign(aStr, mozilla::fallible)) {
     AllocFailed(aStr.Length());
   }
 }
 
 bool
-nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t&)
+nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t& aFallible)
 {
   // |aStr| could be sharable. We need to check its flags to know how to
   // deal with it.
@@ -399,31 +430,31 @@ nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t&)
     nsStringBuffer::FromData(mData)->AddRef();
     return true;
   } else if (aStr.mFlags & F_LITERAL) {
-    NS_ABORT_IF_FALSE(aStr.mFlags & F_TERMINATED, "Unterminated literal");
+    MOZ_ASSERT(aStr.mFlags & F_TERMINATED, "Unterminated literal");
 
     AssignLiteral(aStr.mData, aStr.mLength);
     return true;
   }
 
   // else, treat this like an ordinary assignment.
-  return Assign(aStr.Data(), aStr.Length(), fallible_t());
+  return Assign(aStr.Data(), aStr.Length(), aFallible);
 }
 
 void
 nsTSubstring_CharT::Assign(const substring_tuple_type& aTuple)
 {
-  if (!Assign(aTuple, fallible_t())) {
+  if (!Assign(aTuple, mozilla::fallible)) {
     AllocFailed(aTuple.Length());
   }
 }
 
 bool
 nsTSubstring_CharT::Assign(const substring_tuple_type& aTuple,
-                           const fallible_t&)
+                           const fallible_t& aFallible)
 {
   if (aTuple.IsDependentOn(mData, mData + mLength)) {
     // take advantage of sharing here...
-    return Assign(string_type(aTuple), fallible_t());
+    return Assign(string_type(aTuple), aFallible);
   }
 
   size_type length = aTuple.Length();
@@ -460,11 +491,9 @@ nsTSubstring_CharT::Adopt(char_type* aData, size_type aLength)
     SetDataFlags(F_TERMINATED | F_OWNED);
 
     STRING_STAT_INCREMENT(Adopt);
-#ifdef NS_BUILD_REFCNT_LOGGING
     // Treat this as construction of a "StringAdopt" object for leak
     // tracking purposes.
-    NS_LogCtor(mData, "StringAdopt", 1);
-#endif // NS_BUILD_REFCNT_LOGGING
+    MOZ_LOG_CTOR(mData, "StringAdopt", 1);
   } else {
     SetIsVoid(true);
   }
@@ -486,7 +515,7 @@ nsTSubstring_CharT::Replace(index_type aCutStart, size_type aCutLength,
 bool
 nsTSubstring_CharT::Replace(index_type aCutStart, size_type aCutLength,
                             char_type aChar,
-                            const mozilla::fallible_t&)
+                            const fallible_t&)
 {
   aCutStart = XPCOM_MIN(aCutStart, Length());
 
@@ -504,7 +533,7 @@ nsTSubstring_CharT::Replace(index_type aCutStart, size_type aCutLength,
                             const char_type* aData, size_type aLength)
 {
   if (!Replace(aCutStart, aCutLength, aData, aLength,
-               mozilla::fallible_t())) {
+               mozilla::fallible)) {
     AllocFailed(Length() - aCutLength + 1);
   }
 }
@@ -512,7 +541,7 @@ nsTSubstring_CharT::Replace(index_type aCutStart, size_type aCutLength,
 bool
 nsTSubstring_CharT::Replace(index_type aCutStart, size_type aCutLength,
                             const char_type* aData, size_type aLength,
-                            const mozilla::fallible_t&)
+                            const fallible_t& aFallible)
 {
   // unfortunately, some callers pass null :-(
   if (!aData) {
@@ -524,7 +553,7 @@ nsTSubstring_CharT::Replace(index_type aCutStart, size_type aCutLength,
 
     if (IsDependentOn(aData, aData + aLength)) {
       nsTAutoString_CharT temp(aData, aLength);
-      return Replace(aCutStart, aCutLength, temp, mozilla::fallible_t());
+      return Replace(aCutStart, aCutLength, temp, aFallible);
     }
   }
 
@@ -546,6 +575,16 @@ void
 nsTSubstring_CharT::ReplaceASCII(index_type aCutStart, size_type aCutLength,
                                  const char* aData, size_type aLength)
 {
+  if (!ReplaceASCII(aCutStart, aCutLength, aData, aLength, mozilla::fallible)) {
+    AllocFailed(Length() - aCutLength + 1);
+  }
+}
+
+bool
+nsTSubstring_CharT::ReplaceASCII(index_type aCutStart, size_type aCutLength,
+                                 const char* aData, size_type aLength,
+                                 const fallible_t& aFallible)
+{
   if (aLength == size_type(-1)) {
     aLength = strlen(aData);
   }
@@ -555,16 +594,22 @@ nsTSubstring_CharT::ReplaceASCII(index_type aCutStart, size_type aCutLength,
 #ifdef CharT_is_char
   if (IsDependentOn(aData, aData + aLength)) {
     nsTAutoString_CharT temp(aData, aLength);
-    Replace(aCutStart, aCutLength, temp);
-    return;
+    return Replace(aCutStart, aCutLength, temp, aFallible);
   }
 #endif
 
   aCutStart = XPCOM_MIN(aCutStart, Length());
 
-  if (ReplacePrep(aCutStart, aCutLength, aLength) && aLength > 0) {
+  bool ok = ReplacePrep(aCutStart, aCutLength, aLength);
+  if (!ok) {
+    return false;
+  }
+
+  if (aLength > 0) {
     char_traits::copyASCII(mData + aCutStart, aData, aLength);
   }
+
+  return true;
 }
 
 void
@@ -602,7 +647,7 @@ nsTSubstring_CharT::ReplaceLiteral(index_type aCutStart, size_type aCutLength,
 void
 nsTSubstring_CharT::SetCapacity(size_type aCapacity)
 {
-  if (!SetCapacity(aCapacity, fallible_t())) {
+  if (!SetCapacity(aCapacity, mozilla::fallible)) {
     AllocFailed(aCapacity);
   }
 }
@@ -659,9 +704,9 @@ nsTSubstring_CharT::SetLength(size_type aLength)
 }
 
 bool
-nsTSubstring_CharT::SetLength(size_type aLength, const fallible_t&)
+nsTSubstring_CharT::SetLength(size_type aLength, const fallible_t& aFallible)
 {
-  if (!SetCapacity(aLength, fallible_t())) {
+  if (!SetCapacity(aLength, aFallible)) {
     return false;
   }
 
@@ -962,12 +1007,12 @@ nsTSubstring_CharT::AppendFloat(double aFloat)
 }
 
 size_t
-nsTSubstring_CharT::SizeOfExcludingThisMustBeUnshared(
+nsTSubstring_CharT::SizeOfExcludingThisIfUnshared(
     mozilla::MallocSizeOf aMallocSizeOf) const
 {
   if (mFlags & F_SHARED) {
     return nsStringBuffer::FromData(mData)->
-      SizeOfIncludingThisMustBeUnshared(aMallocSizeOf);
+      SizeOfIncludingThisIfUnshared(aMallocSizeOf);
   }
   if (mFlags & F_OWNED) {
     return aMallocSizeOf(mData);
@@ -985,26 +1030,10 @@ nsTSubstring_CharT::SizeOfExcludingThisMustBeUnshared(
 }
 
 size_t
-nsTSubstring_CharT::SizeOfExcludingThisIfUnshared(
-    mozilla::MallocSizeOf aMallocSizeOf) const
-{
-  // This is identical to SizeOfExcludingThisMustBeUnshared except for the
-  // F_SHARED case.
-  if (mFlags & F_SHARED) {
-    return nsStringBuffer::FromData(mData)->
-           SizeOfIncludingThisIfUnshared(aMallocSizeOf);
-  }
-  if (mFlags & F_OWNED) {
-    return aMallocSizeOf(mData);
-  }
-  return 0;
-}
-
-size_t
 nsTSubstring_CharT::SizeOfExcludingThisEvenIfShared(
     mozilla::MallocSizeOf aMallocSizeOf) const
 {
-  // This is identical to SizeOfExcludingThisMustBeUnshared except for the
+  // This is identical to SizeOfExcludingThisIfUnshared except for the
   // F_SHARED case.
   if (mFlags & F_SHARED) {
     return nsStringBuffer::FromData(mData)->
@@ -1014,14 +1043,6 @@ nsTSubstring_CharT::SizeOfExcludingThisEvenIfShared(
     return aMallocSizeOf(mData);
   }
   return 0;
-}
-
-size_t
-nsTSubstring_CharT::SizeOfIncludingThisMustBeUnshared(
-    mozilla::MallocSizeOf aMallocSizeOf) const
-{
-  return aMallocSizeOf(this) +
-         SizeOfExcludingThisMustBeUnshared(aMallocSizeOf);
 }
 
 size_t

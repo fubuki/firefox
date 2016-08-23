@@ -31,6 +31,7 @@ EXPORTS.mozilla.plugins += [
     'PluginModuleParent.h',
     'PluginProcessChild.h',
     'PluginProcessParent.h',
+    'PluginQuirks.h',
     'PluginScriptableObjectChild.h',
     'PluginScriptableObjectParent.h',
     'PluginScriptableObjectUtils-inl.h',
@@ -40,9 +41,9 @@ EXPORTS.mozilla.plugins += [
     'PluginUtilsOSX.h',
     'PluginWidgetChild.h',
     'PluginWidgetParent.h',
-    'ScopedMethodFactory.h',
     'StreamNotifyChild.h',
     'StreamNotifyParent.h',
+    'TaskFactory.h',
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
@@ -50,7 +51,6 @@ if CONFIG['OS_ARCH'] == 'WINNT':
         'PluginSurfaceParent.h',
     ]
     UNIFIED_SOURCES += [
-        'COMMessageFilter.cpp',
         'PluginHangUIParent.cpp',
         'PluginSurfaceParent.cpp',
     ]
@@ -69,10 +69,8 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     ]
 
 if CONFIG['MOZ_ENABLE_QT']:
-    GENERATED_SOURCES += [
-        'moc_NestedLoopTimer.cpp',
-    ]
     SOURCES += [
+        '!moc_NestedLoopTimer.cpp',
         'NestedLoopTimer.cpp',
         'PluginHelperQt.cpp',
     ]
@@ -89,6 +87,7 @@ UNIFIED_SOURCES += [
     'PluginModuleParent.cpp',
     'PluginProcessChild.cpp',
     'PluginProcessParent.cpp',
+    'PluginQuirks.cpp',
     'PluginScriptableObjectChild.cpp',
     'PluginScriptableObjectParent.cpp',
     'PluginStreamChild.cpp',
@@ -108,6 +107,11 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         'PluginUtilsOSX.mm',
     ]
 
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+    UNIFIED_SOURCES += [
+        'D3D11SurfaceHolder.cpp',
+    ]
+
 IPDL_SOURCES += [
     'PBrowserStream.ipdl',
     'PluginTypes.ipdlh',
@@ -120,8 +124,6 @@ IPDL_SOURCES += [
     'PStreamNotify.ipdl',
 ]
 
-FAIL_ON_WARNINGS = True
-
 include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
@@ -129,6 +131,12 @@ LOCAL_INCLUDES += [
     '../base',
     '/xpcom/base/',
 ]
+
+if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
+    LOCAL_INCLUDES += [
+        '/security/sandbox/chromium',
+        '/security/sandbox/chromium-shim',
+    ]
 
 DEFINES['FORCE_PR_LOG'] = True
 
@@ -139,3 +147,11 @@ else:
     CXXFLAGS += CONFIG['MOZ_GTK2_CFLAGS']
 
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+
+if CONFIG['_MSC_VER']:
+    # This is intended as a temporary hack to support building with VS2015.
+    # conversion from 'X' to 'Y' requires a narrowing conversion
+    CXXFLAGS += ['-wd4838']
+
+    # 'type cast': conversion from 'unsigned int' to 'HIMC' of greater size
+    CXXFLAGS += ['-wd4312']

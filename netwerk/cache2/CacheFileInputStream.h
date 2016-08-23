@@ -11,7 +11,6 @@
 #include "nsAutoPtr.h"
 #include "CacheFileChunk.h"
 
-
 namespace mozilla {
 namespace net {
 
@@ -27,13 +26,13 @@ class CacheFileInputStream : public nsIAsyncInputStream
   NS_DECL_NSISEEKABLESTREAM
 
 public:
-  explicit CacheFileInputStream(CacheFile *aFile);
+  explicit CacheFileInputStream(CacheFile *aFile, nsISupports *aEntry);
 
-  NS_IMETHOD OnChunkRead(nsresult aResult, CacheFileChunk *aChunk) MOZ_OVERRIDE;
-  NS_IMETHOD OnChunkWritten(nsresult aResult, CacheFileChunk *aChunk) MOZ_OVERRIDE;
+  NS_IMETHOD OnChunkRead(nsresult aResult, CacheFileChunk *aChunk) override;
+  NS_IMETHOD OnChunkWritten(nsresult aResult, CacheFileChunk *aChunk) override;
   NS_IMETHOD OnChunkAvailable(nsresult aResult, uint32_t aChunkIdx,
-                              CacheFileChunk *aChunk) MOZ_OVERRIDE;
-  NS_IMETHOD OnChunkUpdated(CacheFileChunk *aChunk) MOZ_OVERRIDE;
+                              CacheFileChunk *aChunk) override;
+  NS_IMETHOD OnChunkUpdated(CacheFileChunk *aChunk) override;
 
   // Memory reporting
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -53,8 +52,8 @@ private:
   void NotifyListener();
   void MaybeNotifyListener();
 
-  nsRefPtr<CacheFile>      mFile;
-  nsRefPtr<CacheFileChunk> mChunk;
+  RefPtr<CacheFile>        mFile;
+  RefPtr<CacheFileChunk> mChunk;
   int64_t                  mPos;
   bool                     mClosed;
   nsresult                 mStatus;
@@ -64,10 +63,12 @@ private:
   nsCOMPtr<nsIInputStreamCallback> mCallback;
   uint32_t                         mCallbackFlags;
   nsCOMPtr<nsIEventTarget>         mCallbackTarget;
+  // Held purely for referencing purposes
+  RefPtr<nsISupports>              mCacheEntryHandle;
 };
 
 
-} // net
-} // mozilla
+} // namespace net
+} // namespace mozilla
 
 #endif

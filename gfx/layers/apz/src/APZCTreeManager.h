@@ -8,22 +8,22 @@
 
 #include <stdint.h>                     // for uint64_t, uint32_t
 #include <map>                          // for std::map
+
 #include "FrameMetrics.h"               // for FrameMetrics, etc
-#include "Units.h"                      // for CSSPoint, CSSRect, etc
 #include "gfxPoint.h"                   // for gfxPoint
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/EventForwards.h"      // for WidgetInputEvent, nsEventStatus
-#include "mozilla/Monitor.h"            // for Monitor
+#include "mozilla/gfx/Logging.h"        // for gfx::TreeLog
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
-#include "nsAutoPtr.h"                  // for nsRefPtr
+#include "mozilla/layers/APZUtils.h"    // for HitTestResult
+#include "mozilla/layers/TouchCounter.h"// for TouchCounter
+#include "mozilla/Mutex.h"              // for Mutex
+#include "mozilla/RefPtr.h"             // for RefPtr
+#include "mozilla/TimeStamp.h"          // for mozilla::TimeStamp
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
-#include "mozilla/Vector.h"             // for mozilla::Vector
 #include "nsTArrayForwardDeclare.h"     // for nsTArray, nsTArray_Impl, etc
-#include "mozilla/gfx/Logging.h"        // for gfx::TreeLog
-#include "mozilla/layers/APZUtils.h"    // for HitTestResult
-
-class nsIntRegion;
+#include "Units.h"                      // for CSSPoint, CSSRect, etc
 
 namespace mozilla {
 class InputData;
@@ -40,12 +40,20 @@ enum AllowedTouchBehavior {
   UNKNOWN =            1 << 4
 };
 
+enum ZoomToRectBehavior : uint32_t {
+  DEFAULT_BEHAVIOR =   0,
+  DISABLE_ZOOM_OUT =   1 << 0,
+  PAN_INTO_VIEW_ONLY = 1 << 1,
+  ONLY_ZOOM_TO_DEFAULT_SCALE  = 1 << 2
+};
+
 class Layer;
+class AsyncDragMetrics;
 class AsyncPanZoomController;
-class CompositorParent;
-class APZPaintLogHelper;
+class CompositorBridgeParent;
 class OverscrollHandoffChain;
 struct OverscrollHandoffState;
+struct FlingHandoffState;
 class LayerMetricsWrapper;
 class InputQueue;
 class GeckoContentController;
@@ -69,7 +77,7 @@ class HitTestingTreeNode;
 
 /**
  * This class manages the tree of AsyncPanZoomController instances. There is one
- * instance of this class owned by each CompositorParent, and it contains as
+ * instance of this class owned by each CompositorBridgeParent, and it contains as
  * many AsyncPanZoomController instances as there are scrollable container layers.
  * This class generally lives on the compositor thread, although some functions
  * may be called from other threads as noted; thread safety is ensured internally.
@@ -96,7 +104,7 @@ class APZCTreeManager {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(APZCTreeManager)
 
   typedef mozilla::layers::AllowedTouchBehavior AllowedTouchBehavior;
-  typedef uint32_t TouchBehaviorFlags;
+  typedef mozilla::layers::AsyncDragMetrics AsyncDragMetrics;
 
   // Helper struct to hold some state while we build the hit-testing tree. The
   // sole purpose of this struct is to shorten the argument list to
@@ -128,16 +136,24 @@ public:
    *                             process' layer subtree has its own sequence
    *                             numbers.
    */
-  void UpdateHitTestingTree(CompositorParent* aCompositor,
+  void UpdateHitTestingTree(CompositorBridgeParent* aCompositor,
                             Layer* aRoot,
                             bool aIsFirstPaint,
                             uint64_t aOriginatingLayersId,
                             uint32_t aPaintSequenceNumber);
 
   /**
+   * Walk the tree of APZCs and flushes the repaint requests for all the APZCS
+   * corresponding to the given layers id. Finally, sends a flush complete
+   * notification to the GeckoContentController for the layers id.
+   */
+  void FlushApzRepaints(uint64_t aLayersId);
+
+  /**
    * General handler for incoming input events. Manipulates the frame metrics
    * based on what type of input it is. For example, a PinchGestureEvent will
-   * cause scaling. This should only be called externally to this class.
+   * cause scaling. This should only be called externally to this class, and
+   * must be called on the controller thread.
    *
    * This function transforms |aEvent| to have its coordinates in DOM space.
    * This is so that the event can be passed through the DOM and content can
@@ -146,12 +162,9 @@ public:
    *
    * The following values may be returned by this function:
    * nsEventStatus_eConsumeNoDefault is returned to indicate the
-   *   caller should discard the event with extreme prejudice.
-   *   Currently this is only returned if the APZ determines that something is
-   *   in overscroll and the event should be ignored entirely, or if the input
-   *   event is part of a extended gesture like flywheel scrolling, and gets
-   *   consumed within the APZ code. There may be other scenarios where this
-   *   return code might be used in the future.
+   *   APZ is consuming this event and the caller should discard the event with
+   *   extreme prejudice. The exact scenarios under which this is returned is
+   *   implementation-dependent and may vary.
    * nsEventStatus_eIgnore is returned to indicate that the APZ code didn't
    *   use this event. This might be because it was directed at a point on
    *   the screen where there was no APZ, or because the thing the user was
@@ -182,7 +195,9 @@ public:
    *
    * NOTE: Be careful of invoking the WidgetInputEvent variant. This can only be
    * called on the main thread. See widget/InputData.h for more information on
-   * why we have InputData and WidgetInputEvent separated.
+   * why we have InputData and WidgetInputEvent separated. If this function is
+   * used, the controller thread must be the main thread, or undefined behaviour
+   * may occur.
    * NOTE: On unix, mouse events are treated as touch and are forwarded
    * to the appropriate apz as such.
    *
@@ -193,27 +208,21 @@ public:
                                   uint64_t* aOutInputBlockId);
 
   /**
-   * A helper for transforming coordinates to gecko coordinate space.
-   *
-   * @param aPoint point to transform
-   * @param aOutTransformedPoint resulting transformed point
-   */
-  void TransformCoordinateToGecko(const ScreenIntPoint& aPoint,
-                                  LayoutDeviceIntPoint* aOutTransformedPoint);
-
-  /**
    * Kicks an animation to zoom to a rect. This may be either a zoom out or zoom
    * in. The actual animation is done on the compositor thread after being set
    * up. |aRect| must be given in CSS pixels, relative to the document.
+   * |aFlags| is a combination of the ZoomToRectBehavior enum values.
    */
   void ZoomToRect(const ScrollableLayerGuid& aGuid,
-                  const CSSRect& aRect);
+                  const CSSRect& aRect,
+                  const uint32_t aFlags = DEFAULT_BEHAVIOR);
 
   /**
    * If we have touch listeners, this should always be called when we know
    * definitively whether or not content has preventDefaulted any touch events
    * that have come in. If |aPreventDefault| is true, any touch events in the
-   * queue will be discarded.
+   * queue will be discarded. This function must be called on the controller
+   * thread.
    */
   void ContentReceivedInputBlock(uint64_t aInputBlockId, bool aPreventDefault);
 
@@ -239,9 +248,11 @@ public:
 
   /**
    * Updates any zoom constraints contained in the <meta name="viewport"> tag.
+   * If the |aConstraints| is Nothing() then previously-provided constraints for
+   * the given |aGuid| are cleared.
    */
   void UpdateZoomConstraints(const ScrollableLayerGuid& aGuid,
-                             const ZoomConstraints& aConstraints);
+                             const Maybe<ZoomConstraints>& aConstraints);
 
   /**
    * Cancels any currently running animation. Note that all this does is set the
@@ -249,6 +260,14 @@ public:
    * animation's responsibility to check this before advancing.
    */
   void CancelAnimation(const ScrollableLayerGuid &aGuid);
+
+  /**
+   * Adjusts the root APZC to compensate for a shift in the surface. See the
+   * documentation on AsyncPanZoomController::AdjustScrollForSurfaceShift for
+   * some more details. This is only currently needed due to surface shifts
+   * caused by the dynamic toolbar on Android.
+   */
+  void AdjustScrollForSurfaceShift(const ScreenPoint& aShift);
 
   /**
    * Calls Destroy() on all APZC instances attached to the tree, and resets the
@@ -271,8 +290,7 @@ public:
    */
   static const ScreenMargin CalculatePendingDisplayPort(
     const FrameMetrics& aFrameMetrics,
-    const ParentLayerPoint& aVelocity,
-    double aEstimatedPaintDuration);
+    const ParentLayerPoint& aVelocity);
 
   /**
    * Set the dpi value used by all AsyncPanZoomControllers.
@@ -286,12 +304,10 @@ public:
   static float GetDPI() { return sDPI; }
 
   /**
-   * Returns values of allowed touch-behavior for the touches of aEvent via out parameter.
-   * Internally performs asks appropriate AsyncPanZoomController to perform
-   * hit testing on its own.
+   * Find the hit testing node for the scrollbar thumb that matches these
+   * drag metrics.
    */
-  void GetAllowedTouchBehavior(WidgetInputEvent* aEvent,
-                               nsTArray<TouchBehaviorFlags>& aOutValues);
+  RefPtr<HitTestingTreeNode> FindScrollNode(const AsyncDragMetrics& aDragMetrics);
 
   /**
    * Sets allowed touch behavior values for current touch-session for specific
@@ -300,6 +316,7 @@ public:
    * corresponds to the different touch point that is currently active.
    * Must be called after receiving the TOUCH_START event that starts the
    * touch-session.
+   * This must be called on the controller thread.
    */
   void SetAllowedTouchBehavior(uint64_t aInputBlockId,
                                const nsTArray<TouchBehaviorFlags>& aValues);
@@ -325,9 +342,10 @@ public:
    * |aOverscrollHandoffChainIndex| is the next position in the overscroll
    *   handoff chain that should be scrolled.
    *
-   * Returns true iff. some APZC accepted the scroll and scrolled.
-   * This is to allow the sending APZC to go into an overscrolled state if
-   * no APZC further up in the handoff chain accepted the overscroll.
+   * aStartPoint and aEndPoint will be modified depending on how much of the
+   * scroll each APZC consumes. This is to allow the sending APZC to go into
+   * an overscrolled state if no APZC further up in the handoff chain accepted
+   * the entire scroll.
    *
    * The way this method works is best illustrated with an example.
    * Consider three nested APZCs, A, B, and C, with C being the innermost one.
@@ -350,9 +368,9 @@ public:
    * Note: this should be used for panning only. For handing off overscroll for
    *       a fling, use DispatchFling().
    */
-  bool DispatchScroll(AsyncPanZoomController* aApzc,
-                      ParentLayerPoint aStartPoint,
-                      ParentLayerPoint aEndPoint,
+  void DispatchScroll(AsyncPanZoomController* aApzc,
+                      ParentLayerPoint& aStartPoint,
+                      ParentLayerPoint& aEndPoint,
                       OverscrollHandoffState& aOverscrollHandoffState);
 
   /**
@@ -362,37 +380,53 @@ public:
    * first APZC to fling may not be the one that is receiving the touch events.
    *
    * @param aApzc the APZC that wants to start or hand off the fling
-   * @param aVelocity the current velocity of the fling, in |aApzc|'s screen
-   *                  pixels per millisecond
-   * @param aOverscrollHandoffChain the chain of APZCs along which the fling
-   *                                should be handed off
-   * @param aHandoff is true if |aApzc| is handing off an existing fling (in
-   *                 this case the fling is given to the next APZC in the
-   *                 handoff chain after |aApzc|), and false is |aApzc| wants
-   *                 start a fling (in this case the fling is given to the
-   *                 first APZC in the chain)
+   * @param aHandoffState a collection of state about the operation,
+   *                      which contains the following:
    *
-   * Returns true iff. an APZC accepted the fling. In the case of fling handoff,
-   * the caller uses this return value to determine whether it should consume
-   * the excess fling itself by going into an overscroll fling.
+   *        mVelocity the current velocity of the fling, in |aApzc|'s screen
+   *                  pixels per millisecond
+   *        mChain the chain of APZCs along which the fling
+   *                   should be handed off
+   *        mIsHandoff is true if |aApzc| is handing off an existing fling (in
+   *                   this case the fling is given to the next APZC in the
+   *                   handoff chain after |aApzc|), and false is |aApzc| wants
+   *                   start a fling (in this case the fling is given to the
+   *                   first APZC in the chain)
+   *
+   * aHandoffState.mVelocity will be modified depending on how much of that
+   * velocity has been consumed by APZCs in the overscroll hand-off chain.
+   * The caller can use this value to determine whether it should consume
+   * the excess velocity by going into an overscroll fling.
    */
-  bool DispatchFling(AsyncPanZoomController* aApzc,
-                     ParentLayerPoint aVelocity,
-                     nsRefPtr<const OverscrollHandoffChain> aOverscrollHandoffChain,
-                     bool aHandoff);
+  void DispatchFling(AsyncPanZoomController* aApzc,
+                     FlingHandoffState& aHandoffState);
+
+  void StartScrollbarDrag(const ScrollableLayerGuid& aGuid,
+                          const AsyncDragMetrics& aDragMetrics);
 
   /*
    * Build the chain of APZCs that will handle overscroll for a pan starting at |aInitialTarget|.
    */
-  nsRefPtr<const OverscrollHandoffChain> BuildOverscrollHandoffChain(const nsRefPtr<AsyncPanZoomController>& aInitialTarget);
+  RefPtr<const OverscrollHandoffChain> BuildOverscrollHandoffChain(const RefPtr<AsyncPanZoomController>& aInitialTarget);
+
+  /**
+   * Function used to disable LongTap gestures.
+   *
+   * On slow running tests, drags and touch events can be misinterpreted
+   * as a long tap. This allows tests to disable long tap gesture detection.
+   */
+  static void SetLongTapEnabled(bool aTapGestureEnabled);
 
 protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~APZCTreeManager();
 
-  // Hook for gtests subclass
-  virtual AsyncPanZoomController* MakeAPZCInstance(uint64_t aLayersId,
-                                                   GeckoContentController* aController);
+  // Protected hooks for gtests subclass
+  virtual AsyncPanZoomController* NewAPZCInstance(uint64_t aLayersId,
+                                                  GeckoContentController* aController);
+public:
+  // Public hooks for gtests subclass
+  virtual TimeStamp GetFrameTime();
 
 public:
   /* Some helper functions to find an APZC given some identifying input. These functions
@@ -401,11 +435,20 @@ public:
      about it going away. These are public for testing code and generally should not be
      used by other production code.
   */
-  nsRefPtr<HitTestingTreeNode> GetRootNode() const;
+  RefPtr<HitTestingTreeNode> GetRootNode() const;
   already_AddRefed<AsyncPanZoomController> GetTargetAPZC(const ScreenPoint& aPoint,
-                                                         HitTestResult* aOutHitResult);
-  gfx::Matrix4x4 GetScreenToApzcTransform(const AsyncPanZoomController *aApzc) const;
-  gfx::Matrix4x4 GetApzcToGeckoTransform(const AsyncPanZoomController *aApzc) const;
+                                                         HitTestResult* aOutHitResult,
+                                                         bool* aOutHitScrollbar = nullptr);
+  ScreenToParentLayerMatrix4x4 GetScreenToApzcTransform(const AsyncPanZoomController *aApzc) const;
+  ParentLayerToScreenMatrix4x4 GetApzcToGeckoTransform(const AsyncPanZoomController *aApzc) const;
+
+  /**
+   * Process touch velocity.
+   * Sometimes the touch move event will have a velocity even though no scrolling
+   * is occurring such as when the toolbar is being hidden/shown in Fennec.
+   * This function can be called to have the y axis' velocity queue updated.
+   */
+  void ProcessTouchVelocity(uint32_t aTimestampMs, float aSpeedY);
 private:
   typedef bool (*GuidComparator)(const ScrollableLayerGuid&, const ScrollableLayerGuid&);
 
@@ -413,19 +456,22 @@ private:
   void AttachNodeToTree(HitTestingTreeNode* aNode,
                         HitTestingTreeNode* aParent,
                         HitTestingTreeNode* aNextSibling);
-  already_AddRefed<AsyncPanZoomController> GetTargetAPZC(const ScrollableLayerGuid& aGuid,
-                                                         GuidComparator aComparator = nullptr);
+  already_AddRefed<AsyncPanZoomController> GetTargetAPZC(const ScrollableLayerGuid& aGuid);
   already_AddRefed<HitTestingTreeNode> GetTargetNode(const ScrollableLayerGuid& aGuid,
                                                      GuidComparator aComparator);
   HitTestingTreeNode* FindTargetNode(HitTestingTreeNode* aNode,
                                      const ScrollableLayerGuid& aGuid,
                                      GuidComparator aComparator);
+  AsyncPanZoomController* GetTargetApzcForNode(HitTestingTreeNode* aNode);
   AsyncPanZoomController* GetAPZCAtPoint(HitTestingTreeNode* aNode,
                                          const ParentLayerPoint& aHitTestPoint,
-                                         HitTestResult* aOutHitResult);
+                                         HitTestResult* aOutHitResult,
+                                         bool* aOutHitScrollbar);
+  AsyncPanZoomController* FindRootApzcForLayersId(uint64_t aLayersId) const;
+  AsyncPanZoomController* FindRootContentApzcForLayersId(uint64_t aLayersId) const;
+  AsyncPanZoomController* FindRootContentOrRootApzc() const;
   already_AddRefed<AsyncPanZoomController> GetMultitouchTarget(AsyncPanZoomController* aApzc1, AsyncPanZoomController* aApzc2) const;
   already_AddRefed<AsyncPanZoomController> CommonAncestor(AsyncPanZoomController* aApzc1, AsyncPanZoomController* aApzc2) const;
-  already_AddRefed<AsyncPanZoomController> RootAPZCForLayersId(AsyncPanZoomController* aApzc) const;
   already_AddRefed<AsyncPanZoomController> GetTouchInputBlockAPZC(const MultiTouchInput& aEvent,
                                                                   HitTestResult* aOutHitResult);
   nsEventStatus ProcessTouchInput(MultiTouchInput& aInput,
@@ -437,12 +483,15 @@ private:
   nsEventStatus ProcessEvent(WidgetInputEvent& inputEvent,
                              ScrollableLayerGuid* aOutTargetGuid,
                              uint64_t* aOutInputBlockId);
-  void UpdateZoomConstraintsRecursively(HitTestingTreeNode* aNode,
-                                        const ZoomConstraints& aConstraints);
-  void FlushRepaintsRecursively(HitTestingTreeNode* aNode);
+  nsEventStatus ProcessMouseEvent(WidgetMouseEventBase& aInput,
+                                  ScrollableLayerGuid* aOutTargetGuid,
+                                  uint64_t* aOutInputBlockId);
+  void UpdateWheelTransaction(WidgetInputEvent& aEvent);
+  void FlushRepaintsToClearScreenToGeckoTransform();
 
   already_AddRefed<HitTestingTreeNode> RecycleOrCreateNode(TreeBuildingState& aState,
-                                                           AsyncPanZoomController* aApzc);
+                                                           AsyncPanZoomController* aApzc,
+                                                           uint64_t aLayersId);
   HitTestingTreeNode* PrepareNodeForLayer(const LayerMetricsWrapper& aLayer,
                                           const FrameMetrics& aMetrics,
                                           uint64_t aLayersId,
@@ -486,7 +535,7 @@ protected:
   /* The input queue where input events are held until we know enough to
    * figure out where they're going. Protected so gtests can access it.
    */
-  nsRefPtr<InputQueue> mInputQueue;
+  RefPtr<InputQueue> mInputQueue;
 
 private:
   /* Whenever walking or mutating the tree rooted at mRootNode, mTreeLock must be held.
@@ -494,16 +543,19 @@ private:
    * isolation (that is, if its tree pointers are not being accessed or mutated). The
    * lock also needs to be held when accessing the mRootNode instance variable, as that
    * is considered part of the APZC tree management state.
-   * Finally, the lock needs to be held when accessing mOverscrollHandoffChain.
+   * Finally, the lock needs to be held when accessing mZoomConstraints.
    * IMPORTANT: See the note about lock ordering at the top of this file. */
-  mutable mozilla::Monitor mTreeLock;
-  nsRefPtr<HitTestingTreeNode> mRootNode;
+  mutable mozilla::Mutex mTreeLock;
+  RefPtr<HitTestingTreeNode> mRootNode;
+  /* Holds the zoom constraints for scrollable layers, as determined by the
+   * the main-thread gecko code. */
+  std::map<ScrollableLayerGuid, ZoomConstraints> mZoomConstraints;
   /* This tracks the APZC that should receive all inputs for the current input event block.
    * This allows touch points to move outside the thing they started on, but still have the
    * touch events delivered to the same initial APZC. This will only ever be touched on the
    * input delivery thread, and so does not require locking.
    */
-  nsRefPtr<AsyncPanZoomController> mApzcForInputBlock;
+  RefPtr<AsyncPanZoomController> mApzcForInputBlock;
   /* The hit result for the current input event block; this should always be in
    * sync with mApzcForInputBlock.
    */
@@ -513,16 +565,9 @@ private:
    * this is set to -1.
    */
   int32_t mRetainedTouchIdentifier;
-  /* The number of touch points we are tracking that are currently on the screen. */
-  uint32_t mTouchCount;
-  /* The transform from root screen coordinates into mApzcForInputBlock's
-   * screen coordinates, as returned through the 'aTransformToApzcOut' parameter
-   * of GetInputTransform(), at the start of the input block. This is cached
-   * because this transform can change over the course of the input block,
-   * but for some operations we need to use the initial transform.
-   * Meaningless if mApzcForInputBlock is nullptr.
-   */
-  gfx::Matrix4x4 mCachedTransformToApzcForInputBlock;
+  /* Tracks the number of touch points we are tracking that are currently on
+   * the screen. */
+  TouchCounter mTouchCounter;
   /* For logging the APZC tree for debugging (enabled by the apz.printtree
    * pref). */
   gfx::TreeLog mApzcTreeLog;
@@ -530,7 +575,7 @@ private:
   static float sDPI;
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif // mozilla_layers_PanZoomController_h

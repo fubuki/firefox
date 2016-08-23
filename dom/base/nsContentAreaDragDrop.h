@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,21 +14,17 @@
 #include "nsIDOMEventListener.h"
 #include "nsITransferable.h"
 
-class nsIDOMNode;
-class nsPIDOMWindow;
-class nsIDOMDragEvent;
+class nsPIDOMWindowOuter;
 class nsISelection;
 class nsITransferable;
 class nsIContent;
-class nsIURI;
 class nsIFile;
-class nsISimpleEnumerator;
 
 namespace mozilla {
 namespace dom {
 class DataTransfer;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 //
 // class nsContentAreaDragDrop, used to generate the dragdata
@@ -53,7 +51,7 @@ public:
    * aDragNode - [out] the link, image or area being dragged, or null if the
    *             drag occurred on another element.
    */
-  static nsresult GetDragData(nsPIDOMWindow* aWindow,
+  static nsresult GetDragData(nsPIDOMWindowOuter* aWindow,
                               nsIContent* aTarget,
                               nsIContent* aSelectionTargetNode,
                               bool aIsAltKeyPressed,

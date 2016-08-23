@@ -8,7 +8,12 @@
 #define GMP_LOADER_H__
 
 #include <stdint.h>
+#include "prlink.h"
 #include "gmp-entrypoints.h"
+
+#if defined(XP_MACOSX) && defined(MOZ_GMP_SANDBOX)
+#include "mozilla/Sandbox.h"
+#endif
 
 namespace mozilla {
 namespace gmp {
@@ -16,12 +21,30 @@ namespace gmp {
 class SandboxStarter {
 public:
   virtual ~SandboxStarter() {}
-  virtual void Start(const char* aLibPath) = 0;
+  virtual bool Start(const char* aLibPath) = 0;
+#if defined(XP_MACOSX) && defined(MOZ_GMP_SANDBOX)
+  // On OS X we need to set Mac-specific sandbox info just before we start the
+  // sandbox, which we don't yet know when the GMPLoader and SandboxStarter
+  // objects are created.
+  virtual void SetSandboxInfo(MacSandboxInfo* aSandboxInfo) = 0;
+#endif
 };
 
-#if defined(XP_MACOSX)
-#define SANDBOX_NOT_STATICALLY_LINKED_INTO_PLUGIN_CONTAINER 1
-#endif
+// Interface that adapts a plugin to the GMP API.
+class GMPAdapter {
+public:
+  virtual ~GMPAdapter() {}
+  // Sets the adapted to plugin library module.
+  // Note: the GMPAdapter is responsible for calling PR_UnloadLibrary on aLib
+  // when it's finished with it.
+  virtual void SetAdaptee(PRLibrary* aLib) = 0;
+
+  // These are called in place of the corresponding GMP API functions.
+  virtual GMPErr GMPInit(const GMPPlatformAPI* aPlatformAPI) = 0;
+  virtual GMPErr GMPGetAPI(const char* aAPIName, void* aHostAPI, void** aPluginAPI) = 0;
+  virtual void GMPShutdown() = 0;
+  virtual void GMPSetNodeId(const char* aNodeId, uint32_t aLength) = 0;
+};
 
 // Encapsulates generating the device-bound node id, activating the sandbox,
 // loading the GMP, and passing the node id to the GMP (in that order).
@@ -39,18 +62,24 @@ public:
 //
 // There is exactly one GMPLoader per GMP child process, and only one GMP
 // per child process (so the GMPLoader only loads one GMP).
+//
+// Load() takes an optional GMPAdapter which can be used to adapt non-GMPs
+// to adhere to the GMP API.
 class GMPLoader {
 public:
   virtual ~GMPLoader() {}
 
   // Calculates the device-bound node id, then activates the sandbox,
   // then loads the GMP library and (if applicable) passes the bound node id
-  // to the GMP.
-  virtual bool Load(const char* aLibPath,
+  // to the GMP. If aAdapter is non-null, the lib path is assumed to be
+  // a non-GMP, and the adapter is initialized with the lib and the adapter
+  // is used to interact with the plugin.
+  virtual bool Load(const char* aUTF8LibPath,
                     uint32_t aLibPathLen,
                     char* aOriginSalt,
                     uint32_t aOriginSaltLen,
-                    const GMPPlatformAPI* aPlatformAPI) = 0;
+                    const GMPPlatformAPI* aPlatformAPI,
+                    GMPAdapter* aAdapter = nullptr) = 0;
 
   // Retrieves an interface pointer from the GMP.
   virtual GMPErr GetAPI(const char* aAPIName, void* aHostAPI, void** aPluginAPI) = 0;
@@ -59,10 +88,11 @@ public:
   // plugin library.
   virtual void Shutdown() = 0;
 
-#ifdef SANDBOX_NOT_STATICALLY_LINKED_INTO_PLUGIN_CONTAINER
-  // Encapsulates starting the sandbox on Linux and MacOSX.
-  // TODO: Remove this, and put sandbox in plugin-container on all platforms.
-  virtual void SetStartSandboxStarter(SandboxStarter* aStarter) = 0;
+#if defined(XP_MACOSX) && defined(MOZ_GMP_SANDBOX)
+  // On OS X we need to set Mac-specific sandbox info just before we start the
+  // sandbox, which we don't yet know when the GMPLoader and SandboxStarter
+  // objects are created.
+  virtual void SetSandboxInfo(MacSandboxInfo* aSandboxInfo) = 0;
 #endif
 };
 

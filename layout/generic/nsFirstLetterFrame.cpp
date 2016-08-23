@@ -12,9 +12,11 @@
 #include "nsLineLayout.h"
 #include "nsGkAtoms.h"
 #include "nsAutoPtr.h"
-#include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsFrameManager.h"
-#include "RestyleManager.h"
+#include "mozilla/RestyleManagerHandle.h"
+#include "mozilla/RestyleManagerHandleInlines.h"
 #include "nsPlaceholderFrame.h"
 #include "nsCSSFrameConstructor.h"
 
@@ -60,7 +62,7 @@ nsFirstLetterFrame::Init(nsIContent*       aContent,
                          nsContainerFrame* aParent,
                          nsIFrame*         aPrevInFlow)
 {
-  nsRefPtr<nsStyleContext> newSC;
+  RefPtr<nsStyleContext> newSC;
   if (aPrevInFlow) {
     // Get proper style context for ourselves.  We're creating the frame
     // that represents everything *except* the first letter, so just create
@@ -68,7 +70,8 @@ nsFirstLetterFrame::Init(nsIContent*       aContent,
     nsStyleContext* parentStyleContext = mStyleContext->GetParent();
     if (parentStyleContext) {
       newSC = PresContext()->StyleSet()->
-        ResolveStyleForNonElement(parentStyleContext);
+        ResolveStyleForNonElement(parentStyleContext,
+                                  nsCSSAnonBoxes::mozOtherNonElement);
       SetStyleContextWithoutNotification(newSC);
     }
   }
@@ -80,7 +83,9 @@ void
 nsFirstLetterFrame::SetInitialChildList(ChildListID  aListID,
                                         nsFrameList& aChildList)
 {
-  RestyleManager* restyleManager = PresContext()->RestyleManager();
+  MOZ_ASSERT(aListID == kPrincipalList, "Principal child list is the only "
+             "list that nsFirstLetterFrame should set via this function");
+  RestyleManagerHandle restyleManager = PresContext()->RestyleManager();
 
   for (nsFrameList::Enumerator e(aChildList); !e.AtEnd(); e.Next()) {
     NS_ASSERTION(e.get()->GetParent() == this, "Unexpected parent");
@@ -164,6 +169,7 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
                            const nsHTMLReflowState& aReflowState,
                            nsReflowStatus&          aReflowStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsFirstLetterFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aReflowStatus);
 
@@ -199,12 +205,12 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
     ll.BeginLineReflow(bp.IStart(wm), bp.BStart(wm),
                        availSize.ISize(wm), NS_UNCONSTRAINEDSIZE,
                        false, true, kidWritingMode,
-                       aReflowState.AvailableWidth());
+                       nsSize(aReflowState.AvailableWidth(),
+                              aReflowState.AvailableHeight()));
     rs.mLineLayout = &ll;
     ll.SetInFirstLetter(true);
     ll.SetFirstLetterStyleOK(true);
 
-    kid->WillReflow(aPresContext);
     kid->Reflow(aPresContext, kidMetrics, rs, aReflowStatus);
 
     ll.EndLineReflow();
@@ -253,8 +259,7 @@ nsFirstLetterFrame::Reflow(nsPresContext*          aPresContext,
     aMetrics.ISize(lineWM) = ll->EndSpan(this) + bp.IStartEnd(wm);
     ll->SetInFirstLetter(false);
 
-    nsLayoutUtils::SetBSizeFromFontMetrics(this, aMetrics, aReflowState,
-                                           bp, lineWM, wm);
+    nsLayoutUtils::SetBSizeFromFontMetrics(this, aMetrics, bp, lineWM, wm);
   }
 
   if (!NS_INLINE_IS_BREAK_BEFORE(aReflowStatus)) {
@@ -326,8 +331,9 @@ nsFirstLetterFrame::CreateContinuationForFloatingParent(nsPresContext* aPresCont
   // doesn't have the first letter styling.
   nsStyleContext* parentSC = this->StyleContext()->GetParent();
   if (parentSC) {
-    nsRefPtr<nsStyleContext> newSC;
-    newSC = presShell->StyleSet()->ResolveStyleForNonElement(parentSC);
+    RefPtr<nsStyleContext> newSC;
+    newSC = presShell->StyleSet()->
+      ResolveStyleForNonElement(parentSC, nsCSSAnonBoxes::mozOtherNonElement);
     continuation->SetStyleContext(newSC);
     nsLayoutUtils::MarkDescendantsDirty(continuation);
   }
@@ -374,14 +380,15 @@ nsFirstLetterFrame::DrainOverflowFrames(nsPresContext* aPresContext)
   // are reflowed)
   nsIFrame* kid = mFrames.FirstChild();
   if (kid) {
-    nsRefPtr<nsStyleContext> sc;
+    RefPtr<nsStyleContext> sc;
     nsIContent* kidContent = kid->GetContent();
     if (kidContent) {
       NS_ASSERTION(kidContent->IsNodeOfType(nsINode::eTEXT),
                    "should contain only text nodes");
       nsStyleContext* parentSC = prevInFlow ? mStyleContext->GetParent() :
                                               mStyleContext;
-      sc = aPresContext->StyleSet()->ResolveStyleForNonElement(parentSC);
+      sc = aPresContext->StyleSet()->
+        ResolveStyleForNonElement(parentSC, nsCSSAnonBoxes::mozText);
       kid->SetStyleContext(sc);
       nsLayoutUtils::MarkDescendantsDirty(kid);
     }

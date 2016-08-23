@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,62 +10,97 @@
 #include "mozilla/dom/HeadersBinding.h"
 #include "mozilla/dom/InternalHeaders.h"
 #include "mozilla/dom/RequestBinding.h"
+#include "mozilla/LoadTainting.h"
 
 #include "nsIContentPolicy.h"
 #include "nsIInputStream.h"
 #include "nsISupportsImpl.h"
-
-class nsIDocument;
-class nsPIDOMWindow;
+#ifdef DEBUG
+#include "nsIURLParser.h"
+#include "nsNetCID.h"
+#include "nsServiceManagerUtils.h"
+#endif
 
 namespace mozilla {
 namespace dom {
 
-class FetchBodyStream;
+/*
+ * The mapping of RequestContext and nsContentPolicyType is currently as the
+ * following.  Note that this mapping is not perfect yet (see the TODO comments
+ * below for examples).
+ *
+ * RequestContext    | nsContentPolicyType
+ * ------------------+--------------------
+ * audio             | TYPE_INTERNAL_AUDIO
+ * beacon            | TYPE_BEACON
+ * cspreport         | TYPE_CSP_REPORT
+ * download          |
+ * embed             | TYPE_INTERNAL_EMBED
+ * eventsource       |
+ * favicon           |
+ * fetch             | TYPE_FETCH
+ * font              | TYPE_FONT
+ * form              |
+ * frame             | TYPE_INTERNAL_FRAME
+ * hyperlink         |
+ * iframe            | TYPE_INTERNAL_IFRAME
+ * image             | TYPE_INTERNAL_IMAGE, TYPE_INTERNAL_IMAGE_PRELOAD
+ * imageset          | TYPE_IMAGESET
+ * import            | Not supported by Gecko
+ * internal          | TYPE_DOCUMENT, TYPE_XBL, TYPE_OTHER
+ * location          |
+ * manifest          | TYPE_WEB_MANIFEST
+ * object            | TYPE_INTERNAL_OBJECT
+ * ping              | TYPE_PING
+ * plugin            | TYPE_OBJECT_SUBREQUEST
+ * prefetch          |
+ * script            | TYPE_INTERNAL_SCRIPT, TYPE_INTERNAL_SCRIPT_PRELOAD
+ * sharedworker      | TYPE_INTERNAL_SHARED_WORKER
+ * subresource       | Not supported by Gecko
+ * style             | TYPE_INTERNAL_STYLESHEET, TYPE_INTERNAL_STYLESHEET_PRELOAD
+ * track             | TYPE_INTERNAL_TRACK
+ * video             | TYPE_INTERNAL_VIDEO
+ * worker            | TYPE_INTERNAL_WORKER
+ * xmlhttprequest    | TYPE_INTERNAL_XMLHTTPREQUEST
+ * eventsource       | TYPE_INTERNAL_EVENTSOURCE
+ * xslt              | TYPE_XSLT
+ *
+ * TODO: Figure out if TYPE_REFRESH maps to anything useful
+ * TODO: Figure out if TYPE_DTD maps to anything useful
+ * TODO: Figure out if TYPE_WEBSOCKET maps to anything useful
+ * TODO: Add a content type for prefetch
+ * TODO: Use the content type for manifest when it becomes available
+ * TODO: Add a content type for location
+ * TODO: Add a content type for hyperlink
+ * TODO: Add a content type for form
+ * TODO: Add a content type for favicon
+ * TODO: Add a content type for download
+ */
+
 class Request;
 
-class InternalRequest MOZ_FINAL
+#define kFETCH_CLIENT_REFERRER_STR "about:client"
+
+class InternalRequest final
 {
   friend class Request;
 
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(InternalRequest)
 
-  enum ContextFrameType
-  {
-    FRAMETYPE_AUXILIARY = 0,
-    FRAMETYPE_TOP_LEVEL,
-    FRAMETYPE_NESTED,
-    FRAMETYPE_NONE,
-  };
-
-  // Since referrer type can be none, client or a URL.
-  enum ReferrerType
-  {
-    REFERRER_NONE = 0,
-    REFERRER_CLIENT,
-    REFERRER_URL,
-  };
-
-  enum ResponseTainting
-  {
-    RESPONSETAINT_BASIC,
-    RESPONSETAINT_CORS,
-    RESPONSETAINT_OPAQUE,
-  };
-
-  explicit InternalRequest()
+  InternalRequest()
     : mMethod("GET")
     , mHeaders(new InternalHeaders(HeadersGuardEnum::None))
-    , mContextFrameType(FRAMETYPE_NONE)
-    , mReferrerType(REFERRER_CLIENT)
+    , mContentPolicyType(nsIContentPolicy::TYPE_FETCH)
+    , mReferrer(NS_LITERAL_STRING(kFETCH_CLIENT_REFERRER_STR))
+    , mReferrerPolicy(ReferrerPolicy::_empty)
     , mMode(RequestMode::No_cors)
     , mCredentialsMode(RequestCredentials::Omit)
-    , mResponseTainting(RESPONSETAINT_BASIC)
-    , mRedirectCount(0)
+    , mResponseTainting(LoadTainting::Basic)
+    , mCacheMode(RequestCache::Default)
+    , mRedirectMode(RequestRedirect::Follow)
     , mAuthenticationFlag(false)
     , mForceOriginHeader(false)
-    , mManualRedirect(false)
     , mPreserveContentCodings(false)
       // FIXME(nsm): This should be false by default, but will lead to the
       // algorithm never loading data: URLs right now. See Bug 1018872 about
@@ -78,32 +114,46 @@ public:
   {
   }
 
-  explicit InternalRequest(const InternalRequest& aOther)
-    : mMethod(aOther.mMethod)
-    , mURL(aOther.mURL)
-    , mHeaders(aOther.mHeaders)
-    , mBodyStream(aOther.mBodyStream)
-    , mContext(aOther.mContext)
-    , mOrigin(aOther.mOrigin)
-    , mContextFrameType(aOther.mContextFrameType)
-    , mReferrerType(aOther.mReferrerType)
-    , mReferrerURL(aOther.mReferrerURL)
-    , mMode(aOther.mMode)
-    , mCredentialsMode(aOther.mCredentialsMode)
-    , mResponseTainting(aOther.mResponseTainting)
-    , mRedirectCount(aOther.mRedirectCount)
-    , mAuthenticationFlag(aOther.mAuthenticationFlag)
-    , mForceOriginHeader(aOther.mForceOriginHeader)
-    , mManualRedirect(aOther.mManualRedirect)
-    , mPreserveContentCodings(aOther.mPreserveContentCodings)
-    , mSameOriginDataURL(aOther.mSameOriginDataURL)
-    , mSandboxedStorageAreaURLs(aOther.mSandboxedStorageAreaURLs)
-    , mSkipServiceWorker(aOther.mSkipServiceWorker)
-    , mSynchronous(aOther.mSynchronous)
-    , mUnsafeRequest(aOther.mUnsafeRequest)
-    , mUseURLCredentials(aOther.mUseURLCredentials)
+  InternalRequest(const nsACString& aURL,
+                  const nsACString& aMethod,
+                  already_AddRefed<InternalHeaders> aHeaders,
+                  RequestCache aCacheMode,
+                  RequestMode aMode,
+                  RequestRedirect aRequestRedirect,
+                  RequestCredentials aRequestCredentials,
+                  const nsAString& aReferrer,
+                  ReferrerPolicy aReferrerPolicy,
+                  nsContentPolicyType aContentPolicyType)
+    : mMethod(aMethod)
+    , mURL(aURL)
+    , mHeaders(aHeaders)
+    , mContentPolicyType(aContentPolicyType)
+    , mReferrer(aReferrer)
+    , mReferrerPolicy(aReferrerPolicy)
+    , mMode(aMode)
+    , mCredentialsMode(aRequestCredentials)
+    , mResponseTainting(LoadTainting::Basic)
+    , mCacheMode(aCacheMode)
+    , mRedirectMode(aRequestRedirect)
+    , mAuthenticationFlag(false)
+    , mForceOriginHeader(false)
+    , mPreserveContentCodings(false)
+      // FIXME See the above comment in the default constructor.
+    , mSameOriginDataURL(true)
+    , mSkipServiceWorker(false)
+    , mSynchronous(false)
+    , mUnsafeRequest(false)
+    , mUseURLCredentials(false)
   {
+    // Normally we strip the fragment from the URL in Request::Constructor.
+    // If internal code is directly constructing this object they must
+    // strip the fragment first.  Since these should be well formed URLs we
+    // can use a simple check for a fragment here.  The full parser is
+    // difficult to use off the main thread.
+    MOZ_ASSERT(mURL.Find(NS_LITERAL_CSTRING("#")) == kNotFound);
   }
+
+  already_AddRefed<InternalRequest> Clone();
 
   void
   GetMethod(nsCString& aMethod) const
@@ -131,38 +181,81 @@ public:
     aURL.Assign(mURL);
   }
 
-  bool
-  ReferrerIsNone() const
+  void
+  SetURL(const nsACString& aURL)
   {
-    return mReferrerType == REFERRER_NONE;
-  }
-
-  bool
-  ReferrerIsURL() const
-  {
-    return mReferrerType == REFERRER_URL;
-  }
-
-  bool
-  ReferrerIsClient() const
-  {
-    return mReferrerType == REFERRER_CLIENT;
-  }
-
-  nsCString
-  ReferrerAsURL() const
-  {
-    MOZ_ASSERT(ReferrerIsURL());
-    return mReferrerURL;
+    mURL.Assign(aURL);
   }
 
   void
-  SetReferrer(const nsACString& aReferrer)
+  GetReferrer(nsAString& aReferrer) const
   {
-    // May be removed later.
-    MOZ_ASSERT(!ReferrerIsNone());
-    mReferrerType = REFERRER_URL;
-    mReferrerURL.Assign(aReferrer);
+    aReferrer.Assign(mReferrer);
+  }
+
+  void
+  SetReferrer(const nsAString& aReferrer)
+  {
+#ifdef DEBUG
+    bool validReferrer = false;
+    if (aReferrer.IsEmpty() ||
+        aReferrer.EqualsLiteral(kFETCH_CLIENT_REFERRER_STR)) {
+      validReferrer = true;
+    } else {
+      nsCOMPtr<nsIURLParser> parser = do_GetService(NS_STDURLPARSER_CONTRACTID);
+      if (!parser) {
+        NS_WARNING("Could not get parser to validate URL!");
+      } else {
+        uint32_t schemePos;
+        int32_t schemeLen;
+        uint32_t authorityPos;
+        int32_t authorityLen;
+        uint32_t pathPos;
+        int32_t pathLen;
+
+        NS_ConvertUTF16toUTF8 ref(aReferrer);
+        nsresult rv = parser->ParseURL(ref.get(), ref.Length(),
+                                       &schemePos, &schemeLen,
+                                       &authorityPos, &authorityLen,
+                                       &pathPos, &pathLen);
+        if (NS_FAILED(rv)) {
+          NS_WARNING("Invalid referrer URL!");
+        } else if (schemeLen < 0 || authorityLen < 0) {
+          NS_WARNING("Invalid referrer URL!");
+        } else {
+          validReferrer = true;
+        }
+      }
+    }
+
+    MOZ_ASSERT(validReferrer);
+#endif
+
+    mReferrer.Assign(aReferrer);
+  }
+
+  ReferrerPolicy
+  ReferrerPolicy_() const
+  {
+    return mReferrerPolicy;
+  }
+
+  void
+  SetReferrerPolicy(ReferrerPolicy aReferrerPolicy)
+  {
+    mReferrerPolicy = aReferrerPolicy;
+  }
+
+  bool
+  SkipServiceWorker() const
+  {
+    return mSkipServiceWorker;
+  }
+
+  void
+  SetSkipServiceWorker()
+  {
+    mSkipServiceWorker = true;
   }
 
   bool
@@ -183,34 +276,84 @@ public:
     mMode = aMode;
   }
 
+  RequestCredentials
+  GetCredentialsMode() const
+  {
+    return mCredentialsMode;
+  }
+
   void
   SetCredentialsMode(RequestCredentials aCredentialsMode)
   {
     mCredentialsMode = aCredentialsMode;
   }
 
-  ResponseTainting
+  LoadTainting
   GetResponseTainting() const
   {
     return mResponseTainting;
   }
 
   void
-  SetResponseTainting(ResponseTainting aTainting)
+  MaybeIncreaseResponseTainting(LoadTainting aTainting)
   {
-    mResponseTainting = aTainting;
+    if (aTainting > mResponseTainting) {
+      mResponseTainting = aTainting;
+    }
+  }
+
+  RequestCache
+  GetCacheMode() const
+  {
+    return mCacheMode;
+  }
+
+  void
+  SetCacheMode(RequestCache aCacheMode)
+  {
+    mCacheMode = aCacheMode;
+  }
+
+  RequestRedirect
+  GetRedirectMode() const
+  {
+    return mRedirectMode;
+  }
+
+  void
+  SetRedirectMode(RequestRedirect aRedirectMode)
+  {
+    mRedirectMode = aRedirectMode;
   }
 
   nsContentPolicyType
-  GetContext() const
+  ContentPolicyType() const
   {
-    return mContext;
+    return mContentPolicyType;
+  }
+
+  void
+  SetContentPolicyType(nsContentPolicyType aContentPolicyType);
+
+  void
+  OverrideContentPolicyType(nsContentPolicyType aContentPolicyType);
+
+  RequestContext
+  Context() const
+  {
+    return MapContentPolicyTypeToRequestContext(mContentPolicyType);
   }
 
   bool
   UnsafeRequest() const
   {
     return mUnsafeRequest;
+  }
+
+  void
+  SetUnsafeRequest()
+  {
+    mUnsafeRequest = true;
   }
 
   InternalHeaders*
@@ -225,12 +368,6 @@ public:
     return mForceOriginHeader;
   }
 
-  void
-  GetOrigin(nsCString& aOrigin) const
-  {
-    aOrigin.Assign(mOrigin);
-  }
-
   bool
   SameOriginDataURL() const
   {
@@ -238,8 +375,16 @@ public:
   }
 
   void
+  UnsetSameOriginDataURL()
+  {
+    mSameOriginDataURL = false;
+  }
+
+  void
   SetBody(nsIInputStream* aStream)
   {
+    // A request's body may not be reset once set.
+    MOZ_ASSERT_IF(aStream, !mBodyStream);
     mBodyStream = aStream;
   }
 
@@ -256,48 +401,99 @@ public:
   already_AddRefed<InternalRequest>
   GetRequestConstructorCopy(nsIGlobalObject* aGlobal, ErrorResult& aRv) const;
 
-private:
-  ~InternalRequest();
-
-  void
-  SetURL(const nsACString& aURL)
+  bool
+  WasCreatedByFetchEvent() const
   {
-    mURL.Assign(aURL);
+    return mCreatedByFetchEvent;
   }
 
+  void
+  SetCreatedByFetchEvent()
+  {
+    mCreatedByFetchEvent = true;
+  }
+
+  void
+  ClearCreatedByFetchEvent()
+  {
+    mCreatedByFetchEvent = false;
+  }
+
+  bool
+  IsNavigationRequest() const;
+
+  bool
+  IsWorkerRequest() const;
+
+  bool
+  IsClientRequest() const;
+
+  void
+  MaybeSkipCacheIfPerformingRevalidation();
+
+  bool
+  IsContentPolicyTypeOverridden() const
+  {
+    return mContentPolicyTypeOverridden;
+  }
+
+  static RequestMode
+  MapChannelToRequestMode(nsIChannel* aChannel);
+
+  static RequestCredentials
+  MapChannelToRequestCredentials(nsIChannel* aChannel);
+
+private:
+  // Does not copy mBodyStream.  Use fallible Clone() for complete copy.
+  explicit InternalRequest(const InternalRequest& aOther);
+
+  ~InternalRequest();
+
+  static RequestContext
+  MapContentPolicyTypeToRequestContext(nsContentPolicyType aContentPolicyType);
+
+  static bool
+  IsNavigationContentPolicy(nsContentPolicyType aContentPolicyType);
+
+  static bool
+  IsWorkerContentPolicy(nsContentPolicyType aContentPolicyType);
+
   nsCString mMethod;
+  // mURL always stores the url with the ref stripped
   nsCString mURL;
-  nsRefPtr<InternalHeaders> mHeaders;
+  RefPtr<InternalHeaders> mHeaders;
   nsCOMPtr<nsIInputStream> mBodyStream;
 
-  // nsContentPolicyType does not cover the complete set defined in the spec,
-  // but it is a good start.
-  nsContentPolicyType mContext;
+  nsContentPolicyType mContentPolicyType;
 
-  nsCString mOrigin;
-
-  ContextFrameType mContextFrameType;
-  ReferrerType mReferrerType;
-
-  // When mReferrerType is REFERRER_URL.
-  nsCString mReferrerURL;
+  // Empty string: no-referrer
+  // "about:client": client (default)
+  // URL: an URL
+  nsString mReferrer;
+  ReferrerPolicy mReferrerPolicy;
 
   RequestMode mMode;
   RequestCredentials mCredentialsMode;
-  ResponseTainting mResponseTainting;
-
-  uint32_t mRedirectCount;
+  LoadTainting mResponseTainting;
+  RequestCache mCacheMode;
+  RequestRedirect mRedirectMode;
 
   bool mAuthenticationFlag;
   bool mForceOriginHeader;
-  bool mManualRedirect;
   bool mPreserveContentCodings;
   bool mSameOriginDataURL;
-  bool mSandboxedStorageAreaURLs;
   bool mSkipServiceWorker;
   bool mSynchronous;
   bool mUnsafeRequest;
   bool mUseURLCredentials;
+  // This is only set when a Request object is created by a fetch event.  We
+  // use it to check if Service Workers are simply fetching intercepted Request
+  // objects without modifying them.
+  bool mCreatedByFetchEvent = false;
+  // This is only set when Request.overrideContentPolicyType() has been set.
+  // It is illegal to pass such a Request object to a fetch() method unless
+  // if the caller has chrome privileges.
+  bool mContentPolicyTypeOverridden = false;
 };
 
 } // namespace dom

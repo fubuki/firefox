@@ -10,7 +10,7 @@
 #include "TextLeafAccessible.h"
 #include "TextUpdater.h"
 
-#include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/Telemetry.h"
 
@@ -52,8 +52,18 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(NotificationController)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mHangingChildDocuments)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mContentInsertions)
+  for (auto it = tmp->mContentInsertions.ConstIter(); !it.Done(); it.Next()) {
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mContentInsertions key");
+    cb.NoteXPCOMChild(it.Key());
+    nsTArray<nsCOMPtr<nsIContent>>* list = it.UserData();
+    for (uint32_t i = 0; i < list->Length(); i++) {
+      NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb,
+                                         "mContentInsertions value item");
+      cb.NoteXPCOMChild(list->ElementAt(i));
+    }
+  }
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEvents)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRelocations)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(NotificationController, AddRef)
@@ -86,6 +96,18 @@ NotificationController::Shutdown()
   mContentInsertions.Clear();
   mNotifications.Clear();
   mEvents.Clear();
+  mRelocations.Clear();
+  mEventTree.Clear();
+}
+
+EventTree*
+NotificationController::QueueMutation(Accessible* aContainer)
+{
+  EventTree* tree = mEventTree.FindOrInsert(aContainer);
+  if (tree) {
+    ScheduleProcessing();
+  }
+  return tree;
 }
 
 void
@@ -101,16 +123,26 @@ NotificationController::ScheduleContentInsertion(Accessible* aContainer,
                                                  nsIContent* aStartChildNode,
                                                  nsIContent* aEndChildNode)
 {
-  nsRefPtr<ContentInsertion> insertion = new ContentInsertion(mDocument,
-                                                              aContainer);
-  if (insertion && insertion->InitChildList(aStartChildNode, aEndChildNode) &&
-      mContentInsertions.AppendElement(insertion)) {
+  nsTArray<nsCOMPtr<nsIContent>>* list =
+    mContentInsertions.LookupOrAdd(aContainer);
+
+  bool needsProcessing = false;
+  nsIContent* node = aStartChildNode;
+  while (node != aEndChildNode) {
+    // Notification triggers for content insertion even if no content was
+    // actually inserted, check if the given content has a frame to discard
+    // this case early.
+    if (node->GetPrimaryFrame()) {
+      if (list->AppendElement(node))
+        needsProcessing = true;
+    }
+    node = node->GetNextSibling();
+  }
+
+  if (needsProcessing) {
     ScheduleProcessing();
   }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// NotificationCollector: protected
 
 void
 NotificationController::ScheduleProcessing()
@@ -123,12 +155,15 @@ NotificationController::ScheduleProcessing()
   }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// NotificationCollector: protected
+
 bool
 NotificationController::IsUpdatePending()
 {
   return mPresShell->IsLayoutFlushObserver() ||
     mObservingState == eRefreshProcessingForUpdate ||
-    mContentInsertions.Length() != 0 || mNotifications.Length() != 0 ||
+    mContentInsertions.Count() != 0 || mNotifications.Length() != 0 ||
     mTextHash.Count() != 0 ||
     !mDocument->HasLoadState(DocAccessible::eTreeConstructed);
 }
@@ -139,6 +174,7 @@ NotificationController::IsUpdatePending()
 void
 NotificationController::WillRefresh(mozilla::TimeStamp aTime)
 {
+  PROFILER_LABEL_FUNC(js::ProfileEntry::Category::OTHER);
   Telemetry::AutoTimer<Telemetry::A11Y_UPDATE_TIME> updateTimer;
 
   // If the document accessible that notification collector was created for is
@@ -175,7 +211,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
 
     mDocument->DoInitialUpdate();
 
-    NS_ASSERTION(mContentInsertions.Length() == 0,
+    NS_ASSERTION(mContentInsertions.Count() == 0,
                  "Pending content insertions while initial accessible tree isn't created!");
   }
 
@@ -193,23 +229,102 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   // document accessible.
 
   // Process only currently queued content inserted notifications.
-  nsTArray<nsRefPtr<ContentInsertion> > contentInsertions;
-  contentInsertions.SwapElements(mContentInsertions);
-
-  uint32_t insertionCount = contentInsertions.Length();
-  for (uint32_t idx = 0; idx < insertionCount; idx++) {
-    contentInsertions[idx]->Process();
-    if (!mDocument)
+  for (auto iter = mContentInsertions.ConstIter(); !iter.Done(); iter.Next()) {
+    mDocument->ProcessContentInserted(iter.Key(), iter.UserData());
+    if (!mDocument) {
       return;
+    }
   }
+  mContentInsertions.Clear();
 
   // Process rendered text change notifications.
-  mTextHash.EnumerateEntries(TextEnumerator, mDocument);
+  for (auto iter = mTextHash.Iter(); !iter.Done(); iter.Next()) {
+    nsCOMPtrHashKey<nsIContent>* entry = iter.Get();
+    nsIContent* textNode = entry->GetKey();
+    Accessible* textAcc = mDocument->GetAccessible(textNode);
+
+    // If the text node is not in tree or doesn't have frame then this case should
+    // have been handled already by content removal notifications.
+    nsINode* containerNode = textNode->GetParentNode();
+    if (!containerNode) {
+      NS_ASSERTION(!textAcc,
+                   "Text node was removed but accessible is kept alive!");
+      continue;
+    }
+
+    nsIFrame* textFrame = textNode->GetPrimaryFrame();
+    if (!textFrame) {
+      NS_ASSERTION(!textAcc,
+                   "Text node isn't rendered but accessible is kept alive!");
+      continue;
+    }
+
+    nsIContent* containerElm = containerNode->IsElement() ?
+      containerNode->AsElement() : nullptr;
+
+    nsIFrame::RenderedText text = textFrame->GetRenderedText(0,
+        UINT32_MAX, nsIFrame::TextOffsetType::OFFSETS_IN_CONTENT_TEXT,
+        nsIFrame::TrailingWhitespace::DONT_TRIM_TRAILING_WHITESPACE);
+
+    // Remove text accessible if rendered text is empty.
+    if (textAcc) {
+      if (text.mString.IsEmpty()) {
+  #ifdef A11Y_LOG
+        if (logging::IsEnabled(logging::eTree | logging::eText)) {
+          logging::MsgBegin("TREE", "text node lost its content");
+          logging::Node("container", containerElm);
+          logging::Node("content", textNode);
+          logging::MsgEnd();
+        }
+  #endif
+
+        mDocument->ContentRemoved(containerElm, textNode);
+        continue;
+      }
+
+      // Update text of the accessible and fire text change events.
+  #ifdef A11Y_LOG
+      if (logging::IsEnabled(logging::eText)) {
+        logging::MsgBegin("TEXT", "text may be changed");
+        logging::Node("container", containerElm);
+        logging::Node("content", textNode);
+        logging::MsgEntry("old text '%s'",
+                          NS_ConvertUTF16toUTF8(textAcc->AsTextLeaf()->Text()).get());
+        logging::MsgEntry("new text: '%s'",
+                          NS_ConvertUTF16toUTF8(text.mString).get());
+        logging::MsgEnd();
+      }
+  #endif
+
+      TextUpdater::Run(mDocument, textAcc->AsTextLeaf(), text.mString);
+      continue;
+    }
+
+    // Append an accessible if rendered text is not empty.
+    if (!text.mString.IsEmpty()) {
+  #ifdef A11Y_LOG
+      if (logging::IsEnabled(logging::eTree | logging::eText)) {
+        logging::MsgBegin("TREE", "text node gains new content");
+        logging::Node("container", containerElm);
+        logging::Node("content", textNode);
+        logging::MsgEnd();
+      }
+  #endif
+
+      // Make sure the text node is in accessible document still.
+      Accessible* container = mDocument->AccessibleOrTrueContainer(containerNode);
+      MOZ_ASSERT(container,
+                 "Text node having rendered text hasn't accessible document!");
+      if (container) {
+        mDocument->ProcessContentInserted(container, textNode);
+      }
+    }
+  }
   mTextHash.Clear();
 
   // Bind hanging child documents.
   uint32_t hangingDocCnt = mHangingChildDocuments.Length();
-  nsTArray<nsRefPtr<DocAccessible>> newChildDocs;
+  nsTArray<RefPtr<DocAccessible>> newChildDocs;
   for (uint32_t idx = 0; idx < hangingDocCnt; idx++) {
     DocAccessible* childDoc = mHangingChildDocuments[idx];
     if (childDoc->IsDefunct())
@@ -255,7 +370,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   }
 
   // Process only currently queued generic notifications.
-  nsTArray < nsRefPtr<Notification> > notifications;
+  nsTArray < RefPtr<Notification> > notifications;
   notifications.SwapElements(mNotifications);
 
   uint32_t notificationCount = notifications.Length();
@@ -269,10 +384,24 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   // modification are done.
   mDocument->ProcessInvalidationList();
 
+  // We cannot rely on DOM tree to keep aria-owns relations updated. Make
+  // a validation to remove dead links.
+  mDocument->ValidateARIAOwned();
+
+  // Process relocation list.
+  for (uint32_t idx = 0; idx < mRelocations.Length(); idx++) {
+    if (mRelocations[idx]->IsInDocument()) {
+      mDocument->DoARIAOwnsRelocation(mRelocations[idx]);
+    }
+  }
+  mRelocations.Clear();
+
   // If a generic notification occurs after this point then we may be allowed to
   // process it synchronously.  However we do not want to reenter if fireing
   // events causes script to run.
   mObservingState = eRefreshProcessing;
+
+  mEventTree.Process();
 
   ProcessEventQueue();
 
@@ -280,13 +409,24 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
     size_t newDocCount = newChildDocs.Length();
     for (size_t i = 0; i < newDocCount; i++) {
       DocAccessible* childDoc = newChildDocs[i];
-      DocAccessibleChild* ipcDoc = new DocAccessibleChild(childDoc);
-      childDoc->SetIPCDoc(ipcDoc);
-      auto contentChild = dom::ContentChild::GetSingleton();
+      Accessible* parent = childDoc->Parent();
       DocAccessibleChild* parentIPCDoc = mDocument->IPCDoc();
-      uint64_t id = reinterpret_cast<uintptr_t>(childDoc->Parent()->UniqueID());
+      uint64_t id = reinterpret_cast<uintptr_t>(parent->UniqueID());
       MOZ_ASSERT(id);
-      contentChild->SendPDocAccessibleConstructor(ipcDoc, parentIPCDoc, id);
+      DocAccessibleChild* ipcDoc = childDoc->IPCDoc();
+      if (ipcDoc) {
+        parentIPCDoc->SendBindChildDoc(ipcDoc, id);
+        continue;
+      }
+
+      ipcDoc = new DocAccessibleChild(childDoc);
+      childDoc->SetIPCDoc(ipcDoc);
+      nsCOMPtr<nsITabChild> tabChild =
+        do_GetInterface(mDocument->DocumentNode()->GetDocShell());
+      if (tabChild) {
+        static_cast<TabChild*>(tabChild.get())->
+          SendPDocAccessibleConstructor(ipcDoc, parentIPCDoc, id);
+      }
     }
   }
 
@@ -296,7 +436,7 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
 
   // Stop further processing if there are no new notifications of any kind or
   // events and document load is processed.
-  if (mContentInsertions.IsEmpty() && mNotifications.IsEmpty() &&
+  if (mContentInsertions.Count() == 0 && mNotifications.IsEmpty() &&
       mEvents.IsEmpty() && mTextHash.Count() == 0 &&
       mHangingChildDocuments.IsEmpty() &&
       mDocument->HasLoadState(DocAccessible::eCompletelyLoaded) &&
@@ -304,146 +444,3 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
     mObservingState = eNotObservingRefresh;
   }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// Notification controller: text leaf accessible text update
-
-PLDHashOperator
-NotificationController::TextEnumerator(nsCOMPtrHashKey<nsIContent>* aEntry,
-                                       void* aUserArg)
-{
-  DocAccessible* document = static_cast<DocAccessible*>(aUserArg);
-  nsIContent* textNode = aEntry->GetKey();
-  Accessible* textAcc = document->GetAccessible(textNode);
-
-  // If the text node is not in tree or doesn't have frame then this case should
-  // have been handled already by content removal notifications.
-  nsINode* containerNode = textNode->GetParentNode();
-  if (!containerNode) {
-    NS_ASSERTION(!textAcc,
-                 "Text node was removed but accessible is kept alive!");
-    return PL_DHASH_NEXT;
-  }
-
-  nsIFrame* textFrame = textNode->GetPrimaryFrame();
-  if (!textFrame) {
-    NS_ASSERTION(!textAcc,
-                 "Text node isn't rendered but accessible is kept alive!");
-    return PL_DHASH_NEXT;
-  }
-
-  nsIContent* containerElm = containerNode->IsElement() ?
-    containerNode->AsElement() : nullptr;
-
-  nsAutoString text;
-  textFrame->GetRenderedText(&text);
-
-  // Remove text accessible if rendered text is empty.
-  if (textAcc) {
-    if (text.IsEmpty()) {
-#ifdef A11Y_LOG
-      if (logging::IsEnabled(logging::eTree | logging::eText)) {
-        logging::MsgBegin("TREE", "text node lost its content");
-        logging::Node("container", containerElm);
-        logging::Node("content", textNode);
-        logging::MsgEnd();
-      }
-#endif
-
-      document->ContentRemoved(containerElm, textNode);
-      return PL_DHASH_NEXT;
-    }
-
-    // Update text of the accessible and fire text change events.
-#ifdef A11Y_LOG
-    if (logging::IsEnabled(logging::eText)) {
-      logging::MsgBegin("TEXT", "text may be changed");
-      logging::Node("container", containerElm);
-      logging::Node("content", textNode);
-      logging::MsgEntry("old text '%s'",
-                        NS_ConvertUTF16toUTF8(textAcc->AsTextLeaf()->Text()).get());
-      logging::MsgEntry("new text: '%s'",
-                        NS_ConvertUTF16toUTF8(text).get());
-      logging::MsgEnd();
-    }
-#endif
-
-    TextUpdater::Run(document, textAcc->AsTextLeaf(), text);
-    return PL_DHASH_NEXT;
-  }
-
-  // Append an accessible if rendered text is not empty.
-  if (!text.IsEmpty()) {
-#ifdef A11Y_LOG
-    if (logging::IsEnabled(logging::eTree | logging::eText)) {
-      logging::MsgBegin("TREE", "text node gains new content");
-      logging::Node("container", containerElm);
-      logging::Node("content", textNode);
-      logging::MsgEnd();
-    }
-#endif
-
-    // Make sure the text node is in accessible document still.
-    Accessible* container = document->GetAccessibleOrContainer(containerNode);
-    NS_ASSERTION(container,
-                 "Text node having rendered text hasn't accessible document!");
-    if (container) {
-      nsTArray<nsCOMPtr<nsIContent> > insertedContents;
-      insertedContents.AppendElement(textNode);
-      document->ProcessContentInserted(container, &insertedContents);
-    }
-  }
-
-  return PL_DHASH_NEXT;
-}
-
-
-////////////////////////////////////////////////////////////////////////////////
-// NotificationController: content inserted notification
-
-NotificationController::ContentInsertion::
-  ContentInsertion(DocAccessible* aDocument, Accessible* aContainer) :
-  mDocument(aDocument), mContainer(aContainer)
-{
-}
-
-bool
-NotificationController::ContentInsertion::
-  InitChildList(nsIContent* aStartChildNode, nsIContent* aEndChildNode)
-{
-  bool haveToUpdate = false;
-
-  nsIContent* node = aStartChildNode;
-  while (node != aEndChildNode) {
-    // Notification triggers for content insertion even if no content was
-    // actually inserted, check if the given content has a frame to discard
-    // this case early.
-    if (node->GetPrimaryFrame()) {
-      if (mInsertedContent.AppendElement(node))
-        haveToUpdate = true;
-    }
-
-    node = node->GetNextSibling();
-  }
-
-  return haveToUpdate;
-}
-
-NS_IMPL_CYCLE_COLLECTION(NotificationController::ContentInsertion,
-                         mContainer)
-
-NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(NotificationController::ContentInsertion,
-                                     AddRef)
-NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(NotificationController::ContentInsertion,
-                                       Release)
-
-void
-NotificationController::ContentInsertion::Process()
-{
-  mDocument->ProcessContentInserted(mContainer, &mInsertedContent);
-
-  mDocument = nullptr;
-  mContainer = nullptr;
-  mInsertedContent.Clear();
-}
-

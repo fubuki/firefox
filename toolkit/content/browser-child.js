@@ -2,10 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let Cu = Components.utils;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import("resource://gre/modules/RemoteAddonsChild.jsm");
@@ -14,29 +15,20 @@ Cu.import("resource://gre/modules/Timer.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PageThumbUtils",
   "resource://gre/modules/PageThumbUtils.jsm");
 
-#ifdef MOZ_CRASHREPORTER
-XPCOMUtils.defineLazyServiceGetter(this, "CrashReporter",
-                                   "@mozilla.org/xre/app-info;1",
-                                   "nsICrashReporter");
-#endif
+if (AppConstants.MOZ_CRASHREPORTER) {
+  XPCOMUtils.defineLazyServiceGetter(this, "CrashReporter",
+                                     "@mozilla.org/xre/app-info;1",
+                                     "nsICrashReporter");
+}
 
-let FocusSyncHandler = {
-  init: function() {
-    sendAsyncMessage("SetSyncHandler", {}, {handler: this});
-  },
+function makeInputStream(aString) {
+  let stream = Cc["@mozilla.org/io/string-input-stream;1"].
+               createInstance(Ci.nsISupportsCString);
+  stream.data = aString;
+  return stream; // XPConnect will QI this to nsIInputStream for us.
+}
 
-  getFocusedElementAndWindow: function() {
-    let fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
-
-    let focusedWindow = {};
-    let elt = fm.getFocusedElementForWindow(content, true, focusedWindow);
-    return [elt, focusedWindow.value];
-  },
-};
-
-FocusSyncHandler.init();
-
-let WebProgressListener = {
+var WebProgressListener = {
   init: function() {
     this._filter = Cc["@mozilla.org/appshell/component/browser-status-filter;1"]
                      .createInstance(Ci.nsIWebProgress);
@@ -63,11 +55,26 @@ let WebProgressListener = {
   },
 
   _setupJSON: function setupJSON(aWebProgress, aRequest) {
+    let innerWindowID = null;
     if (aWebProgress) {
+      let domWindowID = null;
+      try {
+        let utils = aWebProgress.DOMWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                                .getInterface(Ci.nsIDOMWindowUtils);
+        domWindowID = utils.outerWindowID;
+        innerWindowID = utils.currentInnerWindowID;
+      } catch (e) {
+        // If nsDocShell::Destroy has already been called, then we'll
+        // get NS_NOINTERFACE when trying to get the DOM window.
+        // If there is no current inner window, we'll get
+        // NS_ERROR_NOT_AVAILABLE.
+      }
+
       aWebProgress = {
         isTopLevel: aWebProgress.isTopLevel,
         isLoadingDocument: aWebProgress.isLoadingDocument,
-        loadType: aWebProgress.loadType
+        loadType: aWebProgress.loadType,
+        DOMWindowID: domWindowID
       };
     }
 
@@ -75,11 +82,12 @@ let WebProgressListener = {
       webProgress: aWebProgress || null,
       requestURI: this._requestSpec(aRequest, "URI"),
       originalRequestURI: this._requestSpec(aRequest, "originalURI"),
-      documentContentType: content.document && content.document.contentType
+      documentContentType: content.document && content.document.contentType,
+      innerWindowID,
     };
   },
 
-  _setupObjects: function setupObjects(aWebProgress) {
+  _setupObjects: function setupObjects(aWebProgress, aRequest) {
     let domWindow;
     try {
       domWindow = aWebProgress && aWebProgress.DOMWindow;
@@ -93,30 +101,51 @@ let WebProgressListener = {
     return {
       contentWindow: content,
       // DOMWindow is not necessarily the content-window with subframes.
-      DOMWindow: domWindow
+      DOMWindow: domWindow,
+      webProgress: aWebProgress,
+      request: aRequest,
     };
+  },
+
+  _send(name, data, objects) {
+    if (RemoteAddonsChild.useSyncWebProgress) {
+      sendRpcMessage(name, data, objects);
+    } else {
+      sendAsyncMessage(name, data, objects);
+    }
   },
 
   onStateChange: function onStateChange(aWebProgress, aRequest, aStateFlags, aStatus) {
     let json = this._setupJSON(aWebProgress, aRequest);
-    let objects = this._setupObjects(aWebProgress);
+    let objects = this._setupObjects(aWebProgress, aRequest);
 
     json.stateFlags = aStateFlags;
     json.status = aStatus;
 
-    sendAsyncMessage("Content:StateChange", json, objects);
+    // It's possible that this state change was triggered by
+    // loading an internal error page, for which the parent
+    // will want to know some details, so we'll update it with
+    // the documentURI.
+    if (aWebProgress && aWebProgress.isTopLevel) {
+      json.documentURI = content.document.documentURIObject.spec;
+      json.charset = content.document.characterSet;
+      json.mayEnableCharacterEncodingMenu = docShell.mayEnableCharacterEncodingMenu;
+      json.inLoadURI = WebNavigation.inLoadURI;
+    }
+
+    this._send("Content:StateChange", json, objects);
   },
 
   onProgressChange: function onProgressChange(aWebProgress, aRequest, aCurSelf, aMaxSelf, aCurTotal, aMaxTotal) {
     let json = this._setupJSON(aWebProgress, aRequest);
-    let objects = this._setupObjects(aWebProgress);
+    let objects = this._setupObjects(aWebProgress, aRequest);
 
     json.curSelf = aCurSelf;
     json.maxSelf = aMaxSelf;
     json.curTotal = aCurTotal;
     json.maxTotal = aMaxTotal;
 
-    sendAsyncMessage("Content:ProgressChange", json, objects);
+    this._send("Content:ProgressChange", json, objects);
   },
 
   onProgressChange64: function onProgressChange(aWebProgress, aRequest, aCurSelf, aMaxSelf, aCurTotal, aMaxTotal) {
@@ -125,47 +154,64 @@ let WebProgressListener = {
 
   onLocationChange: function onLocationChange(aWebProgress, aRequest, aLocationURI, aFlags) {
     let json = this._setupJSON(aWebProgress, aRequest);
-    let objects = this._setupObjects(aWebProgress);
+    let objects = this._setupObjects(aWebProgress, aRequest);
 
     json.location = aLocationURI ? aLocationURI.spec : "";
     json.flags = aFlags;
 
     // These properties can change even for a sub-frame navigation.
-    json.canGoBack = docShell.canGoBack;
-    json.canGoForward = docShell.canGoForward;
+    let webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
+    json.canGoBack = webNav.canGoBack;
+    json.canGoForward = webNav.canGoForward;
 
     if (aWebProgress && aWebProgress.isTopLevel) {
       json.documentURI = content.document.documentURIObject.spec;
+      json.title = content.document.title;
       json.charset = content.document.characterSet;
       json.mayEnableCharacterEncodingMenu = docShell.mayEnableCharacterEncodingMenu;
       json.principal = content.document.nodePrincipal;
+      json.synthetic = content.document.mozSyntheticDocument;
+      json.inLoadURI = WebNavigation.inLoadURI;
+
+      if (AppConstants.MOZ_CRASHREPORTER && CrashReporter.enabled) {
+        let uri = aLocationURI.clone();
+        try {
+          // If the current URI contains a username/password, remove it.
+          uri.userPass = "";
+        } catch (ex) { /* Ignore failures on about: URIs. */ }
+        CrashReporter.annotateCrashReport("URL", uri.spec);
+      }
     }
 
-    sendAsyncMessage("Content:LocationChange", json, objects);
+    this._send("Content:LocationChange", json, objects);
   },
 
   onStatusChange: function onStatusChange(aWebProgress, aRequest, aStatus, aMessage) {
     let json = this._setupJSON(aWebProgress, aRequest);
-    let objects = this._setupObjects(aWebProgress);
+    let objects = this._setupObjects(aWebProgress, aRequest);
 
     json.status = aStatus;
     json.message = aMessage;
 
-    sendAsyncMessage("Content:StatusChange", json, objects);
+    this._send("Content:StatusChange", json, objects);
   },
 
   onSecurityChange: function onSecurityChange(aWebProgress, aRequest, aState) {
     let json = this._setupJSON(aWebProgress, aRequest);
-    let objects = this._setupObjects(aWebProgress);
+    let objects = this._setupObjects(aWebProgress, aRequest);
 
     json.state = aState;
     json.status = SecurityUI.getSSLStatusAsString();
 
-    sendAsyncMessage("Content:SecurityChange", json, objects);
+    this._send("Content:SecurityChange", json, objects);
   },
 
   onRefreshAttempted: function onRefreshAttempted(aWebProgress, aURI, aDelay, aSameURI) {
     return true;
+  },
+
+  sendLoadCallResult() {
+    sendAsyncMessage("Content:LoadURIResult");
   },
 
   QueryInterface: function QueryInterface(aIID) {
@@ -185,7 +231,7 @@ addEventListener("unload", () => {
   WebProgressListener.uninit();
 });
 
-let WebNavigation =  {
+var WebNavigation =  {
   init: function() {
     addMessageListener("WebNavigation:GoBack", this);
     addMessageListener("WebNavigation:GoForward", this);
@@ -193,15 +239,16 @@ let WebNavigation =  {
     addMessageListener("WebNavigation:LoadURI", this);
     addMessageListener("WebNavigation:Reload", this);
     addMessageListener("WebNavigation:Stop", this);
+  },
 
-    this._webNavigation = docShell.QueryInterface(Ci.nsIWebNavigation);
-    this._sessionHistory = this._webNavigation.sessionHistory;
+  get webNavigation() {
+    return docShell.QueryInterface(Ci.nsIWebNavigation);
+  },
 
-    // Send a CPOW for the sessionHistory object. We need to make sure
-    // it stays alive as long as the content script since CPOWs are
-    // weakly held.
-    let history = this._sessionHistory;
-    sendAsyncMessage("WebNavigation:setHistory", {}, {history: history});
+  _inLoadURI: false,
+
+  get inLoadURI() {
+    return this._inLoadURI;
   },
 
   receiveMessage: function(message) {
@@ -216,7 +263,10 @@ let WebNavigation =  {
         this.gotoIndex(message.data.index);
         break;
       case "WebNavigation:LoadURI":
-        this.loadURI(message.data.uri, message.data.flags, message.data.referrer);
+        this.loadURI(message.data.uri, message.data.flags,
+                     message.data.referrer, message.data.referrerPolicy,
+                     message.data.postData, message.data.headers,
+                     message.data.baseURI);
         break;
       case "WebNavigation:Reload":
         this.reload(message.data.flags);
@@ -227,43 +277,70 @@ let WebNavigation =  {
     }
   },
 
+  _wrapURIChangeCall(fn) {
+    this._inLoadURI = true;
+    try {
+      fn();
+    } finally {
+      this._inLoadURI = false;
+      WebProgressListener.sendLoadCallResult();
+    }
+  },
+
   goBack: function() {
-    if (this._webNavigation.canGoBack) {
-      this._webNavigation.goBack();
+    if (this.webNavigation.canGoBack) {
+      this._wrapURIChangeCall(() => this.webNavigation.goBack());
     }
   },
 
   goForward: function() {
-    if (this._webNavigation.canGoForward)
-      this._webNavigation.goForward();
+    if (this.webNavigation.canGoForward) {
+      this._wrapURIChangeCall(() => this.webNavigation.goForward());
+    }
   },
 
   gotoIndex: function(index) {
-    this._webNavigation.gotoIndex(index);
+    this._wrapURIChangeCall(() => this.webNavigation.gotoIndex(index));
   },
 
-  loadURI: function(uri, flags, referrer) {
-#ifdef MOZ_CRASHREPORTER
-    if (CrashReporter.enabled)
-      CrashReporter.annotateCrashReport("URL", uri);
-#endif
+  loadURI: function(uri, flags, referrer, referrerPolicy, postData, headers, baseURI) {
+    if (AppConstants.MOZ_CRASHREPORTER && CrashReporter.enabled) {
+      let annotation = uri;
+      try {
+        let url = Services.io.newURI(uri, null, null);
+        // If the current URI contains a username/password, remove it.
+        url.userPass = "";
+        annotation = url.spec;
+      } catch (ex) { /* Ignore failures to parse and failures
+                      on about: URIs. */ }
+      CrashReporter.annotateCrashReport("URL", annotation);
+    }
     if (referrer)
       referrer = Services.io.newURI(referrer, null, null);
-    this._webNavigation.loadURI(uri, flags, referrer, null, null);
+    if (postData)
+      postData = makeInputStream(postData);
+    if (headers)
+      headers = makeInputStream(headers);
+    if (baseURI)
+      baseURI = Services.io.newURI(baseURI, null, null);
+    this._wrapURIChangeCall(() => {
+      return this.webNavigation.loadURIWithOptions(uri, flags, referrer, referrerPolicy,
+                                                   postData, headers, baseURI);
+    });
   },
 
   reload: function(flags) {
-    this._webNavigation.reload(flags);
+    this.webNavigation.reload(flags);
   },
 
   stop: function(flags) {
-    this._webNavigation.stop(flags);
+    this.webNavigation.stop(flags);
   }
 };
 
 WebNavigation.init();
 
-let SecurityUI = {
+var SecurityUI = {
   getSSLStatusAsString: function() {
     let status = docShell.securityUI.QueryInterface(Ci.nsISSLStatusProvider).SSLStatus;
 
@@ -279,7 +356,7 @@ let SecurityUI = {
   }
 };
 
-let ControllerCommands = {
+var ControllerCommands = {
   init: function () {
     addMessageListener("ControllerCommands:Do", this);
   },
@@ -312,7 +389,6 @@ addEventListener("DOMWindowClose", function (aEvent) {
   if (!aEvent.isTrusted)
     return;
   sendAsyncMessage("DOMWindowClose");
-  aEvent.preventDefault();
 }, false);
 
 addEventListener("ImageContentLoaded", function (aEvent) {
@@ -324,22 +400,6 @@ addEventListener("ImageContentLoaded", function (aEvent) {
                                               height: req.image.height });
   }
 }, false);
-
-let DocumentObserver = {
-  init: function() {
-    Services.obs.addObserver(this, "document-element-inserted", false);
-    addEventListener("unload", () => {
-      Services.obs.removeObserver(this, "document-element-inserted");
-    });
-  },
-
-  observe: function(aSubject, aTopic, aData) {
-    if (aSubject == content.document) {
-      sendAsyncMessage("DocumentInserted", {synthetic: aSubject.mozSyntheticDocument});
-    }
-  },
-};
-DocumentObserver.init();
 
 const ZoomManager = {
   get fullZoom() {
@@ -377,6 +437,8 @@ const ZoomManager = {
    */
   _refreshZoomValue: function(valueName) {
     let actualZoomValue = this._markupViewer[valueName];
+    // Round to remove any floating-point error.
+    actualZoomValue = Number(actualZoomValue.toFixed(2));
     if (actualZoomValue != this._cache[valueName]) {
       this._cache[valueName] = actualZoomValue;
       return true;
@@ -427,26 +489,20 @@ addMessageListener("UpdateCharacterSet", function (aMessage) {
  * Remote thumbnail request handler for PageThumbs thumbnails.
  */
 addMessageListener("Browser:Thumbnail:Request", function (aMessage) {
-  let thumbnail = content.document.createElementNS(PageThumbUtils.HTML_NAMESPACE,
-                                                   "canvas");
-  thumbnail.mozOpaque = true;
-  thumbnail.mozImageSmoothingEnabled = true;
+  let snapshot;
+  let args = aMessage.data.additionalArgs;
+  let fullScale = args ? args.fullScale : false;
+  if (fullScale) {
+    snapshot = PageThumbUtils.createSnapshotThumbnail(content, null, args);
+  } else {
+    let snapshotWidth = aMessage.data.canvasWidth;
+    let snapshotHeight = aMessage.data.canvasHeight;
+    snapshot =
+      PageThumbUtils.createCanvas(content, snapshotWidth, snapshotHeight);
+    PageThumbUtils.createSnapshotThumbnail(content, snapshot, args);
+  }
 
-  thumbnail.width = aMessage.data.canvasWidth;
-  thumbnail.height = aMessage.data.canvasHeight;
-
-  let [width, height, scale] =
-    PageThumbUtils.determineCropSize(content, thumbnail);
-
-  let ctx = thumbnail.getContext("2d");
-  ctx.save();
-  ctx.scale(scale, scale);
-  ctx.drawWindow(content, 0, 0, width, height,
-                 aMessage.data.background,
-                 ctx.DRAWWINDOW_DO_NOT_FLUSH);
-  ctx.restore();
-
-  thumbnail.toBlob(function (aBlob) {
+  snapshot.toBlob(function (aBlob) {
     sendAsyncMessage("Browser:Thumbnail:Response", {
       thumbnail: aBlob,
       id: aMessage.data.id
@@ -454,12 +510,24 @@ addMessageListener("Browser:Thumbnail:Request", function (aMessage) {
   });
 });
 
+/**
+ * Remote isSafeForCapture request handler for PageThumbs.
+ */
+addMessageListener("Browser:Thumbnail:CheckState", function (aMessage) {
+  let result = PageThumbUtils.shouldStoreContentThumbnail(content, docShell);
+  sendAsyncMessage("Browser:Thumbnail:CheckState:Response", {
+    result: result
+  });
+});
+
 // The AddonsChild needs to be rooted so that it stays alive as long as
 // the tab.
-let AddonsChild = RemoteAddonsChild.init(this);
-addEventListener("unload", () => {
-  RemoteAddonsChild.uninit(AddonsChild);
-});
+var AddonsChild = RemoteAddonsChild.init(this);
+if (AddonsChild) {
+  addEventListener("unload", () => {
+    RemoteAddonsChild.uninit(AddonsChild);
+  });
+}
 
 addMessageListener("NetworkPrioritizer:AdjustPriority", (msg) => {
   let webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
@@ -468,49 +536,14 @@ addMessageListener("NetworkPrioritizer:AdjustPriority", (msg) => {
   loadGroup.adjustPriority(msg.data.adjustment);
 });
 
-let DOMFullscreenManager = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                         Ci.nsISupportsWeakReference]),
+addMessageListener("NetworkPrioritizer:SetPriority", (msg) => {
+  let webNav = docShell.QueryInterface(Ci.nsIWebNavigation);
+  let loadGroup = webNav.QueryInterface(Ci.nsIDocumentLoader)
+                        .loadGroup.QueryInterface(Ci.nsISupportsPriority);
+  loadGroup.priority = msg.data.priority;
+});
 
-  init: function() {
-    Services.obs.addObserver(this, "ask-parent-to-exit-fullscreen", false);
-    Services.obs.addObserver(this, "ask-parent-to-rollback-fullscreen", false);
-    addMessageListener("DOMFullscreen:ChildrenMustExit", () => {
-      let utils = content.QueryInterface(Ci.nsIInterfaceRequestor)
-                         .getInterface(Ci.nsIDOMWindowUtils);
-      utils.exitFullscreen();
-    });
-    addEventListener("unload", () => {
-      Services.obs.removeObserver(this, "ask-parent-to-exit-fullscreen");
-      Services.obs.removeObserver(this, "ask-parent-to-rollback-fullscreen");
-    });
-  },
-
-  observe: function(aSubject, aTopic, aData) {
-    // Observer notifications are global, which means that these notifications
-    // might be coming from elements that are not actually children within this
-    // windows' content. We should ignore those. This will not be necessary once
-    // we fix bug 1053413 and stop using observer notifications for this stuff.
-    if (aSubject.defaultView.top !== content) {
-      return;
-    }
-
-    switch (aTopic) {
-      case "ask-parent-to-exit-fullscreen": {
-        sendAsyncMessage("DOMFullscreen:RequestExit");
-        break;
-      }
-      case "ask-parent-to-rollback-fullscreen": {
-        sendAsyncMessage("DOMFullscreen:RequestRollback");
-        break;
-      }
-    }
-  },
-};
-
-DOMFullscreenManager.init();
-
-let AutoCompletePopup = {
+var AutoCompletePopup = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompletePopup]),
 
   init: function() {
@@ -530,6 +563,17 @@ let AutoCompletePopup = {
                   getService(Components.interfaces.nsIAutoCompleteController);
       controller.handleEnter(message.data.isPopupSelection);
     });
+
+    addEventListener("unload", function() {
+      AutoCompletePopup.destroy();
+    });
+  },
+
+  destroy: function() {
+    let controller = Cc["@mozilla.org/satchel/form-fill-controller;1"]
+                       .getService(Ci.nsIFormFillController);
+
+    controller.detachFromBrowser(docShell);
   },
 
   get input () { return this._input; },
@@ -549,6 +593,12 @@ let AutoCompletePopup = {
   },
 
   openAutocompletePopup: function (input, element) {
+    if (!this._popupOpen) {
+      // The search itself normally opens the popup itself, but in some cases,
+      // nsAutoCompleteController tries to use cached results so notify our
+      // popup to reuse the last results.
+      sendAsyncMessage("FormAutoComplete:MaybeOpenPopup", {});
+    }
     this._input = input;
     this._popupOpen = true;
   },
@@ -569,12 +619,31 @@ let AutoCompletePopup = {
   }
 }
 
+addMessageListener("InPermitUnload", msg => {
+  let inPermitUnload = docShell.contentViewer && docShell.contentViewer.inPermitUnload;
+  sendAsyncMessage("InPermitUnload", {id: msg.data.id, inPermitUnload});
+});
+
+addMessageListener("PermitUnload", msg => {
+  sendAsyncMessage("PermitUnload", {id: msg.data.id, kind: "start"});
+
+  let permitUnload = true;
+  if (docShell && docShell.contentViewer) {
+    permitUnload = docShell.contentViewer.permitUnload();
+  }
+
+  sendAsyncMessage("PermitUnload", {id: msg.data.id, kind: "end", permitUnload});
+});
+
 // We may not get any responses to Browser:Init if the browser element
 // is torn down too quickly.
-let initData = sendSyncMessage("Browser:Init");
-if (initData.length) {
-  docShell.useGlobalHistory = initData[0].useGlobalHistory;
-  if (initData[0].initPopup) {
-    setTimeout(() => AutoCompletePopup.init(), 0);
+var outerWindowID = content.QueryInterface(Ci.nsIInterfaceRequestor)
+                           .getInterface(Ci.nsIDOMWindowUtils)
+                           .outerWindowID;
+sendAsyncMessage("Browser:Init", {outerWindowID: outerWindowID});
+addMessageListener("Browser:InitReceived", function onInitReceived(msg) {
+  removeMessageListener("Browser:InitReceived", onInitReceived);
+  if (msg.data.initPopup) {
+    AutoCompletePopup.init();
   }
-}
+});

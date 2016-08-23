@@ -16,6 +16,7 @@ DIRS += [
     'protocol',
     'system',
     'ipc',
+    'standalone',
 ]
 
 if CONFIG['MOZ_SRTP']:
@@ -33,3 +34,4 @@ DIRS += ['build']
 TEST_DIRS += ['test']
 
 CONFIGURE_DEFINE_FILES += ['necko-config.h']
+EXPORTS += ['!necko-config.h']

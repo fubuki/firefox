@@ -28,6 +28,7 @@ const EVENT_TEXT_INSERTED = nsIAccessibleEvent.EVENT_TEXT_INSERTED;
 const EVENT_TEXT_REMOVED = nsIAccessibleEvent.EVENT_TEXT_REMOVED;
 const EVENT_TEXT_SELECTION_CHANGED = nsIAccessibleEvent.EVENT_TEXT_SELECTION_CHANGED;
 const EVENT_VALUE_CHANGE = nsIAccessibleEvent.EVENT_VALUE_CHANGE;
+const EVENT_TEXT_VALUE_CHANGE = nsIAccessibleEvent.EVENT_TEXT_VALUE_CHANGE;
 const EVENT_VIRTUALCURSOR_CHANGED = nsIAccessibleEvent.EVENT_VIRTUALCURSOR_CHANGED;
 
 const kNotFromUserInput = 0;
@@ -344,10 +345,17 @@ function eventQueue(aEventType)
                 var msg = "Test with ID = '" + this.getEventID(checker) +
                   "' succeed. ";
 
-                if (checker.unexpected)
-                  ok(true, msg + "There's no unexpected " + typeStr + " event.");
-                else
+                if (checker.unexpected) {
+                  if (checker.todo) {
+                    todo(false, "Event " + typeStr + " event is still missing");
+                  }
+                  else {
+                    ok(true, msg + "There's no unexpected " + typeStr + " event.");
+                  }
+                }
+                else {
                   ok(true, msg + "Event " + typeStr + " was handled.");
+                }
               }
             }
           }
@@ -370,8 +378,13 @@ function eventQueue(aEventType)
                 ok(false, msg + "Dupe " + typeStr + " event.");
 
               if (checker.unexpected) {
-                if (checker.wasCaught)
+                if (checker.todo) {
+                  todo(checker.wasCaught,
+                       "Event " + typeStr + " event is still missing");
+                }
+                else if (checker.wasCaught) {
                   ok(false, msg + "There's unexpected " + typeStr + " event.");
+                }
               } else if (!checker.wasCaught) {
                 ok(false, msg + typeStr + " event was missed.");
               }
@@ -1664,6 +1677,18 @@ function invokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg, aIsAsync)
 
   this.mTarget = aTargetOrFunc;
   this.mTargetFuncArg = aTargetFuncArg;
+}
+
+/**
+ * Generic invoker checker for todo events.
+ */
+function todo_invokerChecker(aEventType, aTargetOrFunc, aTargetFuncArg)
+{
+  this.__proto__ = new invokerChecker(aEventType, aTargetOrFunc,
+                                      aTargetFuncArg, true);
+
+  this.unexpected = true;
+  this.todo = true;
 }
 
 /**

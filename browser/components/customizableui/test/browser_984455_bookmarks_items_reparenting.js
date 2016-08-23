@@ -4,8 +4,8 @@
 
 "use strict";
 
-let gNavBar = document.getElementById(CustomizableUI.AREA_NAVBAR);
-let gOverflowList = document.getElementById(gNavBar.getAttribute("overflowtarget"));
+var gNavBar = document.getElementById(CustomizableUI.AREA_NAVBAR);
+var gOverflowList = document.getElementById(gNavBar.getAttribute("overflowtarget"));
 
 const kBookmarksButton = "bookmarks-menu-button";
 const kBookmarksItems = "personal-bookmarks";
@@ -128,6 +128,7 @@ function checkBookmarksItemsChevronContextMenu() {
         if (child.style.visibility != "hidden")
           return true;
       }
+      return false;
     });
     yield checkPlacesContextMenu(chevronPopup);
     info("Waiting for bookmark toolbar item chevron popup to close");

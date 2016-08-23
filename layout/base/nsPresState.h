@@ -21,10 +21,11 @@ public:
   nsPresState()
     : mContentData(nullptr)
     , mScrollState(0, 0)
-    , mResolution(1.0, 1.0)
+    , mResolution(1.0)
     , mScaleToResolution(false)
     , mDisabledSet(false)
     , mDisabled(false)
+    , mDroppedDown(false)
   {}
 
   void SetScrollState(const nsPoint& aState)
@@ -32,17 +33,17 @@ public:
     mScrollState = aState;
   }
 
-  nsPoint GetScrollState() const
+  nsPoint GetScrollPosition() const
   {
     return mScrollState;
   }
 
-  void SetResolution(const gfxSize& aSize)
+  void SetResolution(float aSize)
   {
     mResolution = aSize;
   }
 
-  gfxSize GetResolution() const
+  float GetResolution() const
   {
     return mResolution;
   }
@@ -89,14 +90,26 @@ public:
     mContentData = aProperty;
   }
 
+  void SetDroppedDown(bool aDroppedDown)
+  {
+    mDroppedDown = aDroppedDown;
+  }
+
+  bool GetDroppedDown() const
+  {
+    return mDroppedDown;
+  }
+
 // MEMBER VARIABLES
 protected:
   nsCOMPtr<nsISupports> mContentData;
   nsPoint mScrollState;
-  gfxSize mResolution;
+  bool mRestoringHistoryScrollPosition;
+  float mResolution;
   bool mScaleToResolution;
   bool mDisabledSet;
   bool mDisabled;
+  bool mDroppedDown;
 };
 
 #endif /* nsPresState_h_ */

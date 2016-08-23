@@ -8,7 +8,7 @@ toolkit = CONFIG['MOZ_WIDGET_TOOLKIT']
 
 # The Icon Channel stuff really shouldn't live in decoders/icon, but we'll
 # fix that another time.
-if CONFIG['MOZ_WIDGET_GTK']:
+if 'gtk' in toolkit:
     DIRS += ['icon/gtk', 'icon']
 elif toolkit == 'qt':
     DIRS += ['icon/qt', 'icon']
@@ -23,28 +23,24 @@ elif toolkit == 'android':
 
 UNIFIED_SOURCES += [
     'EXIF.cpp',
+    'iccjpeg.c',
+    'nsBMPDecoder.cpp',
     'nsGIFDecoder2.cpp',
     'nsICODecoder.cpp',
     'nsIconDecoder.cpp',
-]
-
-# These files cannot be built in unified mode because they want to force NSPR
-# logging.
-SOURCES += [
-    'nsBMPDecoder.cpp',
     'nsJPEGDecoder.cpp',
     'nsPNGDecoder.cpp',
 ]
 
-FAIL_ON_WARNINGS = True
+include('/ipc/chromium/chromium-config.mozbuild')
 
-SOURCES += [
-    'iccjpeg.c',
-]
-
-# Decoders need RasterImage.h
 LOCAL_INCLUDES += [
-    '/image/src',
+    # Access to Skia headers for Downscaler.
+    '/gfx/2d',
+    # Decoders need ImageLib headers.
+    '/image',
 ]
+
+LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
 
 FINAL_LIBRARY = 'xul'

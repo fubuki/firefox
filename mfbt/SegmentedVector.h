@@ -85,16 +85,18 @@ class SegmentedVector : private AllocPolicy
     template<typename U>
     void Append(U&& aU)
     {
-      // GCC 4.4 gives a bogus "invalid use of member" error for this
-      // assertion, so skip it in that case. Once bug 1056337 lands and GCC 4.4
-      // is no longer used we should be able to remove this condition.
-#if !(defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ == 4))
       MOZ_ASSERT(mLength < SegmentCapacity);
-#endif
       // Pre-increment mLength so that the bounds-check in operator[] passes.
       mLength++;
       T* elem = &(*this)[mLength - 1];
       new (elem) T(mozilla::Forward<U>(aU));
+    }
+
+    void PopLast()
+    {
+      MOZ_ASSERT(mLength > 0);
+      (*this)[mLength - 1].~T();
+      mLength--;
     }
 
     uint32_t mLength;
@@ -188,6 +190,82 @@ public:
       segment->~Segment();
       this->free_(segment);
     }
+  }
+
+  T& GetLast()
+  {
+    MOZ_ASSERT(!IsEmpty());
+    Segment* last = mSegments.getLast();
+    return (*last)[last->Length() - 1];
+  }
+
+  const T& GetLast() const
+  {
+    MOZ_ASSERT(!IsEmpty());
+    Segment* last = mSegments.getLast();
+    return (*last)[last->Length() - 1];
+  }
+
+  void PopLast()
+  {
+    MOZ_ASSERT(!IsEmpty());
+    Segment* last = mSegments.getLast();
+    last->PopLast();
+    if (!last->Length()) {
+      mSegments.popLast();
+      last->~Segment();
+      this->free_(last);
+    }
+  }
+
+  // Equivalent to calling |PopLast| |aNumElements| times, but potentially
+  // more efficient.
+  void PopLastN(uint32_t aNumElements)
+  {
+    MOZ_ASSERT(aNumElements <= Length());
+
+    Segment* last;
+
+    // Pop full segments for as long as we can.  Note that this loop
+    // cleanly handles the case when the initial last segment is not
+    // full and we are popping more elements than said segment contains.
+    do {
+      last = mSegments.getLast();
+
+      // The list is empty.  We're all done.
+      if (!last) {
+        return;
+      }
+
+      // Check to see if the list contains too many elements.  Handle
+      // that in the epilogue.
+      uint32_t segmentLen = last->Length();
+      if (segmentLen > aNumElements) {
+        break;
+      }
+
+      // Destroying the segment destroys all elements contained therein.
+      mSegments.popLast();
+      last->~Segment();
+      this->free_(last);
+
+      MOZ_ASSERT(aNumElements >= segmentLen);
+      aNumElements -= segmentLen;
+      if (aNumElements == 0) {
+        return;
+      }
+    } while (true);
+
+    // Handle the case where the last segment contains more elements
+    // than we want to pop.
+    MOZ_ASSERT(last);
+    MOZ_ASSERT(last == mSegments.getLast());
+    MOZ_ASSERT(aNumElements != 0);
+    MOZ_ASSERT(aNumElements < last->Length());
+    for (uint32_t i = 0; i < aNumElements; ++i) {
+      last->PopLast();
+    }
+    MOZ_ASSERT(last->Length() != 0);
   }
 
   // Use this class to iterate over a SegmentedVector, like so:

@@ -23,26 +23,26 @@ public:
                 mozilla::dom::ScreenDetails aDetails);
     ~ScreenProxy() {};
 
-    NS_IMETHOD GetId(uint32_t* aId) MOZ_OVERRIDE;
+    NS_IMETHOD GetId(uint32_t* aId) override;
 
     NS_IMETHOD GetRect(int32_t* aLeft,
                        int32_t* aTop,
                        int32_t* aWidth,
-                       int32_t* aHeight) MOZ_OVERRIDE;
+                       int32_t* aHeight) override;
     NS_IMETHOD GetRectDisplayPix(int32_t* aLeft,
                                  int32_t* aTop,
                                  int32_t* aWidth,
-                                 int32_t* aHeight) MOZ_OVERRIDE;
+                                 int32_t* aHeight) override;
     NS_IMETHOD GetAvailRect(int32_t* aLeft,
                             int32_t* aTop,
                             int32_t* aWidth,
-                            int32_t* aHeight) MOZ_OVERRIDE;
+                            int32_t* aHeight) override;
     NS_IMETHOD GetAvailRectDisplayPix(int32_t* aLeft,
                                       int32_t* aTop,
                                       int32_t* aWidth,
-                                      int32_t* aHeight) MOZ_OVERRIDE;
-    NS_IMETHOD GetPixelDepth(int32_t* aPixelDepth) MOZ_OVERRIDE;
-    NS_IMETHOD GetColorDepth(int32_t* aColorDepth) MOZ_OVERRIDE;
+                                      int32_t* aHeight) override;
+    NS_IMETHOD GetPixelDepth(int32_t* aPixelDepth) override;
+    NS_IMETHOD GetColorDepth(int32_t* aColorDepth) override;
 
 private:
 
@@ -52,7 +52,7 @@ private:
     void InvalidateCache();
 
     double mContentsScaleFactor;
-    nsRefPtr<nsScreenManagerProxy> mScreenManager;
+    RefPtr<nsScreenManagerProxy> mScreenManager;
     uint32_t mId;
     int32_t mPixelDepth;
     int32_t mColorDepth;
@@ -66,5 +66,6 @@ private:
 
 } // namespace widget
 } // namespace mozilla
+
 #endif
 

@@ -6,7 +6,7 @@
 #ifndef nsContentSupportMap_h__
 #define nsContentSupportMap_h__
 
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsTemplateMatch.h"
 
 /**
@@ -21,47 +21,39 @@
  */
 class nsContentSupportMap {
 public:
-    nsContentSupportMap() { Init(); }
-    ~nsContentSupportMap() { Finish(); }
+    nsContentSupportMap() : mMap(PLDHashTable::StubOps(), sizeof(Entry)) { }
+    ~nsContentSupportMap() { }
 
     nsresult Put(nsIContent* aElement, nsTemplateMatch* aMatch) {
-        if (!mMap.ops)
-            return NS_ERROR_NOT_INITIALIZED;
-
-        PLDHashEntryHdr* hdr = PL_DHashTableAdd(&mMap, aElement);
+        PLDHashEntryHdr* hdr = mMap.Add(aElement, mozilla::fallible);
         if (!hdr)
             return NS_ERROR_OUT_OF_MEMORY;
 
-        Entry* entry = reinterpret_cast<Entry*>(hdr);
+        Entry* entry = static_cast<Entry*>(hdr);
         NS_ASSERTION(entry->mMatch == nullptr, "over-writing entry");
         entry->mContent = aElement;
         entry->mMatch   = aMatch;
-        return NS_OK; }
+        return NS_OK;
+    }
 
     bool Get(nsIContent* aElement, nsTemplateMatch** aMatch) {
-        if (!mMap.ops)
+        PLDHashEntryHdr* hdr = mMap.Search(aElement);
+        if (!hdr)
             return false;
 
-        PLDHashEntryHdr* hdr = PL_DHashTableLookup(&mMap, aElement);
-        if (PL_DHASH_ENTRY_IS_FREE(hdr))
-            return false;
-
-        Entry* entry = reinterpret_cast<Entry*>(hdr);
+        Entry* entry = static_cast<Entry*>(hdr);
         *aMatch = entry->mMatch;
-        return true; }
+        return true;
+    }
 
-    nsresult Remove(nsIContent* aElement);
+    void Remove(nsIContent* aElement);
 
-    void Clear() { Finish(); Init(); }
+    void Clear() { mMap.Clear(); }
 
 protected:
     PLDHashTable mMap;
 
-    void Init();
-    void Finish();
-
-    struct Entry {
-        PLDHashEntryHdr  mHdr;
+    struct Entry : public PLDHashEntryHdr {
         nsIContent*      mContent;
         nsTemplateMatch* mMatch;
     };

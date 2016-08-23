@@ -39,6 +39,7 @@
 #include "nsIWebBrowserChrome.h"
 #include "nsReadableUtils.h"
 #include "nsFocusManager.h"
+#include "nsGlobalWindow.h"
 
 #ifdef MOZ_XUL
 #include "nsIXULDocument.h"
@@ -58,9 +59,8 @@ NS_IMPL_ISUPPORTS_INHERITED0(RootAccessible, DocAccessible)
 // Constructor/destructor
 
 RootAccessible::
-  RootAccessible(nsIDocument* aDocument, nsIContent* aRootContent,
-                 nsIPresShell* aPresShell) :
-  DocAccessibleWrap(aDocument, aRootContent, aPresShell)
+  RootAccessible(nsIDocument* aDocument, nsIPresShell* aPresShell) :
+  DocAccessibleWrap(aDocument, aPresShell)
 {
   mType = eRootType;
 }
@@ -92,8 +92,8 @@ RootAccessible::NativeRole()
 {
   // If it's a <dialog> or <wizard>, use roles::DIALOG instead
   dom::Element* rootElm = mDocumentNode->GetRootElement();
-  if (rootElm && (rootElm->Tag() == nsGkAtoms::dialog ||
-                  rootElm->Tag() == nsGkAtoms::wizard))
+  if (rootElm && rootElm->IsAnyOfXULElements(nsGkAtoms::dialog,
+                                             nsGkAtoms::wizard))
     return roles::DIALOG;
 
   return DocAccessibleWrap::NativeRole();
@@ -310,7 +310,7 @@ RootAccessible::ProcessDOMEvent(nsIDOMEvent* aDOMEvent)
     bool isEnabled = (state & (states::CHECKED | states::SELECTED)) != 0;
 
     if (accessible->NeedsDOMUIEvent()) {
-      nsRefPtr<AccEvent> accEvent =
+      RefPtr<AccEvent> accEvent =
         new AccStateChangeEvent(accessible, states::CHECKED, isEnabled);
       nsEventShell::FireEvent(accEvent);
     }
@@ -331,7 +331,7 @@ RootAccessible::ProcessDOMEvent(nsIDOMEvent* aDOMEvent)
       uint64_t state = accessible->State();
       bool isEnabled = !!(state & states::CHECKED);
 
-      nsRefPtr<AccEvent> accEvent =
+      RefPtr<AccEvent> accEvent =
         new AccStateChangeEvent(accessible, states::CHECKED, isEnabled);
       nsEventShell::FireEvent(accEvent);
     }
@@ -351,7 +351,7 @@ RootAccessible::ProcessDOMEvent(nsIDOMEvent* aDOMEvent)
     uint64_t state = accessible->State();
     bool isEnabled = (state & states::EXPANDED) != 0;
 
-    nsRefPtr<AccEvent> accEvent =
+    RefPtr<AccEvent> accEvent =
       new AccStateChangeEvent(accessible, states::EXPANDED, isEnabled);
     nsEventShell::FireEvent(accEvent);
     return;
@@ -377,7 +377,7 @@ RootAccessible::ProcessDOMEvent(nsIDOMEvent* aDOMEvent)
         return;
       }
 
-      nsRefPtr<AccSelChangeEvent> selChangeEvent =
+      RefPtr<AccSelChangeEvent> selChangeEvent =
         new AccSelChangeEvent(treeAcc, treeItemAcc,
                               AccSelChangeEvent::eSelectionAdd);
       nsEventShell::FireEvent(selChangeEvent);
@@ -451,8 +451,10 @@ RootAccessible::ProcessDOMEvent(nsIDOMEvent* aDOMEvent)
   }
   else if (accessible->NeedsDOMUIEvent() &&
            eventType.EqualsLiteral("ValueChange")) {
-     targetDocument->FireDelayedEvent(nsIAccessibleEvent::EVENT_VALUE_CHANGE,
-                                      accessible);
+    uint32_t event = accessible->HasNumericValue()
+      ? nsIAccessibleEvent::EVENT_VALUE_CHANGE
+      : nsIAccessibleEvent::EVENT_TEXT_VALUE_CHANGE;
+     targetDocument->FireDelayedEvent(event, accessible);
   }
 #ifdef DEBUG_DRAGDROPSTART
   else if (eventType.EqualsLiteral("mouseover")) {
@@ -482,15 +484,10 @@ RootAccessible::RelationByType(RelationType aType)
   if (!mDocumentNode || aType != RelationType::EMBEDS)
     return DocAccessibleWrap::RelationByType(aType);
 
-  nsIDOMWindow* rootWindow = mDocumentNode->GetWindow();
-  if (rootWindow) {
-    nsCOMPtr<nsIDOMWindow> contentWindow;
-    rootWindow->GetContent(getter_AddRefs(contentWindow));
+  if (nsPIDOMWindowOuter* rootWindow = mDocumentNode->GetWindow()) {
+    nsCOMPtr<nsPIDOMWindowOuter> contentWindow = nsGlobalWindow::Cast(rootWindow)->GetContent();
     if (contentWindow) {
-      nsCOMPtr<nsIDOMDocument> contentDOMDocument;
-      contentWindow->GetDocument(getter_AddRefs(contentDOMDocument));
-      nsCOMPtr<nsIDocument> contentDocumentNode =
-        do_QueryInterface(contentDOMDocument);
+      nsCOMPtr<nsIDocument> contentDocumentNode = contentWindow->GetDoc();
       if (contentDocumentNode) {
         DocAccessible* contentDocument =
           GetAccService()->GetDocAccessible(contentDocumentNode);
@@ -536,7 +533,7 @@ RootAccessible::HandlePopupShownEvent(Accessible* aAccessible)
     roles::Role comboboxRole = combobox->Role();
     if (comboboxRole == roles::COMBOBOX || 
 	comboboxRole == roles::AUTOCOMPLETE) {
-      nsRefPtr<AccEvent> event =
+      RefPtr<AccEvent> event =
         new AccStateChangeEvent(combobox, states::EXPANDED, true);
       if (event)
         nsEventShell::FireEvent(event);
@@ -645,7 +642,7 @@ RootAccessible::HandlePopupHidingEvent(nsINode* aPopupNode)
 
   // Fire expanded state change event.
   if (notifyOf & kNotifyOfState) {
-    nsRefPtr<AccEvent> event =
+    RefPtr<AccEvent> event =
       new AccStateChangeEvent(widget, states::EXPANDED, false);
     document->FireDelayedEvent(event);
   }
@@ -716,3 +713,20 @@ RootAccessible::HandleTreeInvalidatedEvent(nsIDOMEvent* aEvent,
   aAccessible->TreeViewInvalidated(startRow, endRow, startCol, endCol);
 }
 #endif
+
+ProxyAccessible*
+RootAccessible::GetPrimaryRemoteTopLevelContentDoc() const
+{
+  nsCOMPtr<nsIDocShellTreeOwner> owner;
+  mDocumentNode->GetDocShell()->GetTreeOwner(getter_AddRefs(owner));
+  NS_ENSURE_TRUE(owner, nullptr);
+
+  nsCOMPtr<nsITabParent> tabParent;
+  owner->GetPrimaryTabParent(getter_AddRefs(tabParent));
+  if (!tabParent) {
+    return nullptr;
+  }
+
+  auto tab = static_cast<dom::TabParent*>(tabParent.get());
+  return tab->GetTopLevelDocAccessible();
+}

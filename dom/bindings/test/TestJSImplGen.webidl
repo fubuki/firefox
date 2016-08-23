@@ -23,7 +23,9 @@ enum MyTestEnum {
              object obj1,
              object? obj2, sequence<Dict> seq, optional any any2,
              optional object obj3,
-             optional object? obj4),
+             optional object? obj4,
+             Uint8Array typedArr,
+             ArrayBuffer arrayBuf),
  JSImplementation="@mozilla.org/test-js-impl-interface;1"]
 interface TestJSImplInterface {
   // Integer types
@@ -45,6 +47,22 @@ interface TestJSImplInterface {
   readonly attribute byte cachedConstantByte;
   [Cached, Pure]
   attribute byte cachedWritableByte;
+  [Affects=Nothing]
+  attribute byte sideEffectFreeByte;
+  [Affects=Nothing, DependsOn=DOMState]
+  attribute byte domDependentByte;
+  [Affects=Nothing, DependsOn=Nothing]
+  readonly attribute byte constantByte;
+  [DependsOn=DeviceState, Affects=Nothing]
+  readonly attribute byte deviceStateDependentByte;
+  [Affects=Nothing]
+  byte returnByteSideEffectFree();
+  [Affects=Nothing, DependsOn=DOMState]
+  byte returnDOMDependentByte();
+  [Affects=Nothing, DependsOn=Nothing]
+  byte returnConstantByte();
+  [DependsOn=DeviceState, Affects=Nothing]
+  byte returnDeviceStateDependentByte();
 
   readonly attribute short readonlyShort;
   attribute short writableShort;
@@ -267,6 +285,7 @@ interface TestJSImplInterface {
   sequence<object?> receiveNullableObjectSequence();
 
   void passSequenceOfSequences(sequence<sequence<long>> arg);
+  void passSequenceOfSequencesOfSequences(sequence<sequence<sequence<long>>> arg);
   //XXXbz No support for sequence of sequence return values yet.
   //sequence<sequence<long>> receiveSequenceOfSequences();
 
@@ -534,6 +553,17 @@ interface TestJSImplInterface {
   Date receiveDate();
   Date? receiveNullableDate();
 
+  // Promise types
+  void passPromise(Promise<any> arg);
+  void passNullablePromise(Promise<any>? arg);
+  void passOptionalPromise(optional Promise<any> arg);
+  void passOptionalNullablePromise(optional Promise<any>? arg);
+  void passOptionalNullablePromiseWithDefaultValue(optional Promise<any>? arg = null);
+  void passPromiseSequence(sequence<Promise<any>> arg);
+  void passNullablePromiseSequence(sequence<Promise<any>?> arg);
+  Promise<any> receivePromise();
+  Promise<any> receiveAddrefedPromise();
+
   // binaryNames tests
   void methodRenamedFrom();
   [BinaryName="otherMethodRenamedTo"]
@@ -545,6 +575,7 @@ interface TestJSImplInterface {
   attribute byte otherAttributeRenamedFrom;
 
   void passDictionary(optional Dict x);
+  void passDictionary2(Dict x);
   [Cached, Pure]
   readonly attribute Dict readonlyDictionary;
   [Cached, Pure]
@@ -585,12 +616,28 @@ interface TestJSImplInterface {
   AnotherNameForTestJSImplInterface exerciseTypedefInterfaces2(NullableTestJSImplInterface arg);
   void exerciseTypedefInterfaces3(YetAnotherNameForTestJSImplInterface arg);
 
+  // Deprecated methods and attributes
+  [Deprecated="GetAttributeNode"]
+  attribute byte deprecatedAttribute;
+  [Deprecated="GetAttributeNode"]
+  byte deprecatedMethod();
+  [Deprecated="GetAttributeNode"]
+  void deprecatedMethodWithContext(any arg);
+
   // Static methods and attributes
   // FIXME: Bug 863952 Static things are not supported yet
   /*
   static attribute boolean staticAttribute;
   static void staticMethod(boolean arg);
   static void staticMethodWithContext(any arg);
+
+  // Deprecated static methods and attributes
+  [Deprecated="GetAttributeNode"]
+  static attribute byte staticDeprecatedAttribute;
+  [Deprecated="GetAttributeNode"]
+  static byte staticDeprecatedMethod();
+  [Deprecated="GetAttributeNode"]
+  static byte staticDeprecatedMethodWithContext();
   */
 
   // Overload resolution tests

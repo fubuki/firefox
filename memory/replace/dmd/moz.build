@@ -11,7 +11,8 @@ EXPORTS += [
 SOURCES += [
     '../../../mfbt/HashFunctions.cpp',
     '../../../mfbt/JSONWriter.cpp',
-    '../../../xpcom/base/nsStackWalk.cpp',
+    '../../../mfbt/Poison.cpp',
+    '../../../mozglue/misc/StackWalk.cpp',
     'DMD.cpp',
 ]
 
@@ -22,6 +23,8 @@ SOURCES += [
 SharedLibrary('dmd')
 
 DEFINES['MOZ_NO_MOZALLOC'] = True
+DEFINES['IMPL_MFBT'] = True
+DEFINES['XPCOM_GLUE'] = True
 
 if CONFIG['MOZ_OPTIMIZE']:
     DEFINES['MOZ_OPTIMIZE'] = True
@@ -35,3 +38,5 @@ if CONFIG['OS_ARCH'] == 'WINNT':
 
 TEST_DIRS += ['test']
 
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

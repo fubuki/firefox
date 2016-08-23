@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,30 +25,29 @@
 
 namespace mozilla {
 namespace dom {
-namespace indexedDB {
 
 namespace {
 
 already_AddRefed<IDBRequest>
-GenerateRequest(IDBIndex* aIndex)
+GenerateRequest(JSContext* aCx, IDBIndex* aIndex)
 {
   MOZ_ASSERT(aIndex);
   aIndex->AssertIsOnOwningThread();
 
   IDBTransaction* transaction = aIndex->ObjectStore()->Transaction();
 
-  nsRefPtr<IDBRequest> request =
-    IDBRequest::Create(aIndex, transaction->Database(), transaction);
+  RefPtr<IDBRequest> request =
+    IDBRequest::Create(aCx, aIndex, transaction->Database(), transaction);
   MOZ_ASSERT(request);
 
   return request.forget();
 }
 
-} // anonymous namespace
+} // namespace
 
 IDBIndex::IDBIndex(IDBObjectStore* aObjectStore, const IndexMetadata* aMetadata)
   : mObjectStore(aObjectStore)
-  , mCachedKeyPath(JSVAL_VOID)
+  , mCachedKeyPath(JS::UndefinedValue())
   , mMetadata(aMetadata)
   , mId(aMetadata->id())
   , mRooted(false)
@@ -63,7 +62,7 @@ IDBIndex::~IDBIndex()
   AssertIsOnOwningThread();
 
   if (mRooted) {
-    mCachedKeyPath = JSVAL_VOID;
+    mCachedKeyPath.setUndefined();
     mozilla::DropJSObjects(this);
   }
 }
@@ -75,7 +74,7 @@ IDBIndex::Create(IDBObjectStore* aObjectStore,
   MOZ_ASSERT(aObjectStore);
   aObjectStore->AssertIsOnOwningThread();
 
-  nsRefPtr<IDBIndex> index = new IDBIndex(aObjectStore, &aMetadata);
+  RefPtr<IDBIndex> index = new IDBIndex(aObjectStore, &aMetadata);
 
   return index.forget();
 }
@@ -168,7 +167,16 @@ IDBIndex::MultiEntry() const
   return mMetadata->multiEntry();
 }
 
-const KeyPath&
+bool
+IDBIndex::LocaleAware() const
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mMetadata);
+
+  return mMetadata->locale().IsEmpty();
+}
+
+const indexedDB::KeyPath&
 IDBIndex::GetKeyPath() const
 {
   AssertIsOnOwningThread();
@@ -177,7 +185,38 @@ IDBIndex::GetKeyPath() const
   return mMetadata->keyPath();
 }
 
-nsPIDOMWindow*
+void
+IDBIndex::GetLocale(nsString& aLocale) const
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mMetadata);
+
+  if (mMetadata->locale().IsEmpty()) {
+    SetDOMStringToNull(aLocale);
+  } else {
+    aLocale.AssignWithConversion(mMetadata->locale());
+  }
+}
+
+const nsCString&
+IDBIndex::Locale() const
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mMetadata);
+
+  return mMetadata->locale();
+}
+
+bool
+IDBIndex::IsAutoLocale() const
+{
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mMetadata);
+
+  return mMetadata->autoLocale();
+}
+
+nsPIDOMWindowInner*
 IDBIndex::GetParentObject() const
 {
   AssertIsOnOwningThread();
@@ -223,13 +262,18 @@ IDBIndex::GetInternal(bool aKeyOnly,
 {
   AssertIsOnOwningThread();
 
+  if (mDeletedMetadata) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR);
+    return nullptr;
+  }
+
   IDBTransaction* transaction = mObjectStore->Transaction();
   if (!transaction->IsOpen()) {
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
     return nullptr;
   }
 
-  nsRefPtr<IDBKeyRange> keyRange;
+  RefPtr<IDBKeyRange> keyRange;
   aRv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -244,24 +288,18 @@ IDBIndex::GetInternal(bool aKeyOnly,
   const int64_t objectStoreId = mObjectStore->Id();
   const int64_t indexId = Id();
 
-  OptionalKeyRange optionalKeyRange;
-  if (keyRange) {
-    SerializedKeyRange serializedKeyRange;
-    keyRange->ToSerialized(serializedKeyRange);
-    optionalKeyRange = serializedKeyRange;
-  } else {
-    optionalKeyRange = void_t();
-  }
+  SerializedKeyRange serializedKeyRange;
+  keyRange->ToSerialized(serializedKeyRange);
 
   RequestParams params;
 
   if (aKeyOnly) {
-    params = IndexGetKeyParams(objectStoreId, indexId, optionalKeyRange);
+    params = IndexGetKeyParams(objectStoreId, indexId, serializedKeyRange);
   } else {
-    params = IndexGetParams(objectStoreId, indexId, optionalKeyRange);
+    params = IndexGetParams(objectStoreId, indexId, serializedKeyRange);
   }
 
-  nsRefPtr<IDBRequest> request = GenerateRequest(this);
+  RefPtr<IDBRequest> request = GenerateRequest(aCx, this);
   MOZ_ASSERT(request);
 
   if (aKeyOnly) {
@@ -292,9 +330,7 @@ IDBIndex::GetInternal(bool aKeyOnly,
                  IDB_LOG_STRINGIFY(keyRange));
   }
 
-  BackgroundRequestChild* actor = new BackgroundRequestChild(request);
-
-  transaction->StartRequest(actor, params);
+  transaction->StartRequest(request, params);
 
   return request.forget();
 }
@@ -308,13 +344,18 @@ IDBIndex::GetAllInternal(bool aKeysOnly,
 {
   AssertIsOnOwningThread();
 
+  if (mDeletedMetadata) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR);
+    return nullptr;
+  }
+
   IDBTransaction* transaction = mObjectStore->Transaction();
   if (!transaction->IsOpen()) {
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
     return nullptr;
   }
 
-  nsRefPtr<IDBKeyRange> keyRange;
+  RefPtr<IDBKeyRange> keyRange;
   aRv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -342,7 +383,7 @@ IDBIndex::GetAllInternal(bool aKeysOnly,
     params = IndexGetAllParams(objectStoreId, indexId, optionalKeyRange, limit);
   }
 
-  nsRefPtr<IDBRequest> request = GenerateRequest(this);
+  RefPtr<IDBRequest> request = GenerateRequest(aCx, this);
   MOZ_ASSERT(request);
 
   if (aKeysOnly) {
@@ -375,9 +416,7 @@ IDBIndex::GetAllInternal(bool aKeysOnly,
                  IDB_LOG_STRINGIFY(aLimit));
   }
 
-  BackgroundRequestChild* actor = new BackgroundRequestChild(request);
-
-  transaction->StartRequest(actor, params);
+  transaction->StartRequest(request, params);
 
   return request.forget();
 }
@@ -391,13 +430,18 @@ IDBIndex::OpenCursorInternal(bool aKeysOnly,
 {
   AssertIsOnOwningThread();
 
+  if (mDeletedMetadata) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR);
+    return nullptr;
+  }
+
   IDBTransaction* transaction = mObjectStore->Transaction();
   if (!transaction->IsOpen()) {
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
     return nullptr;
   }
 
-  nsRefPtr<IDBKeyRange> keyRange;
+  RefPtr<IDBKeyRange> keyRange;
   aRv = IDBKeyRange::FromJSVal(aCx, aRange, getter_AddRefs(keyRange));
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
@@ -438,7 +482,7 @@ IDBIndex::OpenCursorInternal(bool aKeysOnly,
     params = Move(openParams);
   }
 
-  nsRefPtr<IDBRequest> request = GenerateRequest(this);
+  RefPtr<IDBRequest> request = GenerateRequest(aCx, this);
   MOZ_ASSERT(request);
 
   if (aKeysOnly) {
@@ -487,13 +531,18 @@ IDBIndex::Count(JSContext* aCx,
 {
   AssertIsOnOwningThread();
 
+  if (mDeletedMetadata) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_NOT_ALLOWED_ERR);
+    return nullptr;
+  }
+
   IDBTransaction* transaction = mObjectStore->Transaction();
   if (!transaction->IsOpen()) {
     aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
     return nullptr;
   }
 
-  nsRefPtr<IDBKeyRange> keyRange;
+  RefPtr<IDBKeyRange> keyRange;
   aRv = IDBKeyRange::FromJSVal(aCx, aKey, getter_AddRefs(keyRange));
   if (aRv.Failed()) {
     return nullptr;
@@ -511,7 +560,7 @@ IDBIndex::Count(JSContext* aCx,
     params.optionalKeyRange() = void_t();
   }
 
-  nsRefPtr<IDBRequest> request = GenerateRequest(this);
+  RefPtr<IDBRequest> request = GenerateRequest(aCx, this);
   MOZ_ASSERT(request);
 
   IDB_LOG_MARK("IndexedDB %s: Child  Transaction[%lld] Request[%llu]: "
@@ -527,9 +576,7 @@ IDBIndex::Count(JSContext* aCx,
                IDB_LOG_STRINGIFY(this),
                IDB_LOG_STRINGIFY(keyRange));
 
-  BackgroundRequestChild* actor = new BackgroundRequestChild(request);
-
-  transaction->StartRequest(actor, params);
+  transaction->StartRequest(request, params);
 
   return request.forget();
 }
@@ -546,7 +593,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(IDBIndex)
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(IDBIndex)
   NS_IMPL_CYCLE_COLLECTION_TRACE_PRESERVED_WRAPPER
-  NS_IMPL_CYCLE_COLLECTION_TRACE_JSVAL_MEMBER_CALLBACK(mCachedKeyPath)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mCachedKeyPath)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(IDBIndex)
@@ -559,7 +606,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(IDBIndex)
 
   // Don't unlink mObjectStore!
 
-  tmp->mCachedKeyPath = JSVAL_VOID;
+  tmp->mCachedKeyPath.setUndefined();
 
   if (tmp->mRooted) {
     mozilla::DropJSObjects(tmp);
@@ -568,11 +615,10 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(IDBIndex)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 JSObject*
-IDBIndex::WrapObject(JSContext* aCx)
+IDBIndex::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return IDBIndexBinding::Wrap(aCx, this);
+  return IDBIndexBinding::Wrap(aCx, this, aGivenProto);
 }
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla

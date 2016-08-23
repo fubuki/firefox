@@ -5,6 +5,8 @@
 #ifndef CHROME_COMMON_IPC_CHANNEL_H_
 #define CHROME_COMMON_IPC_CHANNEL_H_
 
+#include <string>
+
 #include <queue>
 #include "chrome/common/ipc_message.h"
 
@@ -23,7 +25,7 @@ class Channel : public Message::Sender {
     virtual ~Listener() {}
 
     // Called when a message is received.
-    virtual void OnMessageReceived(const Message& message) = 0;
+    virtual void OnMessageReceived(Message&& message) = 0;
 
     // Called when the channel is connected and we have received the internal
     // Hello message from the peer.
@@ -49,7 +51,10 @@ class Channel : public Message::Sender {
     kMaximumMessageSize = 256 * 1024 * 1024,
 
     // Ammount of data to read at once from the pipe.
-    kReadBufferSize = 4 * 1024
+    kReadBufferSize = 4 * 1024,
+
+    // Maximum size of a message that we allow to be copied (rather than moved).
+    kMaxCopySize = 32 * 1024,
   };
 
   // Initialize a Channel.
@@ -98,7 +103,7 @@ class Channel : public Message::Sender {
   //
   // If you Send() a message on a Close()'d channel, we delete the message
   // immediately.
-  virtual bool Send(Message* message);
+  virtual bool Send(Message* message) override;
 
   // Unsound_IsClosed() and Unsound_NumQueuedMessages() are safe to call from
   // any thread, but the value returned may be out of date, because we don't
@@ -130,6 +135,15 @@ class Channel : public Message::Sender {
   // Return the server pipe handle.
   void* GetServerPipeHandle() const;
 #endif  // defined(OS_POSIX)
+
+  // Generates a channel ID that's non-predictable and unique.
+  static std::wstring GenerateUniqueRandomChannelID();
+
+  // Generates a channel ID that, if passed to the client as a shared secret,
+  // will validate that the client's authenticity. On platforms that do not
+  // require additional validation this is simply calls GenerateUniqueRandomChannelID().
+  // For portability the prefix should not include the \ character.
+  static std::wstring GenerateVerifiedChannelID(const std::wstring& prefix);
 
  private:
   // PIMPL to which all channel calls are delegated.

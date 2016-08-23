@@ -25,6 +25,36 @@ its prototype:
     disentangling itself from the debuggee, regardless of what sort of
     events or handlers or "points" we add to the interface.
 
+`allowUnobservedAsmJS`
+:   A boolean value indicating whether asm.js code running inside this
+    `Debugger` instance's debuggee globals is invisible to Debugger API
+    handlers and breakpoints. Setting this to `false` inhibits the
+    ahead-of-time asm.js compiler and forces asm.js code to run as normal
+    JavaScript. This is an accessor property with a getter and setter. It is
+    initially `false` in a freshly created `Debugger` instance.
+
+    Setting this flag to `true` is intended for uses of subsystems of the
+    Debugger API (e.g, [`Debugger.Source`][source]) for purposes other than
+    step debugging a target JavaScript program.
+
+`collectCoverageInfo`
+:   A boolean value indicating whether code coverage should be enabled inside
+    each debuggee of this `Debugger` instance. Changing this flag value will
+    recompile all JIT code to add or remove code coverage
+    instrumentation. Changing this flag when any frame of the debuggee is
+    currently active on the stack will produce an exception.
+
+    Setting this to `true` enables code coverage instrumentation, which can be
+    accessed via the [`Debugger.Script`][script] `getOffsetsCoverage`
+    function. In some cases, the code coverage might expose information which
+    pre-date the modification of this flag. Code coverage reports are monotone,
+    thus one can take a snapshot when the Debugger is enabled, and output the
+    difference.
+
+    Setting this to `false` prevents this `Debugger` instance from requiring any
+    code coverage instrumentation, but it does not guarantee that the
+    instrumentation is not present.
+
 `uncaughtExceptionHook`
 :   Either `null` or a function that SpiderMonkey calls when a call to a
     debug event handler, breakpoint handler, watchpoint handler, or similar
@@ -87,13 +117,27 @@ compartment.
 
 <code>onNewPromise(<i>promise</i>)</code>
 :   A new Promise object, referenced by the [`Debugger.Object`][object] instance
-    *promise*, has been allocated in the scope of the debuggees.
+    *promise*, has been allocated in the scope of the debuggees. The Promise's
+    allocation stack can be obtained using the *promiseAllocationStack*
+    accessor property of the [`Debugger.Object`][object] instance *promise*.
 
     This handler method should return a [resumption value][rv] specifying how
-    the debuggee's execution should proceed. However, note that a <code>{ return:
-    <i>value</i> }</code> resumption value is treated like `undefined` ("continue
-    normally"); <i>value</i> is ignored. (Allowing the handler to substitute
-    its own value for the new global object doesn't seem useful.)
+    the debuggee's execution should proceed. However, note that a <code>{
+    return: <i>value</i> }</code> resumption value is treated like `undefined`
+    ("continue normally"); <i>value</i> is ignored.
+
+<code>onPromiseSettled(<i>promise</i>)</code>
+:   A Promise object, referenced by the [`Debugger.Object`][object] instance
+    *promise* that was allocated within a debuggee scope, has settled (either
+    fulfilled or rejected). The Promise's state, fulfillment or rejection
+    value, and the allocation and resolution stacks can be obtained using the
+    Promise-related accessor properties of the [`Debugger.Object`][object]
+    instance *promise*.
+
+    This handler method should return a [resumption value][rv] specifying how
+    the debuggee's execution should proceed. However, note that a <code>{
+    return: <i>value</i> }</code> resumption value is treated like `undefined`
+    ("continue normally"); <i>value</i> is ignored.
 
 <code>onDebuggerStatement(<i>frame</i>)</code>
 :   Debuggee code has executed a <i>debugger</i> statement in <i>frame</i>.
@@ -456,3 +500,23 @@ other kinds of objects.
     `TypeError`. Determine which global is designated by <i>global</i>
     using the same rules as [`Debugger.prototype.addDebuggee`][add].
 
+<code>adoptDebuggeeValue(<i>value</i>)</code>
+:    Given a debuggee value `value` owned by an arbitrary `Debugger`, return an
+     equivalent debuggee value owned by this `Debugger`.
+
+     If `value` is a primitive value, return it unchanged. If `value` is a
+     `Debugger.Object` owned by an arbitrary `Debugger`, return an equivalent
+     `Debugger.Object` owned by this `Debugger`. Otherwise, if `value` is some
+     other kind of object, and hence not a proper debuggee value, throw a
+     TypeError instead.
+
+## Static methods of the Debugger Object
+
+The functions described below are not called with a `this` value.
+
+<code id="isCompilableUnit">isCompilableUnit(<i>source</i>)</code>
+:   Given a string of source code, designated by <i>source</i>, return false if
+    the string might become a valid JavaScript statement with the addition of
+    more lines. Otherwise return true. The intent is to support interactive
+    compilation - accumulate lines in a buffer until isCompilableUnit is true,
+    then pass it to the compiler.

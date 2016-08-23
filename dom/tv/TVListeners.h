@@ -15,7 +15,7 @@
 namespace mozilla {
 namespace dom {
 
-class TVSourceListener MOZ_FINAL : public nsITVSourceListener
+class TVSourceListener final : public nsITVSourceListener
 {
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -32,7 +32,7 @@ private:
   already_AddRefed<TVSource> GetSource(const nsAString& aTunerId,
                                        const nsAString& aSourceType);
 
-  nsTArray<nsRefPtr<TVSource>> mSources;
+  nsTArray<RefPtr<TVSource>> mSources;
 };
 
 } // namespace dom

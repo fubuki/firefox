@@ -30,7 +30,7 @@ NS_DEFINE_STATIC_IID_ACCESSOR(nsITestCom, NS_ITEST_COM_IID)
  * nsTestCom
  */
 
-class nsTestCom MOZ_FINAL : public nsITestCom {
+class nsTestCom final : public nsITestCom {
   NS_DECL_ISUPPORTS
 
 public:
@@ -54,7 +54,7 @@ MozExternalRefCountType nsTestCom::AddRef()
 {
   nsrefcnt res = ++mRefCnt;
   NS_LOG_ADDREF(this, mRefCnt, "nsTestCom", sizeof(*this));
-  printf("nsTestCom: Adding ref = %d\n", res);
+  printf("nsTestCom: Adding ref = %p\n", (void *)res);
   return res;
 }
 
@@ -62,14 +62,14 @@ MozExternalRefCountType nsTestCom::Release()
 {
   nsrefcnt res = --mRefCnt;
   NS_LOG_RELEASE(this, mRefCnt, "nsTestCom");
-  printf("nsTestCom: Releasing = %d\n", res);
+  printf("nsTestCom: Releasing = %p\n", (void *)res);
   if (res == 0) {
     delete this;
   }
   return res;
 }
 
-class nsTestComFactory MOZ_FINAL : public nsIFactory {
+class nsTestComFactory final : public nsIFactory {
   ~nsTestComFactory() {}
   NS_DECL_ISUPPORTS
 public:

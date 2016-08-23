@@ -44,31 +44,30 @@ protected:
   }
 
 public:
-  virtual void SetVisibleRegion(const nsIntRegion& aRegion) MOZ_OVERRIDE
+  virtual void SetVisibleRegion(const LayerIntRegion& aRegion) override
   {
     NS_ASSERTION(BasicManager()->InConstruction(),
                  "Can only set properties in construction phase");
     PaintedLayer::SetVisibleRegion(aRegion);
   }
-  virtual void InvalidateRegion(const nsIntRegion& aRegion) MOZ_OVERRIDE
+  virtual void InvalidateRegion(const nsIntRegion& aRegion) override
   {
     NS_ASSERTION(BasicManager()->InConstruction(),
                  "Can only set properties in construction phase");
-    mInvalidRegion.Or(mInvalidRegion, aRegion);
-    mInvalidRegion.SimplifyOutward(20);
-    mValidRegion.Sub(mValidRegion, mInvalidRegion);
+    mInvalidRegion.Add(aRegion);
+    mValidRegion.Sub(mValidRegion, mInvalidRegion.GetRegion());
   }
 
   virtual void PaintThebes(gfxContext* aContext,
                            Layer* aMaskLayer,
                            LayerManager::DrawPaintedLayerCallback aCallback,
-                           void* aCallbackData) MOZ_OVERRIDE;
+                           void* aCallbackData) override;
 
   virtual void Validate(LayerManager::DrawPaintedLayerCallback aCallback,
                         void* aCallbackData,
-                        ReadbackProcessor* aReadback) MOZ_OVERRIDE;
+                        ReadbackProcessor* aReadback) override;
 
-  virtual void ClearCachedResources() MOZ_OVERRIDE
+  virtual void ClearCachedResources() override
   {
     if (mContentClient) {
       mContentClient->Clear();
@@ -76,7 +75,7 @@ public:
     mValidRegion.SetEmpty();
   }
 
-  virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) MOZ_OVERRIDE
+  virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) override
   {
     if (!BasicManager()->IsRetained()) {
       // Don't do any snapping of our transform, since we're just going to
@@ -86,7 +85,7 @@ public:
         mResidualTranslation = gfxPoint(0,0);
         mValidRegion.SetEmpty();
       }
-      ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+      ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
       return;
     }
     PaintedLayer::ComputeEffectiveTransforms(aTransformToSurface);
@@ -112,21 +111,21 @@ protected:
       BasicManager()->SetTransactionIncomplete();
       return;
     }
-    aCallback(this, aContext, aExtendedRegionToDraw, aClip,
-              aRegionToInvalidate, aCallbackData);
+    aCallback(this, aContext, aExtendedRegionToDraw, aExtendedRegionToDraw,
+              aClip, aRegionToInvalidate, aCallbackData);
     // Everything that's visible has been validated. Do this instead of just
     // OR-ing with aRegionToDraw, since that can lead to a very complex region
     // here (OR doesn't automatically simplify to the simplest possible
     // representation of a region.)
     nsIntRegion tmp;
-    tmp.Or(mVisibleRegion, aExtendedRegionToDraw);
+    tmp.Or(mVisibleRegion.ToUnknownRegion(), aExtendedRegionToDraw);
     mValidRegion.Or(mValidRegion, tmp);
   }
 
   RefPtr<ContentClientBasic> mContentClient;
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif

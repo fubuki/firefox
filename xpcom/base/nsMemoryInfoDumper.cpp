@@ -83,7 +83,7 @@ private:
   const bool mMinimizeMemoryUsage;
 };
 
-class GCAndCCLogDumpRunnable MOZ_FINAL
+class GCAndCCLogDumpRunnable final
   : public nsRunnable
   , public nsIDumpGCAndCCLogsCallback
 {
@@ -99,7 +99,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     nsCOMPtr<nsIMemoryInfoDumper> dumper =
       do_GetService("@mozilla.org/memory-info-dumper;1");
@@ -109,12 +109,12 @@ public:
     return NS_OK;
   }
 
-  NS_IMETHOD OnDump(nsIFile* aGCLog, nsIFile* aCCLog, bool aIsParent) MOZ_OVERRIDE
+  NS_IMETHOD OnDump(nsIFile* aGCLog, nsIFile* aCCLog, bool aIsParent) override
   {
     return NS_OK;
   }
 
-  NS_IMETHOD OnFinish() MOZ_OVERRIDE
+  NS_IMETHOD OnFinish() override
   {
     return NS_OK;
   }
@@ -130,7 +130,7 @@ private:
 NS_IMPL_ISUPPORTS_INHERITED(GCAndCCLogDumpRunnable, nsRunnable,
                             nsIDumpGCAndCCLogsCallback)
 
-} // anonymous namespace
+} // namespace
 
 #if defined(MOZ_SUPPORTS_RT_SIGNALS) // {
 namespace {
@@ -170,7 +170,7 @@ void doMemoryReport(const uint8_t aRecvSig)
   // Dump our memory reports (but run this on the main thread!).
   bool minimize = aRecvSig == sDumpAboutMemoryAfterMMUSignum;
   LOG("SignalWatcher(sig %d) dispatching memory report runnable.", aRecvSig);
-  nsRefPtr<DumpMemoryInfoToTempDirRunnable> runnable =
+  RefPtr<DumpMemoryInfoToTempDirRunnable> runnable =
     new DumpMemoryInfoToTempDirRunnable(/* identifier = */ EmptyString(),
                                         /* anonymize = */ false,
                                         minimize);
@@ -181,14 +181,14 @@ void doGCCCDump(const uint8_t aRecvSig)
 {
   LOG("SignalWatcher(sig %d) dispatching GC/CC log runnable.", aRecvSig);
   // Dump GC and CC logs (from the main thread).
-  nsRefPtr<GCAndCCLogDumpRunnable> runnable =
+  RefPtr<GCAndCCLogDumpRunnable> runnable =
     new GCAndCCLogDumpRunnable(/* identifier = */ EmptyString(),
                                /* allTraces = */ true,
                                /* dumpChildProcesses = */ true);
   NS_DispatchToMainThread(runnable);
 }
 
-} // anonymous namespace
+} // namespace
 #endif // MOZ_SUPPORTS_RT_SIGNALS }
 
 #if defined(MOZ_SUPPORTS_FIFO) // {
@@ -200,7 +200,7 @@ doMemoryReport(const nsCString& aInputStr)
   bool minimize = aInputStr.EqualsLiteral("minimize memory report");
   LOG("FifoWatcher(command:%s) dispatching memory report runnable.",
       aInputStr.get());
-  nsRefPtr<DumpMemoryInfoToTempDirRunnable> runnable =
+  RefPtr<DumpMemoryInfoToTempDirRunnable> runnable =
     new DumpMemoryInfoToTempDirRunnable(/* identifier = */ EmptyString(),
                                         /* anonymize = */ false,
                                         minimize);
@@ -212,7 +212,7 @@ doGCCCDump(const nsCString& aInputStr)
 {
   bool doAllTracesGCCCDump = aInputStr.EqualsLiteral("gc log");
   LOG("FifoWatcher(command:%s) dispatching GC/CC log runnable.", aInputStr.get());
-  nsRefPtr<GCAndCCLogDumpRunnable> runnable =
+  RefPtr<GCAndCCLogDumpRunnable> runnable =
     new GCAndCCLogDumpRunnable(/* identifier = */ EmptyString(),
                                doAllTracesGCCCDump,
                                /* dumpChildProcesses = */ true);
@@ -222,7 +222,9 @@ doGCCCDump(const nsCString& aInputStr)
 bool
 SetupFifo()
 {
-  static DebugOnly<bool> fifoCallbacksRegistered = false;
+#ifdef DEBUG
+  static bool fifoCallbacksRegistered = false;
+#endif
 
   if (!FifoWatcher::MaybeCreate()) {
     return false;
@@ -243,7 +245,9 @@ SetupFifo()
   fw->RegisterCallback(NS_LITERAL_CSTRING("abbreviated gc log"),
                        doGCCCDump);
 
+#ifdef DEBUG
   fifoCallbacksRegistered = true;
+#endif
   return true;
 }
 
@@ -258,7 +262,7 @@ OnFifoEnabledChange(const char* /*unused*/, void* /*unused*/)
   }
 }
 
-} // anonymous namespace
+} // namespace
 #endif // MOZ_SUPPORTS_FIFO }
 
 NS_IMPL_ISUPPORTS(nsMemoryInfoDumper, nsIMemoryInfoDumper)
@@ -318,7 +322,7 @@ EnsureNonEmptyIdentifier(nsAString& aIdentifier)
 // Use XPCOM refcounting to fire |onFinish| when all reference-holders
 // (remote dump actors or the |DumpGCAndCCLogsToFile| activation itself)
 // have gone away.
-class nsDumpGCAndCCLogsCallbackHolder MOZ_FINAL
+class nsDumpGCAndCCLogsCallbackHolder final
   : public nsIDumpGCAndCCLogsCallback
 {
 public:
@@ -329,12 +333,12 @@ public:
   {
   }
 
-  NS_IMETHODIMP OnFinish() MOZ_OVERRIDE
+  NS_IMETHODIMP OnFinish() override
   {
     return NS_ERROR_UNEXPECTED;
   }
 
-  NS_IMETHODIMP OnDump(nsIFile* aGCLog, nsIFile* aCCLog, bool aIsParent) MOZ_OVERRIDE
+  NS_IMETHODIMP OnDump(nsIFile* aGCLog, nsIFile* aCCLog, bool aIsParent) override
   {
     return mCallback->OnDump(aGCLog, aCCLog, aIsParent);
   }
@@ -342,7 +346,7 @@ public:
 private:
   ~nsDumpGCAndCCLogsCallbackHolder()
   {
-    unused << mCallback->OnFinish();
+    Unused << mCallback->OnFinish();
   }
 
   nsCOMPtr<nsIDumpGCAndCCLogsCallback> mCallback;
@@ -372,7 +376,7 @@ nsMemoryInfoDumper::DumpGCAndCCLogsToFile(const nsAString& aIdentifier,
       logSink->SetFilenameIdentifier(identifier);
       logSink->SetProcessIdentifier(cp->Pid());
 
-      unused << cp->CycleCollectWithLogs(aDumpAllTraces, logSink,
+      Unused << cp->CycleCollectWithLogs(aDumpAllTraces, logSink,
                                          callbackHolder);
     }
   }
@@ -450,13 +454,13 @@ public:
   nsresult Finish() { return mGZWriter->Finish(); }
 
 private:
-  nsRefPtr<nsGZFileWriter> mGZWriter;
+  RefPtr<nsGZFileWriter> mGZWriter;
 };
 
 // We need two callbacks: one that handles reports, and one that is called at
 // the end of reporting. Both the callbacks need access to the same JSONWriter,
 // so we implement both of them in this one class.
-class HandleReportAndFinishReportingCallbacks MOZ_FINAL
+class HandleReportAndFinishReportingCallbacks final
   : public nsIHandleReportCallback, public nsIFinishReportingCallback
 {
 public:
@@ -475,7 +479,7 @@ public:
   NS_IMETHOD Callback(const nsACString& aProcess, const nsACString& aPath,
                       int32_t aKind, int32_t aUnits, int64_t aAmount,
                       const nsACString& aDescription,
-                      nsISupports* aData) MOZ_OVERRIDE
+                      nsISupports* aData) override
   {
     nsAutoCString process;
     if (aProcess.IsEmpty()) {
@@ -484,7 +488,7 @@ public:
       // of the form "$PROCESS_NAME (pid $PID)", or just "(pid $PID)" if we
       // don't have a process name.  If we're the main process, we let
       // $PROCESS_NAME be "Main Process".
-      if (XRE_GetProcessType() == GeckoProcessType_Default) {
+      if (XRE_IsParentProcess()) {
         // We're the main process.
         process.AssignLiteral("Main Process");
       } else if (ContentChild* cc = ContentChild::GetSingleton()) {
@@ -515,7 +519,7 @@ public:
   }
 
   // This is the callback for nsIFinishReportingCallback.
-  NS_IMETHOD Callback(nsISupports* aData) MOZ_OVERRIDE
+  NS_IMETHOD Callback(nsISupports* aData) override
   {
     mWriter->EndArray();  // end of "reports" array
     mWriter->End();
@@ -546,7 +550,7 @@ private:
 NS_IMPL_ISUPPORTS(HandleReportAndFinishReportingCallbacks,
                   nsIHandleReportCallback, nsIFinishReportingCallback)
 
-class TempDirFinishCallback MOZ_FINAL : public nsIFinishDumpingCallback
+class TempDirFinishCallback final : public nsIFinishDumpingCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -558,7 +562,7 @@ public:
   {
   }
 
-  NS_IMETHOD Callback(nsISupports* aData) MOZ_OVERRIDE
+  NS_IMETHOD Callback(nsISupports* aData) override
   {
     // Rename the memory reports file, now that we're done writing all the
     // files. Its final name is "memory-report<-identifier>-<pid>.json.gz".
@@ -636,7 +640,7 @@ DumpMemoryInfoToFile(
   bool aMinimizeMemoryUsage,
   nsAString& aDMDIdentifier)
 {
-  nsRefPtr<nsGZFileWriter> gzWriter = new nsGZFileWriter();
+  RefPtr<nsGZFileWriter> gzWriter = new nsGZFileWriter();
   nsresult rv = gzWriter->Init(aReportsFile);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
@@ -658,7 +662,7 @@ DumpMemoryInfoToFile(
     jsonWriter->StartArrayProperty("reports");
   }
 
-  nsRefPtr<HandleReportAndFinishReportingCallbacks>
+  RefPtr<HandleReportAndFinishReportingCallbacks>
     handleReportAndFinishReporting =
       new HandleReportAndFinishReportingCallbacks(Move(jsonWriter),
                                                   aFinishDumping,
@@ -753,7 +757,7 @@ nsMemoryInfoDumper::DumpMemoryInfoToTempDir(const nsAString& aIdentifier,
     return rv;
   }
 
-  nsRefPtr<TempDirFinishCallback> finishDumping =
+  RefPtr<TempDirFinishCallback> finishDumping =
     new TempDirFinishCallback(reportsTmpFile, reportsFinalFilename);
 
   return DumpMemoryInfoToFile(reportsTmpFile, finishDumping, nullptr,
@@ -807,7 +811,7 @@ nsMemoryInfoDumper::OpenDMDFile(const nsAString& aIdentifier, int aPid,
 nsresult
 nsMemoryInfoDumper::DumpDMDToFile(FILE* aFile)
 {
-  nsRefPtr<nsGZFileWriter> gzWriter = new nsGZFileWriter();
+  RefPtr<nsGZFileWriter> gzWriter = new nsGZFileWriter();
   nsresult rv = gzWriter->InitANSIFileDesc(aFile);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;

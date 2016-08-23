@@ -37,8 +37,8 @@ NS_NewSVGForeignObjectFrame(nsIPresShell   *aPresShell,
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGForeignObjectFrame)
 
 nsSVGForeignObjectFrame::nsSVGForeignObjectFrame(nsStyleContext* aContext)
-  : nsSVGForeignObjectFrameBase(aContext),
-    mInReflow(false)
+  : nsContainerFrame(aContext)
+  , mInReflow(false)
 {
   AddStateBits(NS_FRAME_REFLOW_ROOT | NS_FRAME_MAY_BE_TRANSFORMED |
                NS_FRAME_SVG_LAYOUT);
@@ -49,17 +49,17 @@ nsSVGForeignObjectFrame::nsSVGForeignObjectFrame(nsStyleContext* aContext)
 
 NS_QUERYFRAME_HEAD(nsSVGForeignObjectFrame)
   NS_QUERYFRAME_ENTRY(nsISVGChildFrame)
-NS_QUERYFRAME_TAIL_INHERITING(nsSVGForeignObjectFrameBase)
+NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 void
 nsSVGForeignObjectFrame::Init(nsIContent*       aContent,
                               nsContainerFrame* aParent,
                               nsIFrame*         aPrevInFlow)
 {
-  NS_ASSERTION(aContent->IsSVG(nsGkAtoms::foreignObject),
+  NS_ASSERTION(aContent->IsSVGElement(nsGkAtoms::foreignObject),
                "Content is not an SVG foreignObject!");
 
-  nsSVGForeignObjectFrameBase::Init(aContent, aParent, aPrevInFlow);
+  nsContainerFrame::Init(aContent, aParent, aPrevInFlow);
   AddStateBits(aParent->GetStateBits() & NS_STATE_SVG_CLIPPATH_CHILD);
   AddStateBits(NS_FRAME_FONT_INFLATION_CONTAINER |
                NS_FRAME_FONT_INFLATION_FLOW_ROOT);
@@ -74,7 +74,7 @@ void nsSVGForeignObjectFrame::DestroyFrom(nsIFrame* aDestructRoot)
   if (!(mState & NS_FRAME_IS_NONDISPLAY)) {
       nsSVGUtils::GetOuterSVGFrame(this)->UnregisterForeignObject(this);
   }
-  nsSVGForeignObjectFrameBase::DestroyFrom(aDestructRoot);
+  nsContainerFrame::DestroyFrom(aDestructRoot);
 }
 
 nsIAtom *
@@ -128,8 +128,8 @@ nsSVGForeignObjectFrame::Reflow(nsPresContext*           aPresContext,
                                 const nsHTMLReflowState& aReflowState,
                                 nsReflowStatus&          aStatus)
 {
-  NS_ABORT_IF_FALSE(!(GetStateBits() & NS_FRAME_IS_NONDISPLAY),
-                    "Should not have been called");
+  MOZ_ASSERT(!(GetStateBits() & NS_FRAME_IS_NONDISPLAY),
+             "Should not have been called");
 
   // Only InvalidateAndScheduleBoundsUpdate marks us with NS_FRAME_IS_DIRTY,
   // so if that bit is still set we still have a resize pending. If we hit
@@ -189,8 +189,9 @@ nsSVGForeignObjectFrame::IsSVGTransformed(Matrix *aOwnTransform,
   if ((transformList && transformList->HasTransform()) ||
       content->GetAnimateMotionTransform()) {
     if (aOwnTransform) {
-      *aOwnTransform = gfx::ToMatrix(content->PrependLocalTransformsTo(gfxMatrix(),
-                                  nsSVGElement::eUserSpaceToParent));
+      *aOwnTransform = gfx::ToMatrix(content->PrependLocalTransformsTo(
+                                       gfxMatrix(),
+                                       eUserSpaceToParent));
     }
     foundTransform = true;
   }
@@ -210,7 +211,7 @@ nsSVGForeignObjectFrame::PaintSVG(gfxContext& aContext,
   if (IsDisabled())
     return NS_OK;
 
-  nsIFrame* kid = GetFirstPrincipalChild();
+  nsIFrame* kid = PrincipalChildList().FirstChild();
   if (!kid)
     return NS_OK;
 
@@ -275,7 +276,9 @@ nsSVGForeignObjectFrame::PaintSVG(gfxContext& aContext,
   }
   nsRenderingContext rendCtx(&aContext);
   nsresult rv = nsLayoutUtils::PaintFrame(&rendCtx, kid, nsRegion(kidDirtyRect),
-                                          NS_RGBA(0,0,0,0), flags);
+                                          NS_RGBA(0,0,0,0),
+                                          nsDisplayListBuilderMode::PAINTING,
+                                          flags);
 
   aContext.Restore();
 
@@ -293,7 +296,7 @@ nsSVGForeignObjectFrame::GetFrameForPoint(const gfxPoint& aPoint)
   if (IsDisabled() || (GetStateBits() & NS_FRAME_IS_NONDISPLAY))
     return nullptr;
 
-  nsIFrame* kid = GetFirstPrincipalChild();
+  nsIFrame* kid = PrincipalChildList().FirstChild();
   if (!kid)
     return nullptr;
 
@@ -335,8 +338,8 @@ nsSVGForeignObjectFrame::ReflowSVG()
   NS_ASSERTION(nsSVGUtils::OuterSVGIsCallingReflowSVG(this),
                "This call is probably a wasteful mistake");
 
-  NS_ABORT_IF_FALSE(!(GetStateBits() & NS_FRAME_IS_NONDISPLAY),
-                    "ReflowSVG mechanism not designed for this");
+  MOZ_ASSERT(!(GetStateBits() & NS_FRAME_IS_NONDISPLAY),
+             "ReflowSVG mechanism not designed for this");
 
   if (!nsSVGUtils::NeedsReflowSVG(this)) {
     return;
@@ -359,7 +362,7 @@ nsSVGForeignObjectFrame::ReflowSVG()
 
   // Fully mark our kid dirty so that it gets resized if necessary
   // (NS_FRAME_HAS_DIRTY_CHILDREN isn't enough in that case):
-  nsIFrame* kid = GetFirstPrincipalChild();
+  nsIFrame* kid = PrincipalChildList().FirstChild();
   kid->AddStateBits(NS_FRAME_IS_DIRTY);
 
   // Make sure to not allow interrupts if we're not being reflown as a root:
@@ -376,7 +379,7 @@ nsSVGForeignObjectFrame::ReflowSVG()
 
   // If we have a filter, we need to invalidate ourselves because filter
   // output can change even if none of our descendants need repainting.
-  if (StyleSVGReset()->HasFilters()) {
+  if (StyleEffects()->HasFilters()) {
     InvalidateFrame();
   }
 
@@ -394,8 +397,8 @@ nsSVGForeignObjectFrame::ReflowSVG()
 void
 nsSVGForeignObjectFrame::NotifySVGChanged(uint32_t aFlags)
 {
-  NS_ABORT_IF_FALSE(aFlags & (TRANSFORM_CHANGED | COORD_CONTEXT_CHANGED),
-                    "Invalidation logic may need adjusting");
+  MOZ_ASSERT(aFlags & (TRANSFORM_CHANGED | COORD_CONTEXT_CHANGED),
+             "Invalidation logic may need adjusting");
 
   bool needNewBounds = false; // i.e. mRect or visual overflow rect
   bool needReflow = false;
@@ -509,7 +512,7 @@ void nsSVGForeignObjectFrame::RequestReflow(nsIPresShell::IntrinsicDirty aType)
     // If we haven't had a ReflowSVG() yet, nothing to do.
     return;
 
-  nsIFrame* kid = GetFirstPrincipalChild();
+  nsIFrame* kid = PrincipalChildList().FirstChild();
   if (!kid)
     return;
 
@@ -519,13 +522,14 @@ void nsSVGForeignObjectFrame::RequestReflow(nsIPresShell::IntrinsicDirty aType)
 void
 nsSVGForeignObjectFrame::DoReflow()
 {
+  MarkInReflow();
   // Skip reflow if we're zero-sized, unless this is our first reflow.
   if (IsDisabled() &&
       !(GetStateBits() & NS_FRAME_FIRST_REFLOW))
     return;
 
   nsPresContext *presContext = PresContext();
-  nsIFrame* kid = GetFirstPrincipalChild();
+  nsIFrame* kid = PrincipalChildList().FirstChild();
   if (!kid)
     return;
 
@@ -538,7 +542,7 @@ nsSVGForeignObjectFrame::DoReflow()
   WritingMode wm = kid->GetWritingMode();
   nsHTMLReflowState reflowState(presContext, kid,
                                 &renderingContext,
-                                LogicalSize(wm, GetLogicalSize(wm).ISize(wm),
+                                LogicalSize(wm, ISize(wm),
                                             NS_UNCONSTRAINEDSIZE));
   nsHTMLReflowMetrics desiredSize(reflowState);
   nsReflowStatus status;
@@ -549,9 +553,9 @@ nsSVGForeignObjectFrame::DoReflow()
                reflowState.ComputedPhysicalMargin() == nsMargin(0, 0, 0, 0),
                "style system should ensure that :-moz-svg-foreign-content "
                "does not get styled");
-  NS_ASSERTION(reflowState.ComputedWidth() == mRect.width,
+  NS_ASSERTION(reflowState.ComputedISize() == ISize(wm),
                "reflow state made child wrong size");
-  reflowState.SetComputedHeight(mRect.height);
+  reflowState.SetComputedBSize(BSize(wm));
 
   ReflowChild(kid, presContext, desiredSize, reflowState, 0, 0,
               NS_FRAME_NO_MOVE_FRAME, status);
@@ -569,7 +573,7 @@ nsSVGForeignObjectFrame::GetInvalidRegion()
   MOZ_ASSERT(!NS_SVGDisplayListPaintingEnabled(),
              "Only called by nsDisplayOuterSVG code");
 
-  nsIFrame* kid = GetFirstPrincipalChild();
+  nsIFrame* kid = PrincipalChildList().FirstChild();
   if (kid->HasInvalidFrameInSubtree()) {
     gfxRect r(mRect.x, mRect.y, mRect.width, mRect.height);
     r.Scale(1.0 / nsPresContext::AppUnitsPerCSSPixel());

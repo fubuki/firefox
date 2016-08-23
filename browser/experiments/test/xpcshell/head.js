@@ -1,16 +1,13 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
-Cu.import("resource://services-sync/healthreport.jsm", this);
-Cu.import("resource://testing-common/services/healthreport/utils.jsm", this);
-Cu.import("resource://gre/modules/services/healthreport/providers.jsm");
 Cu.import("resource://testing-common/AddonManagerTesting.jsm");
 
 const PREF_EXPERIMENTS_ENABLED  = "experiments.enabled";
@@ -19,7 +16,6 @@ const PREF_LOGGING_DUMP         = "experiments.logging.dump";
 const PREF_MANIFEST_URI         = "experiments.manifest.uri";
 const PREF_FETCHINTERVAL        = "experiments.manifest.fetchIntervalSeconds";
 const PREF_TELEMETRY_ENABLED    = "toolkit.telemetry.enabled";
-const PREF_HEALTHREPORT_ENABLED = "datareporting.healthreport.service.enabled";
 
 function getExperimentPath(base) {
   let p = do_get_cwd();
@@ -42,9 +38,11 @@ function sha1File(path) {
   is.close();
   let bytes = hasher.finish(false);
 
-  return [("0" + bytes.charCodeAt(byte).toString(16)).slice(-2)
-          for (byte in bytes)]
-         .join("");
+  let rv = "";
+  for (let i = 0; i < bytes.length; i++) {
+    rv += ("0" + bytes.charCodeAt(i).toString(16)).substr(-2);
+  }
+  return rv;
 }
 
 const EXPERIMENT1_ID       = "test-experiment-1@tests.mozilla.org";
@@ -66,8 +64,6 @@ const EXPERIMENT2_XPI_SHA1 = "sha1:" + sha1File(EXPERIMENT2_PATH);
 
 const EXPERIMENT3_ID       = "test-experiment-3@tests.mozilla.org";
 const EXPERIMENT4_ID       = "test-experiment-4@tests.mozilla.org";
-
-const DEFAULT_BUILDID      = "2014060601";
 
 const FAKE_EXPERIMENTS_1 = [
   {
@@ -101,19 +97,7 @@ const FAKE_EXPERIMENTS_2 = [
   },
 ];
 
-let gAppInfo = null;
-
-function getReporter(name, uri, inspected) {
-  return Task.spawn(function init() {
-    let reporter = getHealthReporter(name, uri, inspected);
-    yield reporter.init();
-
-    yield reporter._providerManager.registerProviderFromType(
-      HealthReportProvider);
-
-    throw new Task.Result(reporter);
-  });
-}
+var gAppInfo = null;
 
 function removeCacheFile() {
   let path = OS.Path.join(OS.Constants.Path.profileDir, "experiments.json");
@@ -141,7 +125,7 @@ function dateToSeconds(date) {
   return date.getTime() / 1000;
 }
 
-let gGlobalScope = this;
+var gGlobalScope = this;
 function loadAddonManager() {
   let ns = {};
   Cu.import("resource://gre/modules/Services.jsm", ns);
@@ -153,6 +137,15 @@ function loadAddonManager() {
   startupManager();
 }
 
+// Starts the addon manager without creating app info. We can't directly use
+// |loadAddonManager| defined above in test_conditions.js as it would make the test fail.
+function startAddonManagerOnly() {
+  let addonManager = Cc["@mozilla.org/addons/integration;1"]
+                       .getService(Ci.nsIObserver)
+                       .QueryInterface(Ci.nsITimerCallback);
+  addonManager.observe(null, "addons-startup", null);
+}
+
 function getExperimentAddons(previous=false) {
   let deferred = Promise.defer();
 
@@ -160,70 +153,22 @@ function getExperimentAddons(previous=false) {
     if (previous) {
       deferred.resolve(addons);
     } else {
-      deferred.resolve([a for (a of addons) if (!a.appDisabled)]);
+      deferred.resolve(addons.filter(a => !a.appDisabled));
     }
   });
 
   return deferred.promise;
 }
 
-function createAppInfo(optionsIn) {
-  const XULAPPINFO_CONTRACTID = "@mozilla.org/xre/app-info;1";
-  const XULAPPINFO_CID = Components.ID("{c763b610-9d49-455a-bbd2-ede71682a1ac}");
-
-  let options = optionsIn || {};
-  let id = options.id || "xpcshell@tests.mozilla.org";
-  let name = options.name || "XPCShell";
-  let version = options.version || "1.0";
-  let platformVersion = options.platformVersion || "1.0";
-  let date = options.date || new Date();
-
-  let buildID = options.buildID || DEFAULT_BUILDID;
-
-  gAppInfo = {
-    // nsIXULAppInfo
-    vendor: "Mozilla",
-    name: name,
-    ID: id,
-    version: version,
-    appBuildID: buildID,
-    platformVersion: platformVersion ? platformVersion : "1.0",
-    platformBuildID: buildID,
-
-    // nsIXULRuntime
-    inSafeMode: false,
-    logConsoleErrors: true,
-    OS: "XPCShell",
-    XPCOMABI: "noarch-spidermonkey",
-    invalidateCachesOnRestart: function invalidateCachesOnRestart() {
-      // Do nothing
-    },
-
-    // nsICrashReporter
-    annotations: {},
-
-    annotateCrashReport: function(key, data) {
-      this.annotations[key] = data;
-    },
-
-    QueryInterface: XPCOMUtils.generateQI([Ci.nsIXULAppInfo,
-                                           Ci.nsIXULRuntime,
-                                           Ci.nsICrashReporter,
-                                           Ci.nsISupports])
-  };
-
-  let XULAppInfoFactory = {
-    createInstance: function (outer, iid) {
-      if (outer != null) {
-        throw Cr.NS_ERROR_NO_AGGREGATION;
-      }
-      return gAppInfo.QueryInterface(iid);
-    }
-  };
-
-  let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-  registrar.registerFactory(XULAPPINFO_CID, "XULAppInfo",
-                            XULAPPINFO_CONTRACTID, XULAppInfoFactory);
+function createAppInfo(ID="xpcshell@tests.mozilla.org", name="XPCShell",
+                       version="1.0", platformVersion="1.0") {
+  let tmp = {};
+  Cu.import("resource://testing-common/AppInfo.jsm", tmp);
+  tmp.updateAppInfo({
+    ID, name, version, platformVersion,
+    crashReporter: true,
+  });
+  gAppInfo = tmp.getAppInfo();
 }
 
 /**
@@ -240,3 +185,7 @@ function replaceExperiments(experiment, list) {
     },
   });
 }
+
+// Experiments require Telemetry to be enabled, and that's not true for debug
+// builds. Let's just enable it here instead of going through each test.
+Services.prefs.setBoolPref(PREF_TELEMETRY_ENABLED, true);

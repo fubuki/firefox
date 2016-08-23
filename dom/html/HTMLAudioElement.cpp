@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,7 +14,6 @@
 #include "nsContentUtils.h"
 #include "nsJSUtils.h"
 #include "AudioSampleFormat.h"
-#include "AudioChannelCommon.h"
 #include <algorithm>
 #include "nsComponentManagerUtils.h"
 #include "nsIHttpChannel.h"
@@ -26,10 +25,7 @@ NS_IMPL_NS_NEW_HTML_ELEMENT(Audio)
 namespace mozilla {
 namespace dom {
 
-extern bool IsAudioAPIEnabled();
-
 NS_IMPL_ELEMENT_CLONE(HTMLAudioElement)
-
 
 HTMLAudioElement::HTMLAudioElement(already_AddRefed<NodeInfo>& aNodeInfo)
   : HTMLMediaElement(aNodeInfo)
@@ -40,12 +36,19 @@ HTMLAudioElement::~HTMLAudioElement()
 {
 }
 
+bool
+HTMLAudioElement::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
+{
+  return HasAttr(kNameSpaceID_None, nsGkAtoms::controls) ||
+         HTMLMediaElement::IsInteractiveHTMLContent(aIgnoreTabindex);
+}
+
 already_AddRefed<HTMLAudioElement>
 HTMLAudioElement::Audio(const GlobalObject& aGlobal,
                         const Optional<nsAString>& aSrc,
                         ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aGlobal.GetAsSupports());
   nsIDocument* doc;
   if (!win || !(doc = win->GetExtantDoc())) {
     aRv.Throw(NS_ERROR_FAILURE);
@@ -57,7 +60,7 @@ HTMLAudioElement::Audio(const GlobalObject& aGlobal,
                                         kNameSpaceID_XHTML,
                                         nsIDOMNode::ELEMENT_NODE);
 
-  nsRefPtr<HTMLAudioElement> audio = new HTMLAudioElement(nodeInfo);
+  RefPtr<HTMLAudioElement> audio = new HTMLAudioElement(nodeInfo);
   audio->SetHTMLAttr(nsGkAtoms::preload, NS_LITERAL_STRING("auto"), aRv);
   if (aRv.Failed()) {
     return nullptr;
@@ -73,13 +76,9 @@ HTMLAudioElement::Audio(const GlobalObject& aGlobal,
 nsresult HTMLAudioElement::SetAcceptHeader(nsIHttpChannel* aChannel)
 {
     nsAutoCString value(
-#ifdef MOZ_WEBM
       "audio/webm,"
-#endif
       "audio/ogg,"
-#ifdef MOZ_WAVE
       "audio/wav,"
-#endif
       "audio/*;q=0.9,"
       "application/ogg;q=0.7,"
       "video/*;q=0.6,*/*;q=0.5");
@@ -90,9 +89,9 @@ nsresult HTMLAudioElement::SetAcceptHeader(nsIHttpChannel* aChannel)
 }
 
 JSObject*
-HTMLAudioElement::WrapNode(JSContext* aCx)
+HTMLAudioElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLAudioElementBinding::Wrap(aCx, this);
+  return HTMLAudioElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

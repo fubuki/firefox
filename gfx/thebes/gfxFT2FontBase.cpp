@@ -114,9 +114,10 @@ gfxFT2FontBase::GetHorizontalMetrics()
     if (mHasMetrics)
         return mMetrics;
 
-    if (MOZ_UNLIKELY(GetStyle()->size <= 0.0)) {
+    if (MOZ_UNLIKELY(GetStyle()->size <= 0.0) ||
+        MOZ_UNLIKELY(GetStyle()->sizeAdjust == 0.0)) {
         new(&mMetrics) gfxFont::Metrics(); // zero initialize
-        mSpaceGlyph = 0;
+        mSpaceGlyph = GetGlyph(' ');
     } else {
         gfxFT2LockedFace face(this);
         face.GetMetrics(&mMetrics, &mSpaceGlyph);
@@ -144,8 +145,6 @@ gfxFT2FontBase::GetHorizontalMetrics()
 uint32_t
 gfxFT2FontBase::GetSpaceGlyph()
 {
-    NS_ASSERTION(GetStyle()->size != 0,
-                 "forgot to short-circuit a text run with zero-sized font?");
     GetHorizontalMetrics();
     return mSpaceGlyph;
 }
@@ -177,10 +176,8 @@ gfxFT2FontBase::GetGlyphWidth(DrawTarget& aDrawTarget, uint16_t aGID)
 }
 
 bool
-gfxFT2FontBase::SetupCairoFont(gfxContext *aContext)
+gfxFT2FontBase::SetupCairoFont(DrawTarget* aDrawTarget)
 {
-    cairo_t *cr = aContext->GetCairo();
-
     // The scaled font ctm is not relevant right here because
     // cairo_set_scaled_font does not record the scaled font itself, but
     // merely the font_face, font_matrix, font_options.  The scaled_font used
@@ -213,6 +210,6 @@ gfxFT2FontBase::SetupCairoFont(gfxContext *aContext)
     // what is set here.  It's too late to change things here as measuring has
     // already taken place.  We should really be measuring with a different
     // font for pdf and ps surfaces (bug 403513).
-    cairo_set_scaled_font(cr, cairoFont);
+    cairo_set_scaled_font(gfxFont::RefCairo(aDrawTarget), cairoFont);
     return true;
 }

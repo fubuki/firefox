@@ -219,8 +219,7 @@ mp_err mp_exptmod_d(const mp_int *a, mp_digit d, const mp_int *m, mp_int *c);
 int    mp_cmp_z(const mp_int *a);
 int    mp_cmp_d(const mp_int *a, mp_digit d);
 int    mp_cmp(const mp_int *a, const mp_int *b);
-int    mp_cmp_mag(mp_int *a, mp_int *b);
-int    mp_cmp_int(const mp_int *a, long z);
+int    mp_cmp_mag(const mp_int *a, const mp_int *b);
 int    mp_isodd(const mp_int *a);
 int    mp_iseven(const mp_int *a);
 
@@ -258,7 +257,7 @@ const  char  *mp_strerror(mp_err ec);
 
 /* Octet string conversion functions */
 mp_err mp_read_unsigned_octets(mp_int *mp, const unsigned char *str, mp_size len);
-int    mp_unsigned_octet_size(const mp_int *mp);
+unsigned int mp_unsigned_octet_size(const mp_int *mp);
 mp_err mp_to_unsigned_octets(const mp_int *mp, unsigned char *str, mp_size maxlen);
 mp_err mp_to_signed_octets(const mp_int *mp, unsigned char *str, mp_size maxlen);
 mp_err mp_to_fixlen_octets(const mp_int *mp, unsigned char *str, mp_size len);

@@ -1,4 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -56,8 +57,10 @@ struct ManifestDirective
   const char* directive;
   int argc;
 
-  // Some directives should only be delivered for NS_COMPONENT_LOCATION
-  // manifests.
+  // Binary components are only allowed for APP locations.
+  bool apponly;
+
+  // Some directives should only be delivered for APP or EXTENSION locations.
   bool componentonly;
 
   bool ischrome;
@@ -74,8 +77,7 @@ struct ManifestDirective
     int aLineNo, char* const* aArgv);
   void (nsChromeRegistry::*regfunc)(
     nsChromeRegistry::ManifestProcessingContext& aCx,
-    int aLineNo, char* const* aArgv,
-    bool aPlatform, bool aContentAccessible);
+    int aLineNo, char* const* aArgv, int aFlags);
 #ifdef MOZ_B2G_LOADER
   // The function to handle the directive for XPT Only parsing.
   void (*xptonlyfunc)(
@@ -89,55 +91,57 @@ struct ManifestDirective
 };
 static const ManifestDirective kParsingTable[] = {
   {
-    "manifest",         1, false, true, true, false,
+    "manifest",         1, false, false, true, true, false,
     &nsComponentManagerImpl::ManifestManifest, nullptr, XPTONLY_MANIFEST
   },
   {
-    "binary-component", 1, true, false, false, false,
+    "binary-component", 1, true, true, false, false, false,
     &nsComponentManagerImpl::ManifestBinaryComponent, nullptr, nullptr
   },
   {
-    "interfaces",       1, true, false, false, false,
+    "interfaces",       1, false, true, false, false, false,
     &nsComponentManagerImpl::ManifestXPT, nullptr, XPTONLY_XPT
   },
   {
-    "component",        2, true, false, false, false,
+    "component",        2, false, true, false, false, false,
     &nsComponentManagerImpl::ManifestComponent, nullptr, nullptr
   },
   {
-    "contract",         2, true, false, false, false,
+    "contract",         2, false, true, false, false, false,
     &nsComponentManagerImpl::ManifestContract, nullptr, nullptr, true
   },
   {
-    "category",         3, true, false, false, false,
+    "category",         3, false, true, false, false, false,
     &nsComponentManagerImpl::ManifestCategory, nullptr, nullptr
   },
   {
-    "content",          2, true, true, true,  true,
+    "content",          2, false, true, true, true,  true,
     nullptr, &nsChromeRegistry::ManifestContent, nullptr
   },
   {
-    "locale",           3, true, true, true, false,
+    "locale",           3, false, true, true, true, false,
     nullptr, &nsChromeRegistry::ManifestLocale, nullptr
   },
   {
-    "skin",             3, false, true, true, false,
+    "skin",             3, false, false, true, true, false,
     nullptr, &nsChromeRegistry::ManifestSkin, nullptr
   },
   {
-    "overlay",          2, true, true, false, false,
+    "overlay",          2, false, true, true, false, false,
     nullptr, &nsChromeRegistry::ManifestOverlay, nullptr
   },
   {
-    "style",            2, false, true, false, false,
+    "style",            2, false, false, true, false, false,
     nullptr, &nsChromeRegistry::ManifestStyle, nullptr
   },
   {
-    "override",         2, true, true, true, false,
+    // NB: note that while skin manifests can use this, they are only allowed
+    // to use it for chrome://../skin/ URLs
+    "override",         2, false, false, true, true, false,
     nullptr, &nsChromeRegistry::ManifestOverride, nullptr
   },
   {
-    "resource",         2, true, true, false, false,
+    "resource",         2, false, true, true, true, false,
     nullptr, &nsChromeRegistry::ManifestResource, nullptr
   }
 };
@@ -167,7 +171,7 @@ struct AutoPR_smprintf_free
   char* mBuf;
 };
 
-} // anonymous namespace
+} // namespace
 
 /**
  * If we are pre-loading XPTs, this method may do nothing because the
@@ -461,7 +465,7 @@ struct CachedDirective
   char* argv[4];
 };
 
-} // anonymous namespace
+} // namespace
 
 
 /**
@@ -487,6 +491,8 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
 
   NS_NAMED_LITERAL_STRING(kPlatform, "platform");
   NS_NAMED_LITERAL_STRING(kContentAccessible, "contentaccessible");
+  NS_NAMED_LITERAL_STRING(kRemoteEnabled, "remoteenabled");
+  NS_NAMED_LITERAL_STRING(kRemoteRequired, "remoterequired");
   NS_NAMED_LITERAL_STRING(kApplication, "application");
   NS_NAMED_LITERAL_STRING(kAppVersion, "appversion");
   NS_NAMED_LITERAL_STRING(kGeckoVersion, "platformversion");
@@ -566,7 +572,7 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
 #elif defined(MOZ_WIDGET_COCOA)
   SInt32 majorVersion = nsCocoaFeatures::OSXVersionMajor();
   SInt32 minorVersion = nsCocoaFeatures::OSXVersionMinor();
-  nsTextFormatter::ssprintf(osVersion, NS_LITERAL_STRING("%ld.%ld").get(),
+  nsTextFormatter::ssprintf(osVersion, MOZ_UTF16("%ld.%ld"),
                             majorVersion,
                             minorVersion);
 #elif defined(MOZ_WIDGET_GTK)
@@ -583,7 +589,7 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
   }
 #endif
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     process = kContent;
   } else {
     process = kMain;
@@ -653,6 +659,14 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
       continue;
     }
 
+#ifndef MOZ_BINARY_EXTENSIONS
+    if (directive->apponly && NS_APP_LOCATION != aType) {
+      LogMessageWithContext(aFile, line,
+                            "Only application manifests may use the '%s' directive.", token);
+      continue;
+    }
+#endif
+
     if (directive->componentonly && NS_SKIN_LOCATION == aType) {
       LogMessageWithContext(aFile, line,
                             "Skin manifest not allowed to use '%s' directive.",
@@ -684,8 +698,7 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
 #if defined(MOZ_WIDGET_ANDROID)
     TriState stTablet = eUnspecified;
 #endif
-    bool platform = false;
-    bool contentAccessible = false;
+    int flags = 0;
 
     while ((token = nsCRT::strtok(whitespace, kWhitespace, &whitespace)) &&
            ok) {
@@ -710,10 +723,28 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
       }
 #endif
 
-      if (directive->contentflags &&
-          (CheckFlag(kPlatform, wtoken, platform) ||
-           CheckFlag(kContentAccessible, wtoken, contentAccessible))) {
-        continue;
+      if (directive->contentflags) {
+        bool flag;
+        if (CheckFlag(kPlatform, wtoken, flag)) {
+          if (flag)
+            flags |= nsChromeRegistry::PLATFORM_PACKAGE;
+          continue;
+        }
+        if (CheckFlag(kContentAccessible, wtoken, flag)) {
+          if (flag)
+            flags |= nsChromeRegistry::CONTENT_ACCESSIBLE;
+          continue;
+        }
+        if (CheckFlag(kRemoteEnabled, wtoken, flag)) {
+          if (flag)
+            flags |= nsChromeRegistry::REMOTE_ALLOWED;
+          continue;
+        }
+        if (CheckFlag(kRemoteRequired, wtoken, flag)) {
+          if (flag)
+            flags |= nsChromeRegistry::REMOTE_REQUIRED;
+          continue;
+        }
       }
 
       bool xpcNativeWrappers = true; // Dummy for CheckFlag.
@@ -765,7 +796,7 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
       }
 
       (nsChromeRegistry::gChromeRegistry->*(directive->regfunc))(
-        chromecx, line, argv, platform, contentAccessible);
+        chromecx, line, argv, flags);
     } else if (directive->ischrome || !aChromeOnly) {
       if (directive->isContract) {
         CachedDirective* cd = contracts.AppendElement();

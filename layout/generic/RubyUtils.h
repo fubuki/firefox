@@ -7,9 +7,18 @@
 #ifndef mozilla_RubyUtils_h_
 #define mozilla_RubyUtils_h_
 
+#include "nsTArray.h"
 #include "nsGkAtoms.h"
-#include "nsRubyBaseContainerFrame.h"
-#include "nsRubyTextContainerFrame.h"
+#include "nsCSSAnonBoxes.h"
+
+#define RTC_ARRAY_SIZE 1
+
+class nsRubyFrame;
+class nsRubyBaseFrame;
+class nsRubyTextFrame;
+class nsRubyContentFrame;
+class nsRubyBaseContainerFrame;
+class nsRubyTextContainerFrame;
 
 namespace mozilla {
 
@@ -45,13 +54,37 @@ namespace mozilla {
 class RubyUtils
 {
 public:
+  static inline bool IsRubyContentBox(nsIAtom* aFrameType)
+  {
+    return aFrameType == nsGkAtoms::rubyBaseFrame ||
+           aFrameType == nsGkAtoms::rubyTextFrame;
+  }
+
+  static inline bool IsRubyContainerBox(nsIAtom* aFrameType)
+  {
+    return aFrameType == nsGkAtoms::rubyBaseContainerFrame ||
+           aFrameType == nsGkAtoms::rubyTextContainerFrame;
+  }
+
+  static inline bool IsRubyBox(nsIAtom* aFrameType)
+  {
+    return aFrameType == nsGkAtoms::rubyFrame ||
+      IsRubyContentBox(aFrameType) || IsRubyContainerBox(aFrameType);
+  }
+
   static inline bool IsExpandableRubyBox(nsIFrame* aFrame)
   {
     nsIAtom* type = aFrame->GetType();
-    return type == nsGkAtoms::rubyBaseFrame ||
-           type == nsGkAtoms::rubyTextFrame ||
-           type == nsGkAtoms::rubyBaseContainerFrame ||
-           type == nsGkAtoms::rubyTextContainerFrame;
+    return IsRubyContentBox(type) || IsRubyContainerBox(type);
+  }
+
+  static inline bool IsRubyPseudo(nsIAtom* aPseudo)
+  {
+    return aPseudo == nsCSSAnonBoxes::ruby ||
+           aPseudo == nsCSSAnonBoxes::rubyBase ||
+           aPseudo == nsCSSAnonBoxes::rubyText ||
+           aPseudo == nsCSSAnonBoxes::rubyBaseContainer ||
+           aPseudo == nsCSSAnonBoxes::rubyTextContainer;
   }
 
   static void SetReservedISize(nsIFrame* aFrame, nscoord aISize);
@@ -60,25 +93,122 @@ public:
 };
 
 /**
- * This class iterates all ruby text containers paired with
- * the given ruby base container.
+ * This array stores all ruby text containers of the ruby segment
+ * of the given ruby base container.
  */
-class MOZ_STACK_CLASS RubyTextContainerIterator
+class MOZ_RAII AutoRubyTextContainerArray final
+  : public AutoTArray<nsRubyTextContainerFrame*, RTC_ARRAY_SIZE>
 {
 public:
-  explicit RubyTextContainerIterator(nsRubyBaseContainerFrame* aBaseContainer);
+  explicit AutoRubyTextContainerArray(nsRubyBaseContainerFrame* aBaseContainer);
+};
+
+/**
+ * This enumerator enumerates each ruby segment.
+ */
+class MOZ_STACK_CLASS RubySegmentEnumerator
+{
+public:
+  explicit RubySegmentEnumerator(nsRubyFrame* aRubyFrame);
 
   void Next();
-  bool AtEnd() const { return !mFrame; }
-  nsRubyTextContainerFrame* GetTextContainer() const
+  bool AtEnd() const { return !mBaseContainer; }
+
+  nsRubyBaseContainerFrame* GetBaseContainer() const
   {
-    return static_cast<nsRubyTextContainerFrame*>(mFrame);
+    return mBaseContainer;
   }
 
 private:
-  nsIFrame* mFrame;
+  nsRubyBaseContainerFrame* mBaseContainer;
 };
 
-}
+/**
+ * Ruby column is a unit consists of one ruby base and all ruby
+ * annotations paired with it.
+ * See http://dev.w3.org/csswg/css-ruby/#ruby-pairing
+ */
+struct MOZ_STACK_CLASS RubyColumn
+{
+  nsRubyBaseFrame* mBaseFrame;
+  AutoTArray<nsRubyTextFrame*, RTC_ARRAY_SIZE> mTextFrames;
+  bool mIsIntraLevelWhitespace;
+
+  RubyColumn() : mBaseFrame(nullptr), mIsIntraLevelWhitespace(false) { }
+
+  // Helper class to support iteration across the frames within a single
+  // RubyColumn (the column's ruby base and its annotations).
+  class MOZ_STACK_CLASS Iterator
+  {
+  public:
+    nsIFrame* operator*() const;
+
+    Iterator& operator++() { ++mIndex; SkipUntilExistingFrame(); return *this; }
+    Iterator operator++(int) { auto ret = *this; ++*this; return ret; }
+
+    friend bool operator==(const Iterator& aIter1, const Iterator& aIter2)
+    {
+      MOZ_ASSERT(&aIter1.mColumn == &aIter2.mColumn,
+                 "Should only compare iterators of the same ruby column");
+      return aIter1.mIndex == aIter2.mIndex;
+    }
+    friend bool operator!=(const Iterator& aIter1, const Iterator& aIter2)
+    {
+      return !(aIter1 == aIter2);
+    }
+
+  private:
+    Iterator(const RubyColumn& aColumn, int32_t aIndex)
+      : mColumn(aColumn)
+      , mIndex(aIndex)
+    {
+      MOZ_ASSERT(aIndex == -1 ||
+                 (aIndex >= 0 &&
+                  aIndex <= int32_t(aColumn.mTextFrames.Length())));
+      SkipUntilExistingFrame();
+    }
+    friend struct RubyColumn; // for the constructor
+
+    void SkipUntilExistingFrame();
+
+    const RubyColumn& mColumn;
+    // -1 means the ruby base frame,
+    // non-negative means the index of ruby text frame
+    // a value of mTextFrames.Length() means we're done iterating
+    int32_t mIndex = -1;
+  };
+
+  Iterator begin() const { return Iterator(*this, -1); }
+  Iterator end() const { return Iterator(*this, mTextFrames.Length()); }
+  Iterator cbegin() const { return begin(); }
+  Iterator cend() const { return end(); }
+};
+
+/**
+ * This enumerator enumerates ruby columns in a segment.
+ */
+class MOZ_STACK_CLASS RubyColumnEnumerator
+{
+public:
+  RubyColumnEnumerator(nsRubyBaseContainerFrame* aRBCFrame,
+                       const AutoRubyTextContainerArray& aRTCFrames);
+
+  void Next();
+  bool AtEnd() const;
+
+  uint32_t GetLevelCount() const { return mFrames.Length(); }
+  nsRubyContentFrame* GetFrameAtLevel(uint32_t aIndex) const;
+  void GetColumn(RubyColumn& aColumn) const;
+
+private:
+  // Frames in this array are NOT necessary part of the current column.
+  // When in doubt, use GetFrameAtLevel to access it.
+  // See GetFrameAtLevel() and Next() for more info.
+  AutoTArray<nsRubyContentFrame*, RTC_ARRAY_SIZE + 1> mFrames;
+  // Whether we are on a column for intra-level whitespaces
+  bool mAtIntraLevelWhitespace;
+};
+
+} // namespace mozilla
 
 #endif /* !defined(mozilla_RubyUtils_h_) */

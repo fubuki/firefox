@@ -6,14 +6,14 @@
 
 EXPORTS += [
     'WaveDecoder.h',
+    'WaveDemuxer.h',
     'WaveReader.h',
 ]
 
 UNIFIED_SOURCES += [
     'WaveDecoder.cpp',
+    'WaveDemuxer.cpp',
     'WaveReader.cpp',
 ]
-
-FAIL_ON_WARNINGS = True
 
 FINAL_LIBRARY = 'xul'

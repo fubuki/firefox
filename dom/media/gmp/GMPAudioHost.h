@@ -10,41 +10,43 @@
 #include "gmp-audio-samples.h"
 #include "nsTArray.h"
 #include "gmp-decryption.h"
-#include "mp4_demuxer/DecoderData.h"
 #include "nsAutoPtr.h"
 #include "GMPEncryptedBufferDataImpl.h"
 #include "mozilla/gmp/GMPTypes.h"
 
 namespace mozilla {
+class CryptoSample;
+class MediaRawData;
+
 namespace gmp {
 
 class GMPAudioSamplesImpl : public GMPAudioSamples {
 public:
   explicit GMPAudioSamplesImpl(GMPAudioFormat aFormat);
   explicit GMPAudioSamplesImpl(const GMPAudioEncodedSampleData& aData);
-  GMPAudioSamplesImpl(mp4_demuxer::MP4Sample* aSample,
+  GMPAudioSamplesImpl(MediaRawData* aSample,
                       uint32_t aChannels,
                       uint32_t aRate);
   virtual ~GMPAudioSamplesImpl();
 
-  virtual GMPAudioFormat GetFormat() MOZ_OVERRIDE;
-  virtual void Destroy() MOZ_OVERRIDE;
-  virtual GMPErr SetBufferSize(uint32_t aSize) MOZ_OVERRIDE;
-  virtual uint32_t Size() MOZ_OVERRIDE;
-  virtual void SetTimeStamp(uint64_t aTimeStamp) MOZ_OVERRIDE;
-  virtual uint64_t TimeStamp() MOZ_OVERRIDE;
-  virtual const uint8_t* Buffer() const MOZ_OVERRIDE;
-  virtual uint8_t* Buffer() MOZ_OVERRIDE;
-  virtual const GMPEncryptedBufferMetadata* GetDecryptionData() const MOZ_OVERRIDE;
+  GMPAudioFormat GetFormat() override;
+  void Destroy() override;
+  GMPErr SetBufferSize(uint32_t aSize) override;
+  uint32_t Size() override;
+  void SetTimeStamp(uint64_t aTimeStamp) override;
+  uint64_t TimeStamp() override;
+  const uint8_t* Buffer() const override;
+  uint8_t* Buffer() override;
+  const GMPEncryptedBufferMetadata* GetDecryptionData() const override;
 
-  void InitCrypto(const mp4_demuxer::CryptoSample& aCrypto);
+  void InitCrypto(const CryptoSample& aCrypto);
 
   void RelinquishData(GMPAudioEncodedSampleData& aData);
 
-  virtual uint32_t Channels() const MOZ_OVERRIDE;
-  virtual void SetChannels(uint32_t aChannels) MOZ_OVERRIDE;
-  virtual uint32_t Rate() const MOZ_OVERRIDE;
-  virtual void SetRate(uint32_t aRate) MOZ_OVERRIDE;
+  uint32_t Channels() const override;
+  void SetChannels(uint32_t aChannels) override;
+  uint32_t Rate() const override;
+  void SetRate(uint32_t aRate) override;
 
 private:
   GMPAudioFormat mFormat;
@@ -58,8 +60,8 @@ private:
 class GMPAudioHostImpl : public GMPAudioHost
 {
 public:
-  virtual GMPErr CreateSamples(GMPAudioFormat aFormat,
-                               GMPAudioSamples** aSamples) MOZ_OVERRIDE;
+  GMPErr CreateSamples(GMPAudioFormat aFormat,
+                       GMPAudioSamples** aSamples) override;
 private:
 };
 

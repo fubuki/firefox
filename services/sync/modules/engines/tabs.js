@@ -4,7 +4,7 @@
 
 this.EXPORTED_SYMBOLS = ["TabEngine", "TabSetRecord"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 const TABS_TTL = 604800;           // 7 days.
 const TAB_ENTRIES_LIMIT = 25;      // How many URLs to include in tab history.
@@ -43,6 +43,11 @@ TabEngine.prototype = {
   _storeObj: TabStore,
   _trackerObj: TabTracker,
   _recordObj: TabSetRecord,
+  // A flag to indicate if we have synced in this session. This is to help
+  // consumers of remote tabs that may want to differentiate between "I've an
+  // empty tab list as I haven't yet synced" vs "I've an empty tab list
+  // as there really are no tabs"
+  hasSyncedThisSession: false,
 
   syncPriority: 3,
 
@@ -67,6 +72,7 @@ TabEngine.prototype = {
     SyncEngine.prototype._resetClient.call(this);
     this._store.wipe();
     this._tracker.modified = true;
+    this.hasSyncedThisSession = false;
   },
 
   removeClientData: function () {
@@ -83,7 +89,23 @@ TabEngine.prototype = {
       urls.add(entry.urlHistory[0]);
     }
     return urls;
-  }
+  },
+
+  _reconcile: function (item) {
+    // Skip our own record.
+    // TabStore.itemExists tests only against our local client ID.
+    if (this._store.itemExists(item.id)) {
+      this._log.trace("Ignoring incoming tab item because of its id: " + item.id);
+      return false;
+    }
+
+    return SyncEngine.prototype._reconcile.call(this, item);
+  },
+
+  _syncFinish() {
+    this.hasSyncedThisSession = true;
+    return SyncEngine.prototype._syncFinish.call(this);
+  },
 };
 
 
@@ -162,7 +184,9 @@ TabStore.prototype = {
         allTabs.push({
           title: current.title || "",
           urlHistory: urls,
-          icon: tabState.attributes && tabState.attributes.image || "",
+          icon: tabState.image ||
+                (tabState.attributes && tabState.attributes.image) ||
+                "",
           lastUsed: Math.floor((tabState.lastAccessed || 0) / 1000),
         });
       }
@@ -291,10 +315,14 @@ TabTracker.prototype = {
 
   _registerListenersForWindow: function (window) {
     this._log.trace("Registering tab listeners in window");
-    for each (let topic in this._topics) {
+    for (let topic of this._topics) {
       window.addEventListener(topic, this.onTab, false);
     }
     window.addEventListener("unload", this._unregisterListeners, false);
+    // If it's got a tab browser we can listen for things like navigation.
+    if (window.gBrowser) {
+      window.gBrowser.addProgressListener(this);
+    }
   },
 
   _unregisterListeners: function (event) {
@@ -304,8 +332,11 @@ TabTracker.prototype = {
   _unregisterListenersForWindow: function (window) {
     this._log.trace("Removing tab listeners in window");
     window.removeEventListener("unload", this._unregisterListeners, false);
-    for each (let topic in this._topics) {
+    for (let topic of this._topics) {
       window.removeEventListener(topic, this.onTab, false);
+    }
+    if (window.gBrowser) {
+      window.gBrowser.removeProgressListener(this);
     }
   },
 
@@ -360,6 +391,16 @@ TabTracker.prototype = {
     // events, always bump the score.
     if (event.type != "pageshow" || Math.random() < .1) {
       this.score += SCORE_INCREMENT_SMALL;
+    }
+  },
+
+  // web progress listeners.
+  onLocationChange: function (webProgress, request, location, flags) {
+    // We only care about top-level location changes which are not in the same
+    // document.
+    if (webProgress.isTopLevel &&
+        ((flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) == 0)) {
+      this.modified = true;
     }
   },
 };

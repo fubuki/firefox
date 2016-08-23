@@ -4,19 +4,17 @@
  * This program is made available under an ISC-style license.  See the
  * accompanying file LICENSE for details.
  */
-#undef NDEBUG
 #define __MSVCRT_VERSION__ 0x0700
 #undef WINVER
 #define WINVER 0x0501
 #undef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
 
 #include <malloc.h>
-#include <assert.h>
 #include <windows.h>
 #include <mmreg.h>
 #include <mmsystem.h>
 #include <process.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include "cubeb/cubeb.h"
@@ -28,13 +26,44 @@
 #endif
 
 /**This is also missing from the MinGW headers. It  also appears to be undocumented by Microsoft.*/
+#ifndef WAVE_FORMAT_48M08
+#define WAVE_FORMAT_48M08      0x00001000       /* 48     kHz, Mono, 8-bit */
+#endif
+#ifndef WAVE_FORMAT_48M16
+#define WAVE_FORMAT_48M16      0x00002000       /* 48     kHz, Mono, 16-bit */
+#endif
+#ifndef WAVE_FORMAT_48S08
+#define WAVE_FORMAT_48S08      0x00004000       /* 48     kHz, Stereo, 8-bit */
+#endif
 #ifndef WAVE_FORMAT_48S16
 #define WAVE_FORMAT_48S16      0x00008000       /* 48     kHz, Stereo, 16-bit */
+#endif
+#ifndef WAVE_FORMAT_96M08
+#define WAVE_FORMAT_96M08      0x00010000       /* 96     kHz, Mono, 8-bit */
+#endif
+#ifndef WAVE_FORMAT_96M16
+#define WAVE_FORMAT_96M16      0x00020000       /* 96     kHz, Mono, 16-bit */
+#endif
+#ifndef WAVE_FORMAT_96S08
+#define WAVE_FORMAT_96S08      0x00040000       /* 96     kHz, Stereo, 8-bit */
+#endif
+#ifndef WAVE_FORMAT_96S16
+#define WAVE_FORMAT_96S16      0x00080000       /* 96     kHz, Stereo, 16-bit */
 #endif
 
 /**Taken from winbase.h, also not in MinGW.*/
 #ifndef STACK_SIZE_PARAM_IS_A_RESERVATION
 #define STACK_SIZE_PARAM_IS_A_RESERVATION   0x00010000    // Threads only
+#endif
+
+#ifndef DRVM_MAPPER
+#define DRVM_MAPPER             (0x2000)
+#endif
+#ifndef DRVM_MAPPER_PREFERRED_GET
+#define DRVM_MAPPER_PREFERRED_GET                 (DRVM_MAPPER+21)
+#endif
+#ifndef DRVM_MAPPER_CONSOLEVOICECOM_GET
+#define DRVM_MAPPER_CONSOLEVOICECOM_GET           (DRVM_MAPPER+23)
 #endif
 
 #define CUBEB_STREAM_MAX 32
@@ -95,7 +124,7 @@ bytes_per_frame(cubeb_stream_params params)
     bytes = sizeof(float);
     break;
   default:
-    assert(0);
+    XASSERT(0);
   }
 
   return bytes * params.channels;
@@ -106,10 +135,10 @@ winmm_get_next_buffer(cubeb_stream * stm)
 {
   WAVEHDR * hdr = NULL;
 
-  assert(stm->free_buffers > 0 && stm->free_buffers <= NBUFS);
+  XASSERT(stm->free_buffers > 0 && stm->free_buffers <= NBUFS);
   hdr = &stm->buffers[stm->next_buffer];
-  assert(hdr->dwFlags & WHDR_PREPARED ||
-         (hdr->dwFlags & WHDR_DONE && !(hdr->dwFlags & WHDR_INQUEUE)));
+  XASSERT(hdr->dwFlags & WHDR_PREPARED ||
+          (hdr->dwFlags & WHDR_DONE && !(hdr->dwFlags & WHDR_INQUEUE)));
   stm->next_buffer = (stm->next_buffer + 1) % NBUFS;
   stm->free_buffers -= 1;
 
@@ -126,7 +155,7 @@ winmm_refill_stream(cubeb_stream * stm)
 
   EnterCriticalSection(&stm->lock);
   stm->free_buffers += 1;
-  assert(stm->free_buffers > 0 && stm->free_buffers <= NBUFS);
+  XASSERT(stm->free_buffers > 0 && stm->free_buffers <= NBUFS);
 
   if (stm->draining) {
     LeaveCriticalSection(&stm->lock);
@@ -150,22 +179,22 @@ winmm_refill_stream(cubeb_stream * stm)
   /* It is assumed that the caller is holding this lock.  It must be dropped
      during the callback to avoid deadlocks. */
   LeaveCriticalSection(&stm->lock);
-  got = stm->data_callback(stm, stm->user_ptr, hdr->lpData, wanted);
+  got = stm->data_callback(stm, stm->user_ptr, NULL, hdr->lpData, wanted);
   EnterCriticalSection(&stm->lock);
   if (got < 0) {
     LeaveCriticalSection(&stm->lock);
     /* XXX handle this case */
-    assert(0);
+    XASSERT(0);
     return;
   } else if (got < wanted) {
     stm->draining = 1;
   }
   stm->written += got;
 
-  assert(hdr->dwFlags & WHDR_PREPARED);
+  XASSERT(hdr->dwFlags & WHDR_PREPARED);
 
   hdr->dwBufferLength = got * bytes_per_frame(stm->params);
-  assert(hdr->dwBufferLength <= stm->buffer_size);
+  XASSERT(hdr->dwBufferLength <= stm->buffer_size);
 
   if (stm->soft_volume != -1.0) {
     if (stm->params.format == CUBEB_SAMPLE_FLOAT32NE) {
@@ -197,14 +226,14 @@ static unsigned __stdcall
 winmm_buffer_thread(void * user_ptr)
 {
   cubeb * ctx = (cubeb *) user_ptr;
-  assert(ctx);
+  XASSERT(ctx);
 
   for (;;) {
     DWORD r;
     PSLIST_ENTRY item;
 
     r = WaitForSingleObject(ctx->event, INFINITE);
-    assert(r == WAIT_OBJECT_0);
+    XASSERT(r == WAIT_OBJECT_0);
 
     /* Process work items in batches so that a single stream can't
        starve the others by continuously adding new work to the top of
@@ -236,7 +265,7 @@ winmm_buffer_callback(HWAVEOUT waveout, UINT msg, DWORD_PTR user_ptr, DWORD_PTR 
   }
 
   item = _aligned_malloc(sizeof(struct cubeb_stream_item), MEMORY_ALLOCATION_ALIGNMENT);
-  assert(item);
+  XASSERT(item);
   item->stream = stm;
   InterlockedPushEntrySList(stm->context->work, &item->head);
 
@@ -278,16 +307,16 @@ winmm_init(cubeb ** context, char const * context_name)
 {
   cubeb * ctx;
 
-  assert(context);
+  XASSERT(context);
   *context = NULL;
 
   ctx = calloc(1, sizeof(*ctx));
-  assert(ctx);
+  XASSERT(ctx);
 
   ctx->ops = &winmm_ops;
 
   ctx->work = _aligned_malloc(sizeof(*ctx->work), MEMORY_ALLOCATION_ALIGNMENT);
-  assert(ctx->work);
+  XASSERT(ctx->work);
   InitializeSListHead(ctx->work);
 
   ctx->event = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -325,8 +354,8 @@ winmm_destroy(cubeb * ctx)
 {
   DWORD r;
 
-  assert(ctx->active_streams == 0);
-  assert(!InterlockedPopEntrySList(ctx->work));
+  XASSERT(ctx->active_streams == 0);
+  XASSERT(!InterlockedPopEntrySList(ctx->work));
 
   DeleteCriticalSection(&ctx->lock);
 
@@ -334,7 +363,7 @@ winmm_destroy(cubeb * ctx)
     ctx->shutdown = 1;
     SetEvent(ctx->event);
     r = WaitForSingleObject(ctx->thread, INFINITE);
-    assert(r == WAIT_OBJECT_0);
+    XASSERT(r == WAIT_OBJECT_0);
     CloseHandle(ctx->thread);
   }
 
@@ -351,7 +380,11 @@ static void winmm_stream_destroy(cubeb_stream * stm);
 
 static int
 winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_name,
-                  cubeb_stream_params stream_params, unsigned int latency,
+                  cubeb_devid input_device,
+                  cubeb_stream_params * input_stream_params,
+                  cubeb_devid output_device,
+                  cubeb_stream_params * output_stream_params,
+                  unsigned int latency,
                   cubeb_data_callback data_callback,
                   cubeb_state_callback state_callback,
                   void * user_ptr)
@@ -362,29 +395,35 @@ winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_n
   int i;
   size_t bufsz;
 
-  assert(context);
-  assert(stream);
+  XASSERT(context);
+  XASSERT(stream);
+
+  XASSERT(!input_stream_params && "not supported.");
+  if (input_device || output_device) {
+    /* Device selection not yet implemented. */
+    return CUBEB_ERROR_DEVICE_UNAVAILABLE;
+  }
 
   *stream = NULL;
 
   memset(&wfx, 0, sizeof(wfx));
-  if (stream_params.channels > 2) {
+  if (output_stream_params->channels > 2) {
     wfx.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
     wfx.Format.cbSize = sizeof(wfx) - sizeof(wfx.Format);
   } else {
     wfx.Format.wFormatTag = WAVE_FORMAT_PCM;
-    if (stream_params.format == CUBEB_SAMPLE_FLOAT32LE) {
+    if (output_stream_params->format == CUBEB_SAMPLE_FLOAT32LE) {
       wfx.Format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
     }
     wfx.Format.cbSize = 0;
   }
-  wfx.Format.nChannels = stream_params.channels;
-  wfx.Format.nSamplesPerSec = stream_params.rate;
+  wfx.Format.nChannels = output_stream_params->channels;
+  wfx.Format.nSamplesPerSec = output_stream_params->rate;
 
   /* XXX fix channel mappings */
   wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
 
-  switch (stream_params.format) {
+  switch (output_stream_params->format) {
   case CUBEB_SAMPLE_S16LE:
     wfx.Format.wBitsPerSample = 16;
     wfx.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
@@ -413,11 +452,11 @@ winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_n
   LeaveCriticalSection(&context->lock);
 
   stm = calloc(1, sizeof(*stm));
-  assert(stm);
+  XASSERT(stm);
 
   stm->context = context;
 
-  stm->params = stream_params;
+  stm->params = *output_stream_params;
 
   stm->data_callback = data_callback;
   stm->state_callback = state_callback;
@@ -432,7 +471,7 @@ winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_n
   if (bufsz % bytes_per_frame(stm->params) != 0) {
     bufsz += bytes_per_frame(stm->params) - (bufsz % bytes_per_frame(stm->params));
   }
-  assert(bufsz % bytes_per_frame(stm->params) == 0);
+  XASSERT(bufsz % bytes_per_frame(stm->params) == 0);
 
   stm->buffer_size = bufsz;
 
@@ -467,7 +506,7 @@ winmm_stream_init(cubeb * context, cubeb_stream ** stream, char const * stream_n
     WAVEHDR * hdr = &stm->buffers[i];
 
     hdr->lpData = calloc(1, bufsz);
-    assert(hdr->lpData);
+    XASSERT(hdr->lpData);
     hdr->dwBufferLength = bufsz;
     hdr->dwFlags = 0;
 
@@ -504,7 +543,7 @@ winmm_stream_destroy(cubeb_stream * stm)
     /* Wait for all blocks to complete. */
     while (enqueued > 0) {
       r = WaitForSingleObject(stm->event, INFINITE);
-      assert(r == WAIT_OBJECT_0);
+      XASSERT(r == WAIT_OBJECT_0);
 
       EnterCriticalSection(&stm->lock);
       enqueued = NBUFS - stm->free_buffers;
@@ -535,7 +574,7 @@ winmm_stream_destroy(cubeb_stream * stm)
   }
 
   EnterCriticalSection(&stm->context->lock);
-  assert(stm->context->active_streams >= 1);
+  XASSERT(stm->context->active_streams >= 1);
   stm->context->active_streams -= 1;
   LeaveCriticalSection(&stm->context->lock);
 
@@ -545,7 +584,7 @@ winmm_stream_destroy(cubeb_stream * stm)
 static int
 winmm_get_max_channel_count(cubeb * ctx, uint32_t * max_channels)
 {
-  assert(ctx && max_channels);
+  XASSERT(ctx && max_channels);
 
   /* We don't support more than two channels in this backend. */
   *max_channels = 2;
@@ -654,6 +693,10 @@ winmm_stream_get_latency(cubeb_stream * stm, uint32_t * latency)
   written = stm->written;
   LeaveCriticalSection(&stm->lock);
 
+  if (r != MMSYSERR_NOERROR || time.wType != TIME_SAMPLES) {
+    return CUBEB_ERROR;
+  }
+
   *latency = written - time.u.sample;
 
   return CUBEB_OK;
@@ -668,12 +711,307 @@ winmm_stream_set_volume(cubeb_stream * stm, float volume)
   return CUBEB_OK;
 }
 
+#define MM_11025HZ_MASK (WAVE_FORMAT_1M08 | WAVE_FORMAT_1M16 | WAVE_FORMAT_1S08 | WAVE_FORMAT_1S16)
+#define MM_22050HZ_MASK (WAVE_FORMAT_2M08 | WAVE_FORMAT_2M16 | WAVE_FORMAT_2S08 | WAVE_FORMAT_2S16)
+#define MM_44100HZ_MASK (WAVE_FORMAT_4M08 | WAVE_FORMAT_4M16 | WAVE_FORMAT_4S08 | WAVE_FORMAT_4S16)
+#define MM_48000HZ_MASK (WAVE_FORMAT_48M08 | WAVE_FORMAT_48M16 | WAVE_FORMAT_48S08 | WAVE_FORMAT_48S16)
+#define MM_96000HZ_MASK (WAVE_FORMAT_96M08 | WAVE_FORMAT_96M16 | WAVE_FORMAT_96S08 | WAVE_FORMAT_96S16)
+static void
+winmm_calculate_device_rate(cubeb_device_info * info, DWORD formats)
+{
+  if (formats & MM_11025HZ_MASK) {
+    info->min_rate = 11025;
+    info->default_rate = 11025;
+    info->max_rate = 11025;
+  }
+  if (formats & MM_22050HZ_MASK) {
+    if (info->min_rate == 0) info->min_rate = 22050;
+    info->max_rate = 22050;
+    info->default_rate = 22050;
+  }
+  if (formats & MM_44100HZ_MASK) {
+    if (info->min_rate == 0) info->min_rate = 44100;
+    info->max_rate = 44100;
+    info->default_rate = 44100;
+  }
+  if (formats & MM_48000HZ_MASK) {
+    if (info->min_rate == 0) info->min_rate = 48000;
+    info->max_rate = 48000;
+    info->default_rate = 48000;
+  }
+  if (formats & MM_96000HZ_MASK) {
+    if (info->min_rate == 0) {
+      info->min_rate = 96000;
+      info->default_rate = 96000;
+    }
+    info->max_rate = 96000;
+  }
+}
+
+
+#define MM_S16_MASK (WAVE_FORMAT_1M16 | WAVE_FORMAT_1S16 | WAVE_FORMAT_2M16 | WAVE_FORMAT_2S16 | WAVE_FORMAT_4M16 | \
+    WAVE_FORMAT_4S16 | WAVE_FORMAT_48M16 | WAVE_FORMAT_48S16 | WAVE_FORMAT_96M16 | WAVE_FORMAT_96S16)
+static int
+winmm_query_supported_formats(UINT devid, DWORD formats,
+    cubeb_device_fmt * supfmt, cubeb_device_fmt * deffmt)
+{
+  WAVEFORMATEXTENSIBLE wfx;
+
+  if (formats & MM_S16_MASK)
+    *deffmt = *supfmt = CUBEB_DEVICE_FMT_S16LE;
+  else
+    *deffmt = *supfmt = 0;
+
+  ZeroMemory(&wfx, sizeof(WAVEFORMATEXTENSIBLE));
+  wfx.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+  wfx.Format.nChannels = 2;
+  wfx.Format.nSamplesPerSec = 44100;
+  wfx.Format.wBitsPerSample = 32;
+  wfx.Format.nBlockAlign = (wfx.Format.wBitsPerSample * wfx.Format.nChannels) / 8;
+  wfx.Format.nAvgBytesPerSec = wfx.Format.nSamplesPerSec * wfx.Format.nBlockAlign;
+  wfx.Format.cbSize = 22;
+  wfx.Samples.wValidBitsPerSample = wfx.Format.wBitsPerSample;
+  wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+  wfx.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+  if (waveOutOpen(NULL, devid, &wfx.Format, 0, 0, WAVE_FORMAT_QUERY) == MMSYSERR_NOERROR)
+    *supfmt = (cubeb_device_fmt)(*supfmt | CUBEB_DEVICE_FMT_F32LE);
+
+  return (*deffmt != 0) ? CUBEB_OK : CUBEB_ERROR;
+}
+
+static char *
+guid_to_cstr(LPGUID guid)
+{
+  char * ret = malloc(sizeof(char) * 40);
+  _snprintf(ret, sizeof(char) * 40,
+      "{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+      guid->Data1, guid->Data2, guid->Data3,
+      guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
+      guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7]);
+  return ret;
+}
+
+static cubeb_device_pref
+winmm_query_preferred_out_device(UINT devid)
+{
+  DWORD mmpref = WAVE_MAPPER, compref = WAVE_MAPPER, status;
+  cubeb_device_pref ret = CUBEB_DEVICE_PREF_NONE;
+
+  if (waveOutMessage((HWAVEOUT)(size_t)WAVE_MAPPER, DRVM_MAPPER_PREFERRED_GET,
+        (DWORD_PTR)&mmpref, (DWORD_PTR)&status) == MMSYSERR_NOERROR &&
+      devid == mmpref)
+    ret |= CUBEB_DEVICE_PREF_MULTIMEDIA | CUBEB_DEVICE_PREF_NOTIFICATION;
+
+  if (waveOutMessage((HWAVEOUT)(size_t)WAVE_MAPPER, DRVM_MAPPER_CONSOLEVOICECOM_GET,
+        (DWORD_PTR)&compref, (DWORD_PTR)&status) == MMSYSERR_NOERROR &&
+      devid == compref)
+    ret |= CUBEB_DEVICE_PREF_VOICE;
+
+  return ret;
+}
+
+static char *
+device_id_idx(UINT devid)
+{
+  char * ret = (char *)malloc(sizeof(char)*16);
+  _snprintf(ret, 16, "%u", devid);
+  return ret;
+}
+
+static cubeb_device_info *
+winmm_create_device_from_outcaps2(LPWAVEOUTCAPS2A caps, UINT devid)
+{
+  cubeb_device_info * ret;
+
+  ret = calloc(1, sizeof(cubeb_device_info));
+  ret->devid = (cubeb_devid)(size_t)devid;
+  ret->device_id = device_id_idx(devid);
+  ret->friendly_name = _strdup(caps->szPname);
+  ret->group_id = guid_to_cstr(&caps->ProductGuid);
+  ret->vendor_name = guid_to_cstr(&caps->ManufacturerGuid);
+
+  ret->type = CUBEB_DEVICE_TYPE_OUTPUT;
+  ret->state = CUBEB_DEVICE_STATE_ENABLED;
+  ret->preferred = winmm_query_preferred_out_device(devid);
+
+  ret->max_channels = caps->wChannels;
+  winmm_calculate_device_rate(ret, caps->dwFormats);
+  winmm_query_supported_formats(devid, caps->dwFormats,
+      &ret->format, &ret->default_format);
+
+  /* Hardcoed latency estimates... */
+  ret->latency_lo_ms = 100;
+  ret->latency_hi_ms = 200;
+
+  return ret;
+}
+
+static cubeb_device_info *
+winmm_create_device_from_outcaps(LPWAVEOUTCAPSA caps, UINT devid)
+{
+  cubeb_device_info * ret;
+
+  ret = calloc(1, sizeof(cubeb_device_info));
+  ret->devid = (cubeb_devid)(size_t)devid;
+  ret->device_id = device_id_idx(devid);
+  ret->friendly_name = _strdup(caps->szPname);
+  ret->group_id = NULL;
+  ret->vendor_name = NULL;
+
+  ret->type = CUBEB_DEVICE_TYPE_OUTPUT;
+  ret->state = CUBEB_DEVICE_STATE_ENABLED;
+  ret->preferred = winmm_query_preferred_out_device(devid);
+
+  ret->max_channels = caps->wChannels;
+  winmm_calculate_device_rate(ret, caps->dwFormats);
+  winmm_query_supported_formats(devid, caps->dwFormats,
+      &ret->format, &ret->default_format);
+
+  /* Hardcoed latency estimates... */
+  ret->latency_lo_ms = 100;
+  ret->latency_hi_ms = 200;
+
+  return ret;
+}
+
+static cubeb_device_pref
+winmm_query_preferred_in_device(UINT devid)
+{
+  DWORD mmpref = WAVE_MAPPER, compref = WAVE_MAPPER, status;
+  cubeb_device_pref ret = CUBEB_DEVICE_PREF_NONE;
+
+  if (waveInMessage((HWAVEIN)(size_t)WAVE_MAPPER, DRVM_MAPPER_PREFERRED_GET,
+        (DWORD_PTR)&mmpref, (DWORD_PTR)&status) == MMSYSERR_NOERROR &&
+      devid == mmpref)
+    ret |= CUBEB_DEVICE_PREF_MULTIMEDIA | CUBEB_DEVICE_PREF_NOTIFICATION;
+
+  if (waveInMessage((HWAVEIN)(size_t)WAVE_MAPPER, DRVM_MAPPER_CONSOLEVOICECOM_GET,
+        (DWORD_PTR)&compref, (DWORD_PTR)&status) == MMSYSERR_NOERROR &&
+      devid == compref)
+    ret |= CUBEB_DEVICE_PREF_VOICE;
+
+  return ret;
+}
+
+static cubeb_device_info *
+winmm_create_device_from_incaps2(LPWAVEINCAPS2A caps, UINT devid)
+{
+  cubeb_device_info * ret;
+
+  ret = calloc(1, sizeof(cubeb_device_info));
+  ret->devid = (cubeb_devid)(size_t)devid;
+  ret->device_id = device_id_idx(devid);
+  ret->friendly_name = _strdup(caps->szPname);
+  ret->group_id = guid_to_cstr(&caps->ProductGuid);
+  ret->vendor_name = guid_to_cstr(&caps->ManufacturerGuid);
+
+  ret->type = CUBEB_DEVICE_TYPE_INPUT;
+  ret->state = CUBEB_DEVICE_STATE_ENABLED;
+  ret->preferred = winmm_query_preferred_in_device(devid);
+
+  ret->max_channels = caps->wChannels;
+  winmm_calculate_device_rate(ret, caps->dwFormats);
+  winmm_query_supported_formats(devid, caps->dwFormats,
+      &ret->format, &ret->default_format);
+
+  /* Hardcoed latency estimates... */
+  ret->latency_lo_ms = 100;
+  ret->latency_hi_ms = 200;
+
+  return ret;
+}
+
+static cubeb_device_info *
+winmm_create_device_from_incaps(LPWAVEINCAPSA caps, UINT devid)
+{
+  cubeb_device_info * ret;
+
+  ret = calloc(1, sizeof(cubeb_device_info));
+  ret->devid = (cubeb_devid)(size_t)devid;
+  ret->device_id = device_id_idx(devid);
+  ret->friendly_name = _strdup(caps->szPname);
+  ret->group_id = NULL;
+  ret->vendor_name = NULL;
+
+  ret->type = CUBEB_DEVICE_TYPE_INPUT;
+  ret->state = CUBEB_DEVICE_STATE_ENABLED;
+  ret->preferred = winmm_query_preferred_in_device(devid);
+
+  ret->max_channels = caps->wChannels;
+  winmm_calculate_device_rate(ret, caps->dwFormats);
+  winmm_query_supported_formats(devid, caps->dwFormats,
+      &ret->format, &ret->default_format);
+
+  /* Hardcoed latency estimates... */
+  ret->latency_lo_ms = 100;
+  ret->latency_hi_ms = 200;
+
+  return ret;
+}
+
+static int
+winmm_enumerate_devices(cubeb * context, cubeb_device_type type,
+                        cubeb_device_collection ** collection)
+{
+  UINT i, incount, outcount, total;
+  cubeb_device_info * cur;
+
+  outcount = waveOutGetNumDevs();
+  incount = waveInGetNumDevs();
+  total = outcount + incount;
+  if (total > 0) {
+    total -= 1;
+  }
+  *collection = malloc(sizeof(cubeb_device_collection) +
+      sizeof(cubeb_device_info*) * total);
+  (*collection)->count = 0;
+
+  if (type & CUBEB_DEVICE_TYPE_OUTPUT) {
+    WAVEOUTCAPSA woc;
+    WAVEOUTCAPS2A woc2;
+
+    ZeroMemory(&woc, sizeof(woc));
+    ZeroMemory(&woc2, sizeof(woc2));
+
+    for (i = 0; i < outcount; i++) {
+      if ((waveOutGetDevCapsA(i, (LPWAVEOUTCAPSA)&woc2, sizeof(woc2)) == MMSYSERR_NOERROR &&
+            (cur = winmm_create_device_from_outcaps2(&woc2, i)) != NULL) ||
+          (waveOutGetDevCapsA(i, &woc, sizeof(woc)) == MMSYSERR_NOERROR &&
+            (cur = winmm_create_device_from_outcaps(&woc, i)) != NULL)
+          ) {
+        (*collection)->device[(*collection)->count++] = cur;
+      }
+    }
+  }
+
+  if (type & CUBEB_DEVICE_TYPE_INPUT) {
+    WAVEINCAPSA wic;
+    WAVEINCAPS2A wic2;
+
+    ZeroMemory(&wic, sizeof(wic));
+    ZeroMemory(&wic2, sizeof(wic2));
+
+    for (i = 0; i < incount; i++) {
+      if ((waveInGetDevCapsA(i, (LPWAVEINCAPSA)&wic2, sizeof(wic2)) == MMSYSERR_NOERROR &&
+            (cur = winmm_create_device_from_incaps2(&wic2, i)) != NULL) ||
+          (waveInGetDevCapsA(i, &wic, sizeof(wic)) == MMSYSERR_NOERROR &&
+            (cur = winmm_create_device_from_incaps(&wic, i)) != NULL)
+          ) {
+        (*collection)->device[(*collection)->count++] = cur;
+      }
+    }
+  }
+
+  return CUBEB_OK;
+}
+
 static struct cubeb_ops const winmm_ops = {
   /*.init =*/ winmm_init,
   /*.get_backend_id =*/ winmm_get_backend_id,
   /*.get_max_channel_count=*/ winmm_get_max_channel_count,
   /*.get_min_latency=*/ winmm_get_min_latency,
   /*.get_preferred_sample_rate =*/ winmm_get_preferred_sample_rate,
+  /*.enumerate_devices =*/ winmm_enumerate_devices,
   /*.destroy =*/ winmm_destroy,
   /*.stream_init =*/ winmm_stream_init,
   /*.stream_destroy =*/ winmm_stream_destroy,
@@ -685,5 +1023,6 @@ static struct cubeb_ops const winmm_ops = {
   /*.stream_set_panning =*/ NULL,
   /*.stream_get_current_device =*/ NULL,
   /*.stream_device_destroy =*/ NULL,
-  /*.stream_register_device_changed_callback=*/ NULL
+  /*.stream_register_device_changed_callback=*/ NULL,
+  /*.register_device_collection_changed =*/ NULL
 };

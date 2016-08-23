@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +15,9 @@
 #include "mozilla/Mutex.h"
 
 namespace mozilla {
+
+class OriginAttributesPattern;
+
 namespace dom {
 
 class DOMLocalStorageManager;
@@ -22,8 +26,8 @@ class DOMLocalStorageManager;
 // is responsible to send all requests to the parent process
 // and expects asynchronous answers. Those are then transparently
 // forwarded back to consumers on the child process.
-class DOMStorageDBChild MOZ_FINAL : public DOMStorageDBBridge
-                                  , public PStorageChild
+class DOMStorageDBChild final : public DOMStorageDBBridge
+                              , public PStorageChild
 {
   virtual ~DOMStorageDBChild();
 
@@ -51,48 +55,54 @@ public:
 
   virtual void AsyncClearAll()
   {
-    if (mScopesHavingData) {
-      mScopesHavingData->Clear(); /* NO-OP on the child process otherwise */
+    if (mOriginsHavingData) {
+      mOriginsHavingData->Clear(); /* NO-OP on the child process otherwise */
     }
   }
 
-  virtual void AsyncClearMatchingScope(const nsACString& aScope)
+  virtual void AsyncClearMatchingOrigin(const nsACString& aOriginNoSuffix)
+    { /* NO-OP on the child process */ }
+
+  virtual void AsyncClearMatchingOriginAttributes(const OriginAttributesPattern& aPattern)
     { /* NO-OP on the child process */ }
 
   virtual void AsyncFlush()
     { SendAsyncFlush(); }
 
-  virtual bool ShouldPreloadScope(const nsACString& aScope);
-  virtual void GetScopesHavingData(InfallibleTArray<nsCString>* aScopes)
+  virtual bool ShouldPreloadOrigin(const nsACString& aOriginNoSuffix);
+  virtual void GetOriginsHavingData(InfallibleTArray<nsCString>* aOrigins)
     { NS_NOTREACHED("Not implemented for child process"); }
 
 private:
   bool RecvObserve(const nsCString& aTopic,
-                   const nsCString& aScopePrefix);
-  bool RecvLoadItem(const nsCString& aScope,
+                   const nsString& aOriginAttributesPattern,
+                   const nsCString& aOriginScope);
+  bool RecvLoadItem(const nsCString& aOriginSuffix,
+                    const nsCString& aOriginNoSuffix,
                     const nsString& aKey,
                     const nsString& aValue);
-  bool RecvLoadDone(const nsCString& aScope,
+  bool RecvLoadDone(const nsCString& aOriginSuffix,
+                    const nsCString& aOriginNoSuffix,
                     const nsresult& aRv);
-  bool RecvScopesHavingData(const InfallibleTArray<nsCString>& aScopes);
-  bool RecvLoadUsage(const nsCString& aScope,
+  bool RecvOriginsHavingData(nsTArray<nsCString>&& aOrigins);
+  bool RecvLoadUsage(const nsCString& aOriginNoSuffix,
                      const int64_t& aUsage);
   bool RecvError(const nsresult& aRv);
 
-  nsTHashtable<nsCStringHashKey>& ScopesHavingData();
+  nsTHashtable<nsCStringHashKey>& OriginsHavingData();
 
   ThreadSafeAutoRefCnt mRefCnt;
   NS_DECL_OWNINGTHREAD
 
   // Held to get caches to forward answers to.
-  nsRefPtr<DOMLocalStorageManager> mManager;
+  RefPtr<DOMLocalStorageManager> mManager;
 
-  // Scopes having data hash, for optimization purposes only
-  nsAutoPtr<nsTHashtable<nsCStringHashKey> > mScopesHavingData;
+  // Origins having data hash, for optimization purposes only
+  nsAutoPtr<nsTHashtable<nsCStringHashKey>> mOriginsHavingData;
 
   // List of caches waiting for preload.  This ensures the contract that
   // AsyncPreload call references the cache for time of the preload.
-  nsTHashtable<nsRefPtrHashKey<DOMStorageCacheBridge> > mLoadingCaches;
+  nsTHashtable<nsRefPtrHashKey<DOMStorageCacheBridge>> mLoadingCaches;
 
   // Status of the remote database
   nsresult mStatus;
@@ -106,8 +116,8 @@ private:
 // DOMStorageCache consumer.
 // Also responsible for forwardning all chrome operation notifications
 // such as cookie cleaning etc to the child process.
-class DOMStorageDBParent MOZ_FINAL : public PStorageParent
-                                   , public DOMStorageObserverSink
+class DOMStorageDBParent final : public PStorageParent
+                               , public DOMStorageObserverSink
 {
   virtual ~DOMStorageDBParent();
 
@@ -116,7 +126,7 @@ public:
 
   virtual mozilla::ipc::IProtocol*
   CloneProtocol(Channel* aChannel,
-                mozilla::ipc::ProtocolCloneContext* aCtx) MOZ_OVERRIDE;
+                mozilla::ipc::ProtocolCloneContext* aCtx) override;
 
   NS_IMETHOD_(MozExternalRefCountType) AddRef(void);
   NS_IMETHOD_(MozExternalRefCountType) Release(void);
@@ -131,13 +141,20 @@ public:
   // them back to appropriate cache object on the child process.
   class CacheParentBridge : public DOMStorageCacheBridge {
   public:
-    CacheParentBridge(DOMStorageDBParent* aParentDB, const nsACString& aScope)
-      : mParent(aParentDB), mScope(aScope), mLoaded(false), mLoadedCount(0) {}
+    CacheParentBridge(DOMStorageDBParent* aParentDB,
+                      const nsACString& aOriginSuffix,
+                      const nsACString& aOriginNoSuffix)
+      : mParent(aParentDB)
+      , mOriginSuffix(aOriginSuffix), mOriginNoSuffix(aOriginNoSuffix)
+      , mLoaded(false), mLoadedCount(0) {}
     virtual ~CacheParentBridge() {}
 
     // DOMStorageCacheBridge
-    virtual const nsCString& Scope() const
-      { return mScope; }
+    virtual const nsCString Origin() const;
+    virtual const nsCString& OriginNoSuffix() const
+      { return mOriginNoSuffix; }
+    virtual const nsCString& OriginSuffix() const
+      { return mOriginSuffix; }
     virtual bool Loaded()
       { return mLoaded; }
     virtual uint32_t LoadedCount()
@@ -148,8 +165,8 @@ public:
     virtual void LoadWait();
 
   private:
-    nsRefPtr<DOMStorageDBParent> mParent;
-    nsCString mScope;
+    RefPtr<DOMStorageDBParent> mParent;
+    nsCString mOriginSuffix, mOriginNoSuffix;
     bool mLoaded;
     uint32_t mLoadedCount;
   };
@@ -158,38 +175,38 @@ public:
   class UsageParentBridge : public DOMStorageUsageBridge
   {
   public:
-    UsageParentBridge(DOMStorageDBParent* aParentDB, const nsACString& aScope)
-      : mParent(aParentDB), mScope(aScope) {}
+    UsageParentBridge(DOMStorageDBParent* aParentDB, const nsACString& aOriginScope)
+      : mParent(aParentDB), mOriginScope(aOriginScope) {}
     virtual ~UsageParentBridge() {}
 
     // DOMStorageUsageBridge
-    virtual const nsCString& Scope() { return mScope; }
+    virtual const nsCString& OriginScope() { return mOriginScope; }
     virtual void LoadUsage(const int64_t usage);
 
   private:
-    nsRefPtr<DOMStorageDBParent> mParent;
-    nsCString mScope;
+    RefPtr<DOMStorageDBParent> mParent;
+    nsCString mOriginScope;
   };
 
 private:
   // IPC
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
-  bool RecvAsyncPreload(const nsCString& aScope, const bool& aPriority) MOZ_OVERRIDE;
-  bool RecvPreload(const nsCString& aScope, const uint32_t& aAlreadyLoadedCount,
+  virtual void ActorDestroy(ActorDestroyReason aWhy) override;
+  bool RecvAsyncPreload(const nsCString& aOriginSuffix, const nsCString& aOriginNoSuffix, const bool& aPriority) override;
+  bool RecvPreload(const nsCString& aOriginSuffix, const nsCString& aOriginNoSuffix, const uint32_t& aAlreadyLoadedCount,
                    InfallibleTArray<nsString>* aKeys, InfallibleTArray<nsString>* aValues,
-                   nsresult* aRv) MOZ_OVERRIDE;
-  bool RecvAsyncGetUsage(const nsCString& aScope) MOZ_OVERRIDE;
-  bool RecvAsyncAddItem(const nsCString& aScope, const nsString& aKey, const nsString& aValue) MOZ_OVERRIDE;
-  bool RecvAsyncUpdateItem(const nsCString& aScope, const nsString& aKey, const nsString& aValue) MOZ_OVERRIDE;
-  bool RecvAsyncRemoveItem(const nsCString& aScope, const nsString& aKey) MOZ_OVERRIDE;
-  bool RecvAsyncClear(const nsCString& aScope) MOZ_OVERRIDE;
-  bool RecvAsyncFlush() MOZ_OVERRIDE;
+                   nsresult* aRv) override;
+  bool RecvAsyncGetUsage(const nsCString& aOriginNoSuffix) override;
+  bool RecvAsyncAddItem(const nsCString& aOriginSuffix, const nsCString& aOriginNoSuffix, const nsString& aKey, const nsString& aValue) override;
+  bool RecvAsyncUpdateItem(const nsCString& aOriginSuffix, const nsCString& aOriginNoSuffix, const nsString& aKey, const nsString& aValue) override;
+  bool RecvAsyncRemoveItem(const nsCString& aOriginSuffix, const nsCString& aOriginNoSuffix, const nsString& aKey) override;
+  bool RecvAsyncClear(const nsCString& aOriginSuffix, const nsCString& aOriginNoSuffix) override;
+  bool RecvAsyncFlush() override;
 
   // DOMStorageObserverSink
-  virtual nsresult Observe(const char* aTopic, const nsACString& aScopePrefix) MOZ_OVERRIDE;
+  virtual nsresult Observe(const char* aTopic, const nsAString& aOriginAttrPattern, const nsACString& aOriginScope) override;
 
 private:
-  CacheParentBridge* NewCache(const nsACString& aScope);
+  CacheParentBridge* NewCache(const nsACString& aOriginSuffix, const nsACString& aOriginNoSuffix);
 
   ThreadSafeAutoRefCnt mRefCnt;
   NS_DECL_OWNINGTHREAD
@@ -198,7 +215,7 @@ private:
   bool mIPCOpen;
 };
 
-} // ::dom
-} // ::mozilla
+} // namespace dom
+} // namespace mozilla
 
 #endif

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -159,7 +159,7 @@ StickyTimeDurationValueCalculator::Multiply<int64_t>(int64_t aA,
   // return -Forever if the signs differ, or +Forever otherwise.
   if (aA == INT64_MAX || aA == INT64_MIN ||
       aB == INT64_MAX || aB == INT64_MIN) {
-    return (aA >= 0) ^ (aB >= 0) ? INT64_MAX : INT64_MIN;
+    return (aA >= 0) ^ (aB >= 0) ? INT64_MIN : INT64_MAX;
   }
 
   return aA * aB;
@@ -177,7 +177,7 @@ StickyTimeDurationValueCalculator::Multiply<double>(int64_t aA, double aB)
   // +/-Forever or +/-Infinity, then return -Forever if the signs differ,
   // or +Forever otherwise.
   if (aA == INT64_MAX || aA == INT64_MIN || IsInfinite(aB)) {
-    return (aA >= 0) ^ (aB >= 0.0) ? INT64_MAX : INT64_MIN;
+    return (aA >= 0) ^ (aB >= 0.0) ? INT64_MIN : INT64_MAX;
   }
 
   return aA * aB;

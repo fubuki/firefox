@@ -12,7 +12,6 @@
 
 class nsIContent;
 class nsHtml5TreeOpExecutor;
-class nsHtml5StateSnapshot;
 class nsHtml5DocumentBuilder;
 
 enum eHtml5TreeOperation {
@@ -59,8 +58,6 @@ enum eHtml5TreeOperation {
   eTreeOpAddViewSourceBase,
   eTreeOpAddError,
   eTreeOpAddLineNumberId,
-  eTreeOpAddErrorAtom,
-  eTreeOpAddErrorTwoAtoms,
   eTreeOpStartLayout
 };
 
@@ -111,7 +108,7 @@ class nsHtml5TreeOperation {
       }
       nsAutoString str;
       aAtom->ToString(str);
-      return do_GetAtom(str);
+      return NS_Atomize(str);
     }
 
     static nsresult AppendTextToTextNode(const char16_t* aBuffer,
@@ -477,6 +474,11 @@ class nsHtml5TreeOperation {
       return mOpCode == eTreeOpRunScript;
     }
     
+    inline bool IsMarkAsBroken()
+    {
+      return mOpCode == eTreeOpMarkAsBroken;
+    }
+
     inline void SetSnapshot(nsAHtml5TreeBuilderState* aSnapshot, int32_t aLine)
     {
       NS_ASSERTION(IsRunScript(), 

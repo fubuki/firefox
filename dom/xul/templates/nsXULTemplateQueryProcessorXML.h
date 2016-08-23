@@ -29,7 +29,7 @@ class nsXULTemplateQueryProcessorXML;
   {0x0358d692, 0xccce, 0x4a97, \
     { 0xb2, 0x51, 0xba, 0x8f, 0x17, 0x0f, 0x3b, 0x6f }}
  
-class nsXMLQuery MOZ_FINAL : public nsISupports
+class nsXMLQuery final : public nsISupports
 {
   public:
     NS_DECLARE_STATIC_IID_ACCESSOR(NS_IXMLQUERY_IID)
@@ -77,12 +77,12 @@ class nsXMLQuery MOZ_FINAL : public nsISupports
 
     nsAutoPtr<mozilla::dom::XPathExpression> mResultsExpr;
 
-    nsRefPtr<nsXMLBindingSet> mRequiredBindings;
+    RefPtr<nsXMLBindingSet> mRequiredBindings;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsXMLQuery, NS_IXMLQUERY_IID)
 
-class nsXULTemplateResultSetXML MOZ_FINAL : public nsISimpleEnumerator
+class nsXULTemplateResultSetXML final : public nsISimpleEnumerator
 {
 private:
 
@@ -90,10 +90,10 @@ private:
     nsCOMPtr<nsXMLQuery> mQuery;
 
     // the binding set created from <assign> nodes
-    nsRefPtr<nsXMLBindingSet> mBindingSet;
+    RefPtr<nsXMLBindingSet> mBindingSet;
 
     // set of results contained in this enumerator
-    nsRefPtr<mozilla::dom::XPathResult> mResults;
+    RefPtr<mozilla::dom::XPathResult> mResults;
 
     // current position within the list of results
     uint32_t mPosition;
@@ -118,8 +118,8 @@ public:
     {}
 };
 
-class nsXULTemplateQueryProcessorXML MOZ_FINAL : public nsIXULTemplateQueryProcessor,
-                                                 public nsIDOMEventListener
+class nsXULTemplateQueryProcessorXML final : public nsIXULTemplateQueryProcessor,
+                                             public nsIDOMEventListener
 {
 public:
 
@@ -158,7 +158,7 @@ private:
 
     nsCOMPtr<mozilla::dom::Element> mRoot;
 
-    nsRefPtr<mozilla::dom::XPathEvaluator> mEvaluator;
+    RefPtr<mozilla::dom::XPathEvaluator> mEvaluator;
 
     nsCOMPtr<nsIXULTemplateBuilder> mTemplateBuilder;
 

@@ -21,18 +21,18 @@ namespace dom {
 class AudioContext;
 class AudioBufferSourceNode;
 
-class PannerNode : public AudioNode,
-                   public SupportsWeakPtr<PannerNode>
+class PannerNode final : public AudioNode,
+                         public SupportsWeakPtr<PannerNode>
 {
 public:
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(PannerNode)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(PannerNode)
   explicit PannerNode(AudioContext* aContext);
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual void DestroyMediaStream() MOZ_OVERRIDE;
+  void DestroyMediaStream() override;
 
-  virtual void SetChannelCount(uint32_t aChannelCount, ErrorResult& aRv) MOZ_OVERRIDE
+  void SetChannelCount(uint32_t aChannelCount, ErrorResult& aRv) override
   {
     if (aChannelCount > 2) {
       aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
@@ -40,7 +40,7 @@ public:
     }
     AudioNode::SetChannelCount(aChannelCount, aRv);
   }
-  virtual void SetChannelCountModeValue(ChannelCountMode aMode, ErrorResult& aRv) MOZ_OVERRIDE
+  void SetChannelCountModeValue(ChannelCountMode aMode, ErrorResult& aRv) override
   {
     if (aMode == ChannelCountMode::Max) {
       aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
@@ -56,11 +56,7 @@ public:
   {
     return mPanningModel;
   }
-  void SetPanningModel(PanningModelType aPanningModel)
-  {
-    mPanningModel = aPanningModel;
-    SendInt32ParameterToStream(PANNING_MODEL, int32_t(mPanningModel));
-  }
+  void SetPanningModel(PanningModelType aPanningModel);
 
   DistanceModelType DistanceModel() const
   {
@@ -195,13 +191,13 @@ public:
   void FindConnectedSources();
   void FindConnectedSources(AudioNode* aNode, nsTArray<AudioBufferSourceNode*>& aSources, std::set<AudioNode*>& aSeenNodes);
 
-  virtual const char* NodeType() const MOZ_OVERRIDE
+  const char* NodeType() const override
   {
     return "PannerNode";
   }
 
-  virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
-  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override;
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override;
 
 protected:
   virtual ~PannerNode();
@@ -247,8 +243,8 @@ private:
   nsTArray<AudioBufferSourceNode*> mSources;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

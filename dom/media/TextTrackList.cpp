@@ -23,12 +23,12 @@ NS_IMPL_RELEASE_INHERITED(TextTrackList, DOMEventTargetHelper)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(TextTrackList)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-TextTrackList::TextTrackList(nsPIDOMWindow* aOwnerWindow)
+TextTrackList::TextTrackList(nsPIDOMWindowInner* aOwnerWindow)
   : DOMEventTargetHelper(aOwnerWindow)
 {
 }
 
-TextTrackList::TextTrackList(nsPIDOMWindow* aOwnerWindow,
+TextTrackList::TextTrackList(nsPIDOMWindowInner* aOwnerWindow,
                              TextTrackManager* aTextTrackManager)
  : DOMEventTargetHelper(aOwnerWindow)
  , mTextTrackManager(aTextTrackManager)
@@ -40,9 +40,9 @@ TextTrackList::~TextTrackList()
 }
 
 void
-TextTrackList::UpdateAndGetShowingCues(nsTArray<nsRefPtr<TextTrackCue> >& aCues)
+TextTrackList::UpdateAndGetShowingCues(nsTArray<RefPtr<TextTrackCue> >& aCues)
 {
-  nsTArray< nsRefPtr<TextTrackCue> > cues;
+  nsTArray< RefPtr<TextTrackCue> > cues;
   for (uint32_t i = 0; i < Length(); i++) {
     TextTrackMode mode = mTextTracks[i]->Mode();
     // If the mode is hidden then we just need to update the active cue list,
@@ -60,16 +60,19 @@ TextTrackList::UpdateAndGetShowingCues(nsTArray<nsRefPtr<TextTrackCue> >& aCues)
 }
 
 JSObject*
-TextTrackList::WrapObject(JSContext* aCx)
+TextTrackList::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return TextTrackListBinding::Wrap(aCx, this);
+  return TextTrackListBinding::Wrap(aCx, this, aGivenProto);
 }
 
 TextTrack*
 TextTrackList::IndexedGetter(uint32_t aIndex, bool& aFound)
 {
   aFound = aIndex < mTextTracks.Length();
-  return aFound ? mTextTracks[aIndex] : nullptr;
+  if (!aFound) {
+    return nullptr;
+  }
+  return mTextTracks[aIndex];
 }
 
 TextTrack*
@@ -87,7 +90,7 @@ TextTrackList::AddTextTrack(TextTrackKind aKind,
                             TextTrackSource aTextTrackSource,
                             const CompareTextTracks& aCompareTT)
 {
-  nsRefPtr<TextTrack> track = new TextTrack(GetOwner(), this, aKind, aLabel,
+  RefPtr<TextTrack> track = new TextTrack(GetOwner(), this, aKind, aLabel,
                                             aLanguage, aMode, aReadyState,
                                             aTextTrackSource);
   AddTextTrack(track, aCompareTT);
@@ -133,7 +136,7 @@ TextTrackList::DidSeek()
   }
 }
 
-class TrackEventRunner MOZ_FINAL: public nsRunnable
+class TrackEventRunner final: public nsRunnable
 {
 public:
   TrackEventRunner(TextTrackList* aList, nsIDOMEvent* aEvent)
@@ -141,14 +144,14 @@ public:
     , mEvent(aEvent)
   {}
 
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     return mList->DispatchTrackEvent(mEvent);
   }
 
 private:
-  nsRefPtr<TextTrackList> mList;
-  nsRefPtr<nsIDOMEvent> mEvent;
+  RefPtr<TextTrackList> mList;
+  RefPtr<nsIDOMEvent> mEvent;
 };
 
 nsresult
@@ -160,19 +163,9 @@ TextTrackList::DispatchTrackEvent(nsIDOMEvent* aEvent)
 void
 TextTrackList::CreateAndDispatchChangeEvent()
 {
-  nsCOMPtr<nsIDOMEvent> event;
-  nsresult rv = NS_NewDOMEvent(getter_AddRefs(event), this, nullptr, nullptr);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to create the error event!");
-    return;
-  }
+  RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
-  rv = event->InitEvent(NS_LITERAL_STRING("change"), false, false);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to init the change event!");
-    return;
-  }
-
+  event->InitEvent(NS_LITERAL_STRING("change"), false, false);
   event->SetTrusted(true);
 
   nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);
@@ -183,14 +176,24 @@ void
 TextTrackList::CreateAndDispatchTrackEventRunner(TextTrack* aTrack,
                                                  const nsAString& aEventName)
 {
+  nsCOMPtr<nsIThread> thread;
+  nsresult rv = NS_GetMainThread(getter_AddRefs(thread));
+  if (NS_FAILED(rv)) {
+    // If we are not able to get the main-thread object we are shutting down.
+    return;
+  }
+
   TrackEventInit eventInit;
   eventInit.mTrack.SetValue().SetAsTextTrack() = aTrack;
-  nsRefPtr<TrackEvent> event =
+  RefPtr<TrackEvent> event =
     TrackEvent::Constructor(this, aEventName, eventInit);
 
   // Dispatch the TrackEvent asynchronously.
-  nsCOMPtr<nsIRunnable> eventRunner = new TrackEventRunner(this, event);
-  NS_DispatchToMainThread(eventRunner);
+  rv = thread->Dispatch(do_AddRef(new TrackEventRunner(this, event)),
+                        NS_DISPATCH_NORMAL);
+
+  // If we are shutting down this can file but it's still ok.
+  NS_WARN_IF(NS_FAILED(rv));
 }
 
 HTMLMediaElement*

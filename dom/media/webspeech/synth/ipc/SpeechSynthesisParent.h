@@ -22,10 +22,11 @@ class SpeechSynthesisParent : public PSpeechSynthesisParent
   friend class SpeechSynthesisRequestParent;
 
 public:
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
+  void ActorDestroy(ActorDestroyReason aWhy) override;
 
-  bool RecvReadVoiceList(InfallibleTArray<RemoteVoice>* aVoices,
-                         InfallibleTArray<nsString>* aDefaults) MOZ_OVERRIDE;
+  bool RecvReadVoicesAndState(InfallibleTArray<RemoteVoice>* aVoices,
+                              InfallibleTArray<nsString>* aDefaults,
+                              bool* aIsSpeaking) override;
 
 protected:
   SpeechSynthesisParent();
@@ -36,9 +37,9 @@ protected:
                                                                     const float& aVolume,
                                                                     const float& aRate,
                                                                     const float& aPitch)
-                                                                    MOZ_OVERRIDE;
+                                                                    override;
 
-  bool DeallocPSpeechSynthesisRequestParent(PSpeechSynthesisRequestParent* aActor) MOZ_OVERRIDE;
+  bool DeallocPSpeechSynthesisRequestParent(PSpeechSynthesisRequestParent* aActor) override;
 
   bool RecvPSpeechSynthesisRequestConstructor(PSpeechSynthesisRequestParent* aActor,
                                               const nsString& aText,
@@ -46,7 +47,7 @@ protected:
                                               const nsString& aUri,
                                               const float& aVolume,
                                               const float& aRate,
-                                              const float& aPitch) MOZ_OVERRIDE;
+                                              const float& aPitch) override;
 };
 
 class SpeechSynthesisRequestParent : public PSpeechSynthesisRequestParent
@@ -55,17 +56,23 @@ public:
   explicit SpeechSynthesisRequestParent(SpeechTaskParent* aTask);
   virtual ~SpeechSynthesisRequestParent();
 
-  nsRefPtr<SpeechTaskParent> mTask;
+  RefPtr<SpeechTaskParent> mTask;
 
 protected:
 
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
+  void ActorDestroy(ActorDestroyReason aWhy) override;
 
-  virtual bool RecvPause() MOZ_OVERRIDE;
+  bool RecvPause() override;
 
-  virtual bool RecvResume() MOZ_OVERRIDE;
+  bool RecvResume() override;
 
-  virtual bool RecvCancel() MOZ_OVERRIDE;
+  bool RecvCancel() override;
+
+  bool RecvForceEnd() override;
+
+  bool RecvSetAudioOutputVolume(const float& aVolume) override;
+
+  bool Recv__delete__() override;
 };
 
 class SpeechTaskParent : public nsSpeechTask
@@ -75,21 +82,21 @@ public:
   SpeechTaskParent(float aVolume, const nsAString& aUtterance)
     : nsSpeechTask(aVolume, aUtterance) {}
 
-  virtual nsresult DispatchStartImpl();
+  nsresult DispatchStartImpl(const nsAString& aUri);
 
-  virtual nsresult DispatchEndImpl(float aElapsedTime, uint32_t aCharIndex);
+  nsresult DispatchEndImpl(float aElapsedTime, uint32_t aCharIndex);
 
-  virtual nsresult DispatchPauseImpl(float aElapsedTime, uint32_t aCharIndex);
+  nsresult DispatchPauseImpl(float aElapsedTime, uint32_t aCharIndex);
 
-  virtual nsresult DispatchResumeImpl(float aElapsedTime, uint32_t aCharIndex);
+  nsresult DispatchResumeImpl(float aElapsedTime, uint32_t aCharIndex);
 
-  virtual nsresult DispatchErrorImpl(float aElapsedTime, uint32_t aCharIndex);
+  nsresult DispatchErrorImpl(float aElapsedTime, uint32_t aCharIndex);
 
-  virtual nsresult DispatchBoundaryImpl(const nsAString& aName,
-                                        float aElapsedTime, uint32_t aCharIndex);
+  nsresult DispatchBoundaryImpl(const nsAString& aName,
+                                float aElapsedTime, uint32_t aCharIndex);
 
-  virtual nsresult DispatchMarkImpl(const nsAString& aName,
-                                    float aElapsedTime, uint32_t aCharIndex);
+  nsresult DispatchMarkImpl(const nsAString& aName,
+                            float aElapsedTime, uint32_t aCharIndex);
 
 private:
   SpeechSynthesisRequestParent* mActor;

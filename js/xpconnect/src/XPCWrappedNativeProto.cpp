@@ -59,7 +59,7 @@ XPCWrappedNativeProto::Init(const XPCNativeScriptableCreateInfo* scriptableCreat
                             bool callPostCreatePrototype)
 {
     AutoJSContext cx;
-    nsIXPCScriptable *callback = scriptableCreateInfo ?
+    nsIXPCScriptable* callback = scriptableCreateInfo ?
                                  scriptableCreateInfo->GetCallback() :
                                  nullptr;
     if (callback) {
@@ -69,28 +69,16 @@ XPCWrappedNativeProto::Init(const XPCNativeScriptableCreateInfo* scriptableCreat
             return false;
     }
 
-    const js::Class* jsclazz;
+    const js::Class* jsclazz =
+        (mScriptableInfo &&
+         mScriptableInfo->GetFlags().AllowPropModsToPrototype())
+        ? &XPC_WN_ModsAllowed_Proto_JSClass
+        : &XPC_WN_NoMods_Proto_JSClass;
 
-    if (mScriptableInfo) {
-        const XPCNativeScriptableFlags& flags(mScriptableInfo->GetFlags());
-
-        if (flags.AllowPropModsToPrototype()) {
-            jsclazz = flags.WantCall() ?
-                &XPC_WN_ModsAllowed_WithCall_Proto_JSClass :
-                &XPC_WN_ModsAllowed_NoCall_Proto_JSClass;
-        } else {
-            jsclazz = flags.WantCall() ?
-                &XPC_WN_NoMods_WithCall_Proto_JSClass :
-                &XPC_WN_NoMods_NoCall_Proto_JSClass;
-        }
-    } else {
-        jsclazz = &XPC_WN_NoMods_NoCall_Proto_JSClass;
-    }
-
-    JS::RootedObject parent(cx, mScope->GetGlobalJSObject());
-    JS::RootedObject proto(cx, JS_GetObjectPrototype(cx, parent));
+    JS::RootedObject global(cx, mScope->GetGlobalJSObject());
+    JS::RootedObject proto(cx, JS_GetObjectPrototype(cx, global));
     mJSProtoObject = JS_NewObjectWithUniqueType(cx, js::Jsvalify(jsclazz),
-                                                proto, parent);
+                                                proto);
 
     bool success = !!mJSProtoObject;
     if (success) {
@@ -108,7 +96,7 @@ XPCWrappedNativeProto::CallPostCreatePrototype()
     AutoJSContext cx;
 
     // Nothing to do if we don't have a scriptable callback.
-    nsIXPCScriptable *callback = mScriptableInfo ? mScriptableInfo->GetCallback()
+    nsIXPCScriptable* callback = mScriptableInfo ? mScriptableInfo->GetCallback()
                                                  : nullptr;
     if (!callback)
         return true;
@@ -127,7 +115,7 @@ XPCWrappedNativeProto::CallPostCreatePrototype()
 }
 
 void
-XPCWrappedNativeProto::JSProtoObjectFinalized(js::FreeOp *fop, JSObject *obj)
+XPCWrappedNativeProto::JSProtoObjectFinalized(js::FreeOp* fop, JSObject* obj)
 {
     MOZ_ASSERT(obj == mJSProtoObject, "huh?");
 
@@ -143,7 +131,7 @@ XPCWrappedNativeProto::JSProtoObjectFinalized(js::FreeOp *fop, JSObject *obj)
 }
 
 void
-XPCWrappedNativeProto::JSProtoObjectMoved(JSObject *obj, const JSObject *old)
+XPCWrappedNativeProto::JSProtoObjectMoved(JSObject* obj, const JSObject* old)
 {
     MOZ_ASSERT(mJSProtoObject == old);
     mJSProtoObject.init(obj); // Update without triggering barriers.

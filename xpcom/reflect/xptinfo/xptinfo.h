@@ -11,8 +11,6 @@
 #include "nscore.h"
 #include "xpt_struct.h"
 
-class nsIInterfaceInfoManager;
-
 // Flyweight wrapper classes for xpt_struct.h structs. 
 // Everything here is dependent upon - and sensitive to changes in -
 // xpcom/typelib/xpt/xpt_struct.h!
@@ -189,7 +187,6 @@ public:
     bool IsGetter()      const {return 0 != (XPT_MD_IS_GETTER(flags) );}
     bool IsSetter()      const {return 0 != (XPT_MD_IS_SETTER(flags) );}
     bool IsNotXPCOM()    const {return 0 != (XPT_MD_IS_NOTXPCOM(flags));}
-    bool IsConstructor() const {return 0 != (XPT_MD_IS_CTOR(flags)   );}
     bool IsHidden()      const {return 0 != (XPT_MD_IS_HIDDEN(flags) );}
     bool WantsOptArgc()  const {return 0 != (XPT_MD_WANTS_OPT_ARGC(flags));}
     bool WantsContext()  const {return 0 != (XPT_MD_WANTS_CONTEXT(flags));}

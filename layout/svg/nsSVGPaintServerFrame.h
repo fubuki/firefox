@@ -17,8 +17,8 @@
 namespace mozilla {
 namespace gfx {
 class DrawTarget;
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 class gfxContext;
 class gfxPattern;
@@ -26,21 +26,19 @@ class nsStyleContext;
 
 struct gfxRect;
 
-typedef nsSVGContainerFrame nsSVGPaintServerFrameBase;
-
-class nsSVGPaintServerFrame : public nsSVGPaintServerFrameBase
+class nsSVGPaintServerFrame : public nsSVGContainerFrame
 {
 protected:
   typedef mozilla::gfx::DrawTarget DrawTarget;
 
   explicit nsSVGPaintServerFrame(nsStyleContext* aContext)
-    : nsSVGPaintServerFrameBase(aContext)
+    : nsSVGContainerFrame(aContext)
   {
     AddStateBits(NS_FRAME_IS_NONDISPLAY);
   }
 
 public:
-  NS_DECL_FRAMEARENA_HELPERS
+  NS_DECL_ABSTRACT_FRAME(nsSVGPaintServerFrame)
 
   /**
    * Constructs a gfxPattern of the paint server rendering.
@@ -61,11 +59,11 @@ public:
   // nsIFrame methods:
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
-                                const nsDisplayListSet& aLists) MOZ_OVERRIDE {}
+                                const nsDisplayListSet& aLists) override {}
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE
+  virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
-    return nsSVGPaintServerFrameBase::IsFrameOfType(aFlags & ~nsIFrame::eSVGPaintServer);
+    return nsSVGContainerFrame::IsFrameOfType(aFlags & ~nsIFrame::eSVGPaintServer);
   }
 };
 

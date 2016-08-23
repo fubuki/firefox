@@ -1,3 +1,5 @@
+"use strict";
+
 var ScriptableUnicodeConverter =
   Components.Constructor("@mozilla.org/intl/scriptableunicodeconverter",
                          "nsIScriptableUnicodeConverter");
@@ -30,7 +32,7 @@ var hashes = {
   sha384: [
    "ca737f1014a48f4c0b6dd43cb177b0afd9e5169367544c494011e3317dbf9a509cb1e5dc1e85a941bbee3d7f2afbc9b1",
    "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"
-  ],   
+  ],
   sha512: [
     "07e547d9586f6a73f73fbac0435ed76951218fb7d0c8d788a309d785436bbb642e93a252a954f23912547d1e8a3b5ed6e1bfd7097821233fa0538f3db854fee6",
     "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
@@ -38,29 +40,12 @@ var hashes = {
 };
 
 function hexdigest(data) {
-  /*
-   * Coment taken from bug 383390:
-   *  
-   * First, |data| is the final string value produced by the cryptohash.  |for (i in
-   * data)| uses the Mozilla JS extension that iterating over a string iterates over
-   * its character indexes, so that's 0..length-1 over the hash string.
-   * 
-   * Returning to the left, the |charCodeAt| gets the value of the character at that
-   * index in the string.
-   * 
-   * |slice(-2)| is equivalent to |slice(length of this string - 2)| as a convenient
-   * way of wrapping around to the other end of a string without doing the actual
-   * calculation.  When provided with only one argument, slice selects to the end of
-   * the string, so this chomps off the last two characters of the string.
-   * 
-   * The last-two-characters part clarifies the |"0" +| -- if the Unicode value is
-   * <10, we have a single-character hex string when we want one that's two
-   * characters, and unconditionally prepending a "0" solves the problem.
-   * 
-   * The array comprehension just creates an array whose elements are these
-   * two-character strings.
-   */
-  return [("0" + data.charCodeAt(i).toString(16)).slice(-2) for (i in data)].join("");
+  // |slice(-2)| chomps off the last two characters of a string.
+  //
+  // Therefore, if the Unicode value is < 10, we have a single-character hex
+  // string when we want one that's two characters, and unconditionally
+  // prepending a "0" solves the problem.
+  return Array.from(data, (c, i) => ("0" + data.charCodeAt(i).toString(16)).slice(-2)).join("");
 }
 
 function doHash(algo, value, cmp) {
@@ -71,22 +56,14 @@ function doHash(algo, value, cmp) {
   value = converter.convertToByteArray(value);
   hash.update(value, value.length);
   var hash1 = hexdigest(hash.finish(false));
-  if (cmp != hash1) {
-    do_throw("Hash mismatch!\n" +
-             "  Expected: " + cmp + "\n" +
-             "  Actual: " + hash1 + "\n" +
-             "  Algo: " + algo);
-  }                                                                                                                                                                                                                                  
+  equal(hash1, cmp,
+        `Actual and expected hash for ${algo} should match`);
 
   hash.initWithString(algo);
   hash.update(value, value.length);
   var hash2 = hexdigest(hash.finish(false));
-  if (cmp != hash2) {
-    do_throw("Hash mismatch after crypto hash re-init!\n" +
-             "  Expected: " + cmp + "\n" +
-             "  Actual: " + hash2 + "\n" +
-             "  Algo: " + algo);
-  }
+  equal(hash2, cmp,
+        `Actual and expected hash for ${algo} should match after re-init`);
 }
 
 function doHashStream(algo, value, cmp) {
@@ -97,20 +74,16 @@ function doHashStream(algo, value, cmp) {
   var stream = converter.convertToInputStream(value);
   hash.updateFromStream(stream, stream.available());
   hash = hexdigest(hash.finish(false));
-  if (cmp != hash) {
-    do_throw("Hash mismatch!\n" +
-             "  Expected: " + cmp + "\n" +
-             "  Actual: " + hash + "\n" +
-             "  Algo: " + algo);
-  }
+  equal(hash, cmp,
+        `Actual and expected hash for ${algo} should match updating from stream`);
 }
 
 function run_test() {
-  for (algo in hashes) {
+  for (let algo in hashes) {
     hashes[algo].forEach(
       function(e, i) {
         doHash(algo, messages[i], e);
-        
+
         if (messages[i].length) {
           // this test doesn't work for empty string/stream
           doHashStream(algo, messages[i], e);

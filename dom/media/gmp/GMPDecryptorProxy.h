@@ -10,9 +10,9 @@
 #include "gmp-decryption.h"
 #include "nsString.h"
 
-namespace mp4_demuxer {
+namespace mozilla {
 class CryptoSample;
-}
+} // namespace mozilla
 
 class GMPDecryptorProxyCallback : public GMPCallbackBase {
 public:
@@ -59,6 +59,8 @@ class GMPDecryptorProxy {
 public:
   ~GMPDecryptorProxy() {}
 
+  virtual uint32_t GetPluginId() const = 0;
+
   virtual nsresult Init(GMPDecryptorProxyCallback* aCallback) = 0;
 
   virtual void CreateSession(uint32_t aCreateSessionToken,
@@ -84,7 +86,7 @@ public:
                                     const nsTArray<uint8_t>& aServerCert) = 0;
 
   virtual void Decrypt(uint32_t aId,
-                       const mp4_demuxer::CryptoSample& aCrypto,
+                       const mozilla::CryptoSample& aCrypto,
                        const nsTArray<uint8_t>& aBuffer) = 0;
 
   virtual void Close() = 0;

@@ -8,6 +8,7 @@ this.EXPORTED_SYMBOLS = ["MobileIdentityManager"];
 
 const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/MobileIdentityCommon.jsm");
 Cu.import("resource://gre/modules/MobileIdentityUIGlueCommon.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
@@ -51,19 +52,19 @@ XPCOMUtils.defineLazyServiceGetter(this, "appsService",
                                    "@mozilla.org/AppsService;1",
                                    "nsIAppsService");
 
-#ifdef MOZ_B2G_RIL
-XPCOMUtils.defineLazyServiceGetter(this, "Ril",
-                                   "@mozilla.org/ril;1",
-                                   "nsIRadioInterfaceLayer");
+if (AppConstants.MOZ_B2G_RIL) {
+  XPCOMUtils.defineLazyServiceGetter(this, "Ril",
+                                     "@mozilla.org/ril;1",
+                                     "nsIRadioInterfaceLayer");
 
-XPCOMUtils.defineLazyServiceGetter(this, "IccProvider",
-                                   "@mozilla.org/ril/content-helper;1",
-                                   "nsIIccProvider");
+  XPCOMUtils.defineLazyServiceGetter(this, "IccService",
+                                     "@mozilla.org/icc/iccservice;1",
+                                     "nsIIccService");
 
-XPCOMUtils.defineLazyServiceGetter(this, "MobileConnectionService",
-                                   "@mozilla.org/mobileconnection/mobileconnectionservice;1",
-                                   "nsIMobileConnectionService");
-#endif
+  XPCOMUtils.defineLazyServiceGetter(this, "MobileConnectionService",
+                                     "@mozilla.org/mobileconnection/mobileconnectionservice;1",
+                                     "nsIMobileConnectionService");
+}
 
 
 this.MobileIdentityManager = {
@@ -107,139 +108,132 @@ this.MobileIdentityManager = {
   /*********************************************************
    * Getters
    ********************************************************/
-#ifdef MOZ_B2G_RIL
-  // We have these getters to allow mocking RIL stuff from the tests.
-  get ril() {
-    if (this._ril) {
-      return this._ril;
-    }
-    return Ril;
-  },
-
-  get iccProvider() {
-    if (this._iccProvider) {
-      return this._iccProvider;
-    }
-    return IccProvider;
-  },
-
-  get mobileConnectionService() {
-    if (this._mobileConnectionService) {
-      return this._mobileConnectionService;
-    }
-    return MobileConnectionService;
-  },
-#endif
-
   get iccInfo() {
     if (this._iccInfo) {
       return this._iccInfo;
     }
-#ifdef MOZ_B2G_RIL
-    let self = this;
-    let iccListener = {
-      notifyStkCommand: function() {},
+    if (AppConstants.MOZ_B2G_RIL) {
+      let self = this;
+      let iccListener = {
+        notifyStkCommand: function() {},
 
-      notifyStkSessionEnd: function() {},
+        notifyStkSessionEnd: function() {},
 
-      notifyCardStateChanged: function() {},
+        notifyCardStateChanged: function() {},
 
-      notifyIccInfoChanged: function() {
-        // If we receive a notification about an ICC info change, we clear
-        // the ICC related caches so they can be rebuilt with the new changes.
+        notifyIccInfoChanged: function() {
+          // If we receive a notification about an ICC info change, we clear
+          // the ICC related caches so they can be rebuilt with the new changes.
 
-        log.debug("ICC info changed observed. Clearing caches");
+          log.debug("ICC info changed observed. Clearing caches");
 
-        // We don't need to keep listening for changes until we rebuild the
-        // cache again.
-        for (let i = 0; i < self._iccInfo.length; i++) {
-          self.iccProvider.unregisterIccMsg(self._iccInfo[i].clientId,
-                                            iccListener);
+          // We don't need to keep listening for changes until we rebuild the
+          // cache again.
+          for (let i = 0; i < self._iccInfo.length; i++) {
+            let icc = self.iccService.getIccByServiceId(i);
+            if (icc) {
+              icc.unregisterListener(iccListener);
+            }
+          }
+
+          self._iccInfo = null;
+          self._iccIds = null;
+        }
+      };
+
+      // _iccInfo is a local cache containing the information about the SIM cards
+      // that is interesting for the Mobile ID flow.
+      // The index of this array does not necesarily need to match the real
+      // identifier of the SIM card ("clientId" or "serviceId" in RIL language).
+      this._iccInfo = [];
+
+      for (let i = 0; i < this.ril.numRadioInterfaces; i++) {
+        let icc = this.iccService.getIccByServiceId(i);
+        if (!icc) {
+          log.warn("Tried to get the Icc instance for an invalid service ID " + i);
+          continue;
         }
 
-        self._iccInfo = null;
-        self._iccIds = null;
-      }
-    };
+        let info = icc.iccInfo;
+        if (!info || !info.iccid ||
+            !info.mcc || !info.mcc.length ||
+            !info.mnc || !info.mnc.length) {
+          log.warn("Absent or invalid ICC info");
+          continue;
+        }
 
-    // _iccInfo is a local cache containing the information about the SIM cards
-    // that is interesting for the Mobile ID flow.
-    // The index of this array does not necesarily need to match the real
-    // identifier of the SIM card ("clientId" or "serviceId" in RIL language).
-    this._iccInfo = [];
-
-    for (let i = 0; i < this.ril.numRadioInterfaces; i++) {
-      let rilContext = this.ril.getRadioInterface(i).rilContext;
-      if (!rilContext) {
-        log.warn("Tried to get the RIL context for an invalid service ID " + i);
-        continue;
-      }
-
-      let info = rilContext.iccInfo;
-      if (!info || !info.iccid ||
-          !info.mcc || !info.mcc.length ||
-          !info.mnc || !info.mnc.length) {
-        log.warn("Absent or invalid ICC info");
-        continue;
-      }
-
-      let connection = this.mobileConnectionService.getItemByServiceId(i);
-      let voice = connection && connection.voice;
-      let data = connection && connection.data;
-      let operator = null;
-      if (voice &&
-          voice.network &&
-          voice.network.shortName &&
-          voice.network.shortName.length) {
-        operator = voice.network.shortName;
-      } else if (data &&
-                 data.network &&
-                 data.network.shortName &&
-                 data.network.shortName.length) {
-        operator = data.network.shortName;
-      }
-
-      this._iccInfo.push({
-        // Because it is possible that the _iccInfo array index doesn't match
-        // the real client ID, we need to store this value for later usage.
-        clientId: i,
-        iccId: info.iccid,
-        mcc: info.mcc,
-        mnc: info.mnc,
         // GSM SIMs may have MSISDN while CDMA SIMs may have MDN
-        msisdn: info.msisdn || info.mdn || null,
-        operator: operator,
-        roaming: voice && voice.roaming
-      });
+        let phoneNumber = null;
+        try {
+          if (info.iccType === "sim" || info.iccType === "usim") {
+            let gsmInfo = info.QueryInterface(Ci.nsIGsmIccInfo);
+            phoneNumber = gsmInfo.msisdn;
+          } else if (info.iccType === "ruim" || info.iccType === "csim") {
+            let cdmaInfo = info.QueryInterface(Ci.nsICdmaIccInfo);
+            phoneNumber = cdmaInfo.mdn;
+          }
+        } catch (e) {
+          log.error("Failed to retrieve phoneNumber: " + e);
+        }
 
-      // We need to subscribe to ICC change notifications so we can refresh
-      // the cache if any change is observed.
-      this.iccProvider.registerIccMsg(i, iccListener);
+        let connection = this.mobileConnectionService.getItemByServiceId(i);
+        let voice = connection && connection.voice;
+        let data = connection && connection.data;
+        let operator = null;
+        if (voice &&
+            voice.network &&
+            voice.network.shortName &&
+            voice.network.shortName.length) {
+          operator = voice.network.shortName;
+        } else if (data &&
+                   data.network &&
+                   data.network.shortName &&
+                   data.network.shortName.length) {
+          operator = data.network.shortName;
+        }
+
+        this._iccInfo.push({
+          // Because it is possible that the _iccInfo array index doesn't match
+          // the real client ID, we need to store this value for later usage.
+          clientId: i,
+          iccId: info.iccid,
+          mcc: info.mcc,
+          mnc: info.mnc,
+          msisdn: phoneNumber,
+          operator: operator,
+          roaming: voice && voice.roaming
+        });
+
+        // We need to subscribe to ICC change notifications so we can refresh
+        // the cache if any change is observed.
+        icc.registerListener(iccListener);
+      }
+
+      return this._iccInfo;
+    } else {
+      return null;
     }
-
-    return this._iccInfo;
-#endif
-    return null;
   },
 
   get iccIds() {
-#ifdef MOZ_B2G_RIL
-    if (this._iccIds) {
+    if (AppConstants.MOZ_B2G_RIL) {
+      if (this._iccIds) {
+        return this._iccIds;
+      }
+
+      this._iccIds = [];
+      if (!this.iccInfo) {
+        return this._iccIds;
+      }
+
+      for (let i = 0; i < this.iccInfo.length; i++) {
+        this._iccIds.push(this.iccInfo[i].iccId);
+      }
+
       return this._iccIds;
+    } else {
+      return null;
     }
-
-    this._iccIds = [];
-    if (!this.iccInfo) {
-      return this._iccIds;
-    }
-
-    for (let i = 0; i < this.iccInfo.length; i++) {
-      this._iccIds.push(this.iccInfo[i].iccId);
-    }
-
-    return this._iccIds;
-#endif
-    return null;
   },
 
   get credStore() {
@@ -534,8 +528,8 @@ this.MobileIdentityManager = {
         this.ui,
         this.client
       );
-#ifdef MOZ_B2G_RIL
-    } else if (aToVerify.verificationMethod.indexOf(SMS_MO_MT) != -1 &&
+    } else if (AppConstants.MOZ_B2G_RIL &&
+               aToVerify.verificationMethod.indexOf(SMS_MO_MT) != -1 &&
                aToVerify.serviceId &&
                aToVerify.verificationDetails &&
                aToVerify.verificationDetails.moVerifier &&
@@ -550,7 +544,6 @@ this.MobileIdentityManager = {
         this.ui,
         this.client
       );
-#endif
     } else {
       return Promise.reject(ERROR_INTERNAL_CANNOT_VERIFY_SELECTION);
     }
@@ -769,7 +762,7 @@ this.MobileIdentityManager = {
         if (promptResult.serviceId) {
           let creds = this.iccInfo[promptResult.serviceId].credentials;
           if (creds) {
-            this.credStore.add(creds.iccId, creds.msisdn, aPrincipal.origin,
+            this.credStore.add(creds.iccId, creds.msisdn, aPrincipal.originNoSuffix,
                                creds.sessionToken, this.iccIds);
             return creds;
           }
@@ -782,13 +775,13 @@ this.MobileIdentityManager = {
         .then(
           (creds) => {
             if (creds) {
-              this.credStore.add(creds.iccId, creds.msisdn, aPrincipal.origin,
+              this.credStore.add(creds.iccId, creds.msisdn, aPrincipal.originNoSuffix,
                                  creds.sessionToken, this.iccIds);
               return creds;
             }
             // Otherwise, we need to verify the new number selected by the
             // user.
-            return this.verificationFlow(promptResult, aPrincipal.origin);
+            return this.verificationFlow(promptResult, aPrincipal.originNoSuffix);
           }
         );
       }
@@ -880,9 +873,7 @@ this.MobileIdentityManager = {
   getMobileIdAssertion: function(aPrincipal, aPromiseId, aOptions) {
     log.debug("getMobileIdAssertion ${}", aPrincipal);
 
-    let uri = Services.io.newURI(aPrincipal.origin, null, null);
-    let principal = securityManager.getAppCodebasePrincipal(
-      uri, aPrincipal.appId, aPrincipal.isInBrowserElement);
+    let principal = aPrincipal;
     let manifestURL = appsService.getManifestURLByLocalId(aPrincipal.appId);
 
     let permission = permissionManager.testPermissionFromPrincipal(
@@ -901,11 +892,11 @@ this.MobileIdentityManager = {
     // First of all we look if we already have credentials for this origin.
     // If we don't have credentials it means that it is the first time that
     // the caller requested an assertion.
-    this.credStore.getByOrigin(aPrincipal.origin)
+    this.credStore.getByOrigin(aPrincipal.originNoSuffix)
     .then(
       (creds) => {
         log.debug("creds ${creds} - ${origin}", { creds: creds,
-                                                  origin: aPrincipal.origin });
+                                                  origin: aPrincipal.originNoSuffix });
         if (!creds || !creds.sessionToken) {
           log.debug("No credentials");
           return;
@@ -920,7 +911,7 @@ this.MobileIdentityManager = {
           .then(
             (newCreds) => {
               return this.checkNewCredentials(creds, newCreds,
-                                              principal.origin);
+                                              principal.originNoSuffix);
             }
           );
         }
@@ -964,7 +955,7 @@ this.MobileIdentityManager = {
         .then(
           (newCreds) => {
             return this.checkNewCredentials(creds, newCreds,
-                                            principal.origin);
+                                            principal.originNoSuffix);
           }
         );
       }
@@ -994,7 +985,7 @@ this.MobileIdentityManager = {
     .then(
       (creds) => {
         if (creds) {
-          return this.generateAssertion(creds, principal.origin);
+          return this.generateAssertion(creds, principal.originNoSuffix);
         }
         return Promise.reject(ERROR_INTERNAL_CANNOT_GENERATE_ASSERTION);
       }
@@ -1011,10 +1002,12 @@ this.MobileIdentityManager = {
           return Promise.reject(ERROR_INVALID_ASSERTION);
         }
 
-        // We need to translate the base64 alphabet used in JWT to our base64
-        // alphabet before calling atob.
-        let decodedPayload = JSON.parse(atob(segments[1].replace(/-/g, '+')
-                                                        .replace(/_/g, '/')));
+        let payloadBuffer = ChromeUtils.base64URLDecode(segments[1], {
+          // `IdentityCryptoService` pads output.
+          padding: "require",
+        });
+        let textDecoder = new TextDecoder("utf-8");
+        let decodedPayload = JSON.parse(textDecoder.decode(payloadBuffer));
 
         if (!decodedPayload || !decodedPayload.verifiedMSISDN) {
           return Promise.reject(ERROR_INVALID_ASSERTION);
@@ -1052,5 +1045,41 @@ this.MobileIdentityManager = {
   },
 
 };
+
+if (AppConstants.MOZ_B2G_RIL) {
+  // We have these getters to allow mocking RIL stuff from the tests.
+  Object.defineProperties(MobileIdentityManager, {
+    "ril": {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (this._ril) {
+          return this._ril;
+        }
+        return Ril;
+      }
+    },
+    "iccService": {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (this._iccService) {
+          return this._iccService;
+        }
+        return IccService;
+      }
+    },
+    "mobileConnectionService": {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (this._mobileConnectionService) {
+          return this._mobileConnectionService;
+        }
+        return MobileConnectionService;
+      }
+    }
+  });
+}
 
 MobileIdentityManager.init();

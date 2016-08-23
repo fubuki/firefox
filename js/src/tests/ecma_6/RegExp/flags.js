@@ -7,9 +7,7 @@ assertEq(RegExp.prototype.flags, "");
 assertEq(/foo/iymg.flags, "gimy");
 assertEq(RegExp("").flags, "");
 assertEq(RegExp("", "mygi").flags, "gimy");
-assertThrowsInstanceOf(() => RegExp("", "mygui").flags, SyntaxError);
-// When the /u flag is supported, uncomment the line below and remove the line above
-// assertEq(RegExp("", "mygui").flags, "gimuy");
+assertEq(RegExp("", "mygui").flags, "gimuy");
 assertEq(genericFlags({}), "");
 assertEq(genericFlags({ignoreCase: true}), "i");
 assertEq(genericFlags({sticky:1, unicode:1, global: 0}), "uy");

@@ -20,7 +20,6 @@
 #include "nsBidiPresUtils.h"
 
 class nsRange;
-class nsTableOuterFrame;
 
 // IID for the nsFrameSelection interface
 // 3c6ae2d0-4cf1-44a1-9e9d-2411867f19c6
@@ -68,6 +67,7 @@ struct MOZ_STACK_CLASS nsPeekOffsetStruct
                      bool aScrollViewStop,
                      bool aIsKeyboardSelect,
                      bool aVisual,
+                     bool aExtend,
                      mozilla::EWordMovementType aWordMovementType = mozilla::eDefaultBehavior);
 
   // Note: Most arguments (input and output) are only used with certain values
@@ -123,6 +123,9 @@ struct MOZ_STACK_CLASS nsPeekOffsetStruct
   //          Used with: eSelectCharacter, eSelectWord, eSelectBeginLine, eSelectEndLine.
   bool mVisual;
 
+  // mExtend: Whether the selection is being extended or moved.
+  bool mExtend;
+
   /*** Output arguments ***/
 
   // mResultContent: Content reached as a result of the peek.
@@ -164,8 +167,8 @@ struct nsPrevNextBidiLevels
 namespace mozilla {
 namespace dom {
 class Selection;
-}
-}
+} // namespace dom
+} // namespace mozilla
 class nsIScrollableFrame;
 
 /**
@@ -174,7 +177,7 @@ class nsIScrollableFrame;
  * or they may cause other objects to be deleted.
  */
 
-class nsFrameSelection MOZ_FINAL {
+class nsFrameSelection final {
 public:
   typedef mozilla::CaretAssociationHint CaretAssociateHint;
 
@@ -358,6 +361,7 @@ public:
    * at some point after the method returns.
    * SCROLL_FIRST_ANCESTOR_ONLY: if set, only the first ancestor will be scrolled
    * into view.
+   *
    */
   /*unsafe*/
   nsresult ScrollSelectionIntoView(SelectionType aType,
@@ -513,6 +517,13 @@ public:
     return mDelayedMouseEventClickCount;
   }
 
+  bool MouseDownRecorded()
+  {
+    return !GetDragState() &&
+           HasDelayedCaretData() &&
+           GetClickCountInDelayedCaretData() < 2;
+  }
+
   /** Get the content node that limits the selection
    *  When searching up a nodes for parents, as in a text edit field
    *    in an browser page, we must stop at this node else we reach into the 
@@ -587,7 +598,8 @@ public:
   nsFrameSelection();
 
   void StartBatchChanges();
-  void EndBatchChanges();
+  void EndBatchChanges(int16_t aReason = nsISelectionListener::NO_REASON);
+
   /*unsafe*/
   nsresult DeleteFromDocument();
 
@@ -638,6 +650,7 @@ private:
   }
 
   friend class mozilla::dom::Selection;
+  friend struct mozilla::AutoPrepareFocusRange;
 #ifdef DEBUG
   void printSelection();       // for debugging
 #endif /* DEBUG */
@@ -668,7 +681,7 @@ private:
   // so remember to use nsCOMPtr when needed.
   nsresult     NotifySelectionListeners(SelectionType aType);     // add parameters to say collapsed etc?
 
-  nsRefPtr<mozilla::dom::Selection> mDomSelections[nsISelectionController::NUM_SELECTIONTYPES];
+  RefPtr<mozilla::dom::Selection> mDomSelections[nsISelectionController::NUM_SELECTIONTYPES];
 
   // Table selection support.
   nsITableCellLayout* GetCellLayout(nsIContent *aCellContent) const;
@@ -706,7 +719,7 @@ private:
   int32_t  mSelectedCellIndex;
 
   // maintain selection
-  nsRefPtr<nsRange> mMaintainRange;
+  RefPtr<nsRange> mMaintainRange;
   nsSelectionAmount mMaintainedAmount;
 
   //batching
@@ -739,6 +752,8 @@ private:
   bool mDesiredPosSet;
 
   int8_t mCaretMovementStyle;
+
+  static bool sSelectionEventsEnabled;
 };
 
 #endif /* nsFrameSelection_h___ */

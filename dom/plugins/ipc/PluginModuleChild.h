@@ -31,6 +31,7 @@
 #include "mozilla/plugins/PPluginModuleChild.h"
 #include "mozilla/plugins/PluginInstanceChild.h"
 #include "mozilla/plugins/PluginMessageUtils.h"
+#include "mozilla/plugins/PluginQuirks.h"
 
 // NOTE: stolen from nsNPAPIPlugin.h
 
@@ -48,7 +49,7 @@ typedef NS_NPAPIPLUGIN_CALLBACK(NPError, NP_PLUGINSHUTDOWN) (void);
 namespace mozilla {
 namespace dom {
 class PCrashReporterChild;
-}
+} // namespace dom
 
 namespace plugins {
 
@@ -57,7 +58,6 @@ class NestedLoopTimer;
 static const int kNestedLoopDetectorIntervalMs = 90;
 #endif
 
-class PluginScriptableObjectChild;
 class PluginInstanceChild;
 
 class PluginModuleChild : public PPluginModuleChild
@@ -65,110 +65,106 @@ class PluginModuleChild : public PPluginModuleChild
     typedef mozilla::dom::PCrashReporterChild PCrashReporterChild;
 protected:
     virtual mozilla::ipc::RacyInterruptPolicy
-    MediateInterruptRace(const Message& parent, const Message& child) MOZ_OVERRIDE
+    MediateInterruptRace(const MessageInfo& parent,
+                         const MessageInfo& child) override
     {
         return MediateRace(parent, child);
     }
 
-    virtual bool ShouldContinueFromReplyTimeout() MOZ_OVERRIDE;
+    virtual bool ShouldContinueFromReplyTimeout() override;
 
-    virtual bool RecvSettingChanged(const PluginSettings& aSettings) MOZ_OVERRIDE;
+    virtual bool RecvSettingChanged(const PluginSettings& aSettings) override;
 
     // Implement the PPluginModuleChild interface
-    virtual bool RecvDisableFlashProtectedMode() MOZ_OVERRIDE;
-    virtual bool AnswerNP_GetEntryPoints(NPError* rv) MOZ_OVERRIDE;
-    virtual bool AnswerNP_Initialize(const PluginSettings& aSettings, NPError* rv) MOZ_OVERRIDE;
-    virtual bool RecvAsyncNP_Initialize(const PluginSettings& aSettings) MOZ_OVERRIDE;
+    virtual bool RecvDisableFlashProtectedMode() override;
+    virtual bool AnswerNP_GetEntryPoints(NPError* rv) override;
+    virtual bool AnswerNP_Initialize(const PluginSettings& aSettings, NPError* rv) override;
+    virtual bool RecvAsyncNP_Initialize(const PluginSettings& aSettings) override;
     virtual bool AnswerSyncNPP_New(PPluginInstanceChild* aActor, NPError* rv)
-                                   MOZ_OVERRIDE;
-    virtual bool RecvAsyncNPP_New(PPluginInstanceChild* aActor) MOZ_OVERRIDE;
+                                   override;
+    virtual bool RecvAsyncNPP_New(PPluginInstanceChild* aActor) override;
 
     virtual PPluginModuleChild*
     AllocPPluginModuleChild(mozilla::ipc::Transport* aTransport,
-                            base::ProcessId aOtherProcess) MOZ_OVERRIDE;
+                            base::ProcessId aOtherProcess) override;
 
     virtual PPluginInstanceChild*
     AllocPPluginInstanceChild(const nsCString& aMimeType,
                               const uint16_t& aMode,
                               const InfallibleTArray<nsCString>& aNames,
                               const InfallibleTArray<nsCString>& aValues)
-                              MOZ_OVERRIDE;
+                              override;
 
     virtual bool
-    DeallocPPluginInstanceChild(PPluginInstanceChild* aActor) MOZ_OVERRIDE;
+    DeallocPPluginInstanceChild(PPluginInstanceChild* aActor) override;
 
     virtual bool
     RecvPPluginInstanceConstructor(PPluginInstanceChild* aActor,
                                    const nsCString& aMimeType,
                                    const uint16_t& aMode,
-                                   const InfallibleTArray<nsCString>& aNames,
-                                   const InfallibleTArray<nsCString>& aValues)
-                                   MOZ_OVERRIDE;
+                                   InfallibleTArray<nsCString>&& aNames,
+                                   InfallibleTArray<nsCString>&& aValues)
+                                   override;
     virtual bool
-    AnswerNP_Shutdown(NPError *rv) MOZ_OVERRIDE;
+    AnswerNP_Shutdown(NPError *rv) override;
 
     virtual bool
     AnswerOptionalFunctionsSupported(bool *aURLRedirectNotify,
                                      bool *aClearSiteData,
-                                     bool *aGetSitesWithData) MOZ_OVERRIDE;
+                                     bool *aGetSitesWithData) override;
 
     virtual bool
-    AnswerNPP_ClearSiteData(const nsCString& aSite,
+    RecvNPP_ClearSiteData(const nsCString& aSite,
                             const uint64_t& aFlags,
                             const uint64_t& aMaxAge,
-                            NPError* aResult) MOZ_OVERRIDE;
+                            const uint64_t& aCallbackId) override;
 
     virtual bool
-    AnswerNPP_GetSitesWithData(InfallibleTArray<nsCString>* aResult) MOZ_OVERRIDE;
+    RecvNPP_GetSitesWithData(const uint64_t& aCallbackId) override;
 
     virtual bool
     RecvSetAudioSessionData(const nsID& aId,
                             const nsString& aDisplayName,
-                            const nsString& aIconPath) MOZ_OVERRIDE;
+                            const nsString& aIconPath) override;
 
     virtual bool
-    RecvSetParentHangTimeout(const uint32_t& aSeconds) MOZ_OVERRIDE;
+    RecvSetParentHangTimeout(const uint32_t& aSeconds) override;
 
     virtual PCrashReporterChild*
     AllocPCrashReporterChild(mozilla::dom::NativeThreadId* id,
-                             uint32_t* processType) MOZ_OVERRIDE;
+                             uint32_t* processType) override;
     virtual bool
-    DeallocPCrashReporterChild(PCrashReporterChild* actor) MOZ_OVERRIDE;
+    DeallocPCrashReporterChild(PCrashReporterChild* actor) override;
     virtual bool
     AnswerPCrashReporterConstructor(PCrashReporterChild* actor,
                                     mozilla::dom::NativeThreadId* id,
-                                    uint32_t* processType) MOZ_OVERRIDE;
+                                    uint32_t* processType) override;
 
     virtual void
-    ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
-
-    MOZ_NORETURN void QuickExit();
+    ActorDestroy(ActorDestroyReason why) override;
 
     virtual bool
-    RecvProcessNativeEventsInInterruptCall() MOZ_OVERRIDE;
+    RecvProcessNativeEventsInInterruptCall() override;
 
-    virtual bool RecvStartProfiler(const uint32_t& aEntries,
-                                   const double& aInterval,
-                                   const nsTArray<nsCString>& aFeatures,
-                                   const nsTArray<nsCString>& aThreadNameFilters) MOZ_OVERRIDE;
-    virtual bool RecvStopProfiler() MOZ_OVERRIDE;
-    virtual bool AnswerGetProfile(nsCString* aProfile) MOZ_OVERRIDE;
+    virtual bool RecvStartProfiler(const ProfilerInitParams& params) override;
+    virtual bool RecvStopProfiler() override;
+    virtual bool RecvGatherProfile() override;
 
 public:
     explicit PluginModuleChild(bool aIsChrome);
     virtual ~PluginModuleChild();
 
-    bool CommonInit(base::ProcessHandle aParentProcessHandle,
+    bool CommonInit(base::ProcessId aParentPid,
                     MessageLoop* aIOLoop,
                     IPC::Channel* aChannel);
 
     // aPluginFilename is UTF8, not native-charset!
     bool InitForChrome(const std::string& aPluginFilename,
-                       base::ProcessHandle aParentProcessHandle,
+                       base::ProcessId aParentPid,
                        MessageLoop* aIOLoop,
                        IPC::Channel* aChannel);
 
-    bool InitForContent(base::ProcessHandle aParentProcessHandle,
+    bool InitForContent(base::ProcessId aParentPid,
                         MessageLoop* aIOLoop,
                         IPC::Channel* aChannel);
 
@@ -177,6 +173,8 @@ public:
                             base::ProcessId aOtherProcess);
 
     void CleanUp();
+
+    NPError NP_Shutdown();
 
     const char* GetUserAgent();
 
@@ -241,50 +239,6 @@ public:
     }
 #endif
 
-    // Quirks mode support for various plugin mime types
-    enum PluginQuirks {
-        QUIRKS_NOT_INITIALIZED                          = 0,
-        // Silverlight assumes it is transparent in windowless mode. This quirk
-        // matches the logic in nsNPAPIPluginInstance::SetWindowless.
-        QUIRK_SILVERLIGHT_DEFAULT_TRANSPARENT           = 1 << 0,
-        // Win32: Hook TrackPopupMenu api so that we can swap out parent
-        // hwnds. The api will fail with parents not associated with our
-        // child ui thread. See WinlessHandleEvent for details.
-        QUIRK_WINLESS_TRACKPOPUP_HOOK                   = 1 << 1,
-        // Win32: Throttle flash WM_USER+1 heart beat messages to prevent
-        // flooding chromium's dispatch loop, which can cause ipc traffic
-        // processing lag.
-        QUIRK_FLASH_THROTTLE_WMUSER_EVENTS              = 1 << 2,
-        // Win32: Catch resets on our subclass by hooking SetWindowLong.
-        QUIRK_FLASH_HOOK_SETLONGPTR                     = 1 << 3,
-        // X11: Work around a bug in Flash up to 10.1 d51 at least, where
-        // expose event top left coordinates within the plugin-rect and
-        // not at the drawable origin are misinterpreted.
-        QUIRK_FLASH_EXPOSE_COORD_TRANSLATION            = 1 << 4,
-        // Win32: Catch get window info calls on the browser and tweak the
-        // results so mouse input works when flash is displaying it's settings
-        // window.
-        QUIRK_FLASH_HOOK_GETWINDOWINFO                  = 1 << 5,
-        // Win: Addresses a flash bug with mouse capture and full screen
-        // windows.
-        QUIRK_FLASH_FIXUP_MOUSE_CAPTURE                 = 1 << 6,
-        // Win: QuickTime steals focus on SetWindow calls even if it's hidden.
-        // Avoid calling SetWindow in that case.
-        QUIRK_QUICKTIME_AVOID_SETWINDOW                 = 1 << 7,
-        // Win: Check to make sure the parent window has focus before calling
-        // set focus on the child. Addresses a full screen dialog prompt
-        // problem in Silverlight.
-        QUIRK_SILVERLIGHT_FOCUS_CHECK_PARENT            = 1 << 8,
-        // Mac: Allow the plugin to use offline renderer mode.
-        // Use this only if the plugin is certified the support the offline renderer.
-        QUIRK_ALLOW_OFFLINE_RENDERER                    = 1 << 9,
-        // Mac: Work around a Flash bug that can cause plugin process crashes
-        // in CoreGraphics mode:  The Flash plugin sometimes accesses the
-        // CGContextRef we pass to it in NPP_HandleEvent(NPCocoaEventDrawRect)
-        // outside of that call.  See bug 804606.
-        QUIRK_FLASH_AVOID_CGMODE_CRASHES                = 1 << 10,
-    };
-
     int GetQuirks() { return mQuirks; }
 
     const PluginSettings& Settings() const { return mCachedSettings; }
@@ -308,20 +262,20 @@ private:
     static gboolean DetectNestedEventLoop(gpointer data);
     static gboolean ProcessBrowserEvents(gpointer data);
 
-    virtual void EnteredCxxStack() MOZ_OVERRIDE;
-    virtual void ExitedCxxStack() MOZ_OVERRIDE;
+    virtual void EnteredCxxStack() override;
+    virtual void ExitedCxxStack() override;
 #elif defined(MOZ_WIDGET_QT)
 
-    virtual void EnteredCxxStack() MOZ_OVERRIDE;
-    virtual void ExitedCxxStack() MOZ_OVERRIDE;
+    virtual void EnteredCxxStack() override;
+    virtual void ExitedCxxStack() override;
 #endif
 
     PRLibrary* mLibrary;
     nsCString mPluginFilename; // UTF8
-    nsCString mUserAgent;
     int mQuirks;
 
     bool mIsChrome;
+    bool mHasShutdown; // true if NP_Shutdown has run
     Transport* mTransport;
 
     // we get this from the plugin
@@ -392,8 +346,8 @@ public: // called by PluginInstanceChild
 
 private:
 #if defined(OS_WIN)
-    virtual void EnteredCall() MOZ_OVERRIDE;
-    virtual void ExitedCall() MOZ_OVERRIDE;
+    virtual void EnteredCall() override;
+    virtual void ExitedCall() override;
 
     // Entered/ExitedCall notifications keep track of whether the plugin has
     // entered a nested event loop within this interrupt call.
@@ -408,7 +362,7 @@ private:
         bool _savedNestableTasksAllowed;
     };
 
-    nsAutoTArray<IncallFrame, 8> mIncallPumpingStack;
+    AutoTArray<IncallFrame, 8> mIncallPumpingStack;
 
     static LRESULT CALLBACK NestedInputEventHook(int code,
                                                  WPARAM wParam,

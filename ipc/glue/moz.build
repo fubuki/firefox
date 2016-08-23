@@ -25,12 +25,12 @@ EXPORTS.mozilla.ipc += [
     'IOThreadChild.h',
     'MessageChannel.h',
     'MessageLink.h',
+    'Neutering.h',
     'ProcessChild.h',
     'ProtocolUtils.h',
     'ScopedXREEmbed.h',
     'SharedMemory.h',
     'SharedMemoryBasic.h',
-    'SharedMemorySysV.h',
     'Shmem.h',
     'Transport.h',
     'URIUtils.h',
@@ -38,6 +38,7 @@ EXPORTS.mozilla.ipc += [
 ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
+    DEFINES['WEBRTC_WIN'] = True
     EXPORTS.mozilla.ipc += [
         'Transport_win.h',
     ]
@@ -47,6 +48,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
         'WindowsMessageLoop.cpp',
     ]
 else:
+    DEFINES['WEBRTC_POSIX'] = True
     EXPORTS.mozilla.ipc += [
         'Transport_posix.h',
     ]
@@ -59,7 +61,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
     SOURCES += [
         'CrossProcessMutex_windows.cpp',
     ]
-elif CONFIG['OS_ARCH'] in ('Linux', 'Darwin'):
+elif not CONFIG['OS_ARCH'] in ('NetBSD', 'OpenBSD'):
     UNIFIED_SOURCES += [
         'CrossProcessMutex_posix.cpp',
     ]
@@ -76,6 +78,11 @@ if CONFIG['OS_TARGET'] == 'Android':
     UNIFIED_SOURCES += [
         'SharedMemoryBasic_android.cpp',
     ]
+elif CONFIG['OS_ARCH'] == 'Darwin':
+    EXPORTS.mozilla.ipc += ['SharedMemoryBasic_mach.h']
+    SOURCES += [
+        'SharedMemoryBasic_mach.mm',
+    ]
 else:
     EXPORTS.mozilla.ipc += ['SharedMemoryBasic_chromium.h']
 
@@ -87,7 +94,7 @@ elif CONFIG['OS_ARCH'] in ('DragonFly', 'FreeBSD', 'NetBSD', 'OpenBSD'):
     UNIFIED_SOURCES += [
         'ProcessUtils_bsd.cpp'
     ]
-elif CONFIG['OS_ARCH'] in ('Darwin'):
+elif CONFIG['OS_ARCH'] == 'Darwin':
     UNIFIED_SOURCES += [
         'ProcessUtils_mac.mm'
     ]
@@ -107,6 +114,7 @@ UNIFIED_SOURCES += [
     'FileDescriptor.cpp',
     'FileDescriptorUtils.cpp',
     'InputStreamUtils.cpp',
+    'IPCMessageUtils.cpp',
     'MessageChannel.cpp',
     'MessageLink.cpp',
     'MessagePump.cpp',
@@ -129,8 +137,18 @@ SOURCES += [
     'URIUtils.cpp',
 ]
 
+if CONFIG['_MSC_VER']:
+    # This is intended as a temporary hack to support building with VS2015.
+    # 'reinterpret_cast': conversion from 'DWORD' to 'HANDLE' of greater size
+    SOURCES['BackgroundChildImpl.cpp'].flags += ['-wd4312']
+    SOURCES['BackgroundParentImpl.cpp'].flags += ['-wd4312']
+
 LOCAL_INCLUDES += [
+    '/caps',
+    '/dom/broadcastchannel',
     '/dom/indexedDB',
+    '/dom/workers',
+    '/media/webrtc/trunk',
     '/xpcom/build',
 ]
 
@@ -155,17 +173,17 @@ include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
 
-for var in ('MOZ_CHILD_PROCESS_NAME', 'MOZ_CHILD_PROCESS_BUNDLE',
-            'DLL_PREFIX', 'DLL_SUFFIX'):
+for var in ('MOZ_CHILD_PROCESS_NAME', 'MOZ_CHILD_PROCESS_NAME_PIE',
+            'MOZ_CHILD_PROCESS_BUNDLE', 'DLL_PREFIX', 'DLL_SUFFIX'):
     DEFINES[var] = '"%s"' % CONFIG[var]
 
 LOCAL_INCLUDES += [
     '/toolkit/crashreporter',
 ]
 
-if CONFIG['OS_ARCH'] == 'WINNT':
+if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
     LOCAL_INCLUDES += [
+        '/security/sandbox/chromium',
+        '/security/sandbox/chromium-shim',
         '/security/sandbox/win/src/sandboxbroker',
     ]
-
-FAIL_ON_WARNINGS = True

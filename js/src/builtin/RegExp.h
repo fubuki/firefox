@@ -9,12 +9,6 @@
 
 #include "vm/RegExpObject.h"
 
-JSObject *
-js_InitRegExpClass(JSContext *cx, js::HandleObject obj);
-
-bool
-regexp_flags(JSContext *cx, unsigned argc, JS::Value *vp);
-
 /*
  * The following builtin natives are extern'd for pointer comparison in
  * other parts of the engine.
@@ -22,13 +16,12 @@ regexp_flags(JSContext *cx, unsigned argc, JS::Value *vp);
 
 namespace js {
 
+JSObject*
+InitRegExpClass(JSContext* cx, HandleObject obj);
+
 // Whether RegExp statics should be updated with the input and results of a
 // regular expression execution.
 enum RegExpStaticsUpdate { UpdateRegExpStatics, DontUpdateRegExpStatics };
-
-RegExpRunStatus
-ExecuteRegExp(JSContext *cx, HandleObject regexp, HandleString string,
-              MatchPairs *matches, RegExpStaticsUpdate staticsUpdate);
 
 /*
  * Legacy behavior of ExecuteRegExp(), which is baked into the JSAPI.
@@ -38,27 +31,29 @@ ExecuteRegExp(JSContext *cx, HandleObject regexp, HandleString string,
  * |chars| and |length|.
  */
 bool
-ExecuteRegExpLegacy(JSContext *cx, RegExpStatics *res, RegExpObject &reobj,
-                    HandleLinearString input, size_t *lastIndex, bool test,
+ExecuteRegExpLegacy(JSContext* cx, RegExpStatics* res, RegExpObject& reobj,
+                    HandleLinearString input, size_t* lastIndex, bool test,
                     MutableHandleValue rval);
 
 /* Translation from MatchPairs to a JS array in regexp_exec()'s output format. */
 bool
-CreateRegExpMatchResult(JSContext *cx, HandleString input, const MatchPairs &matches,
+CreateRegExpMatchResult(JSContext* cx, HandleString input, const MatchPairs& matches,
                         MutableHandleValue rval);
 
 extern bool
-regexp_exec_raw(JSContext *cx, HandleObject regexp, HandleString input, MatchPairs *maybeMatches,
-                MutableHandleValue output);
+RegExpMatcher(JSContext* cx, unsigned argc, Value* vp);
 
 extern bool
-regexp_exec(JSContext *cx, unsigned argc, Value *vp);
-
-bool
-regexp_test_raw(JSContext *cx, HandleObject regexp, HandleString input, bool *result);
+RegExpMatcherRaw(JSContext* cx, HandleObject regexp, HandleString input,
+                 int32_t lastIndex, bool sticky,
+                 MatchPairs* maybeMatches, MutableHandleValue output);
 
 extern bool
-regexp_test(JSContext *cx, unsigned argc, Value *vp);
+RegExpTester(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+RegExpTesterRaw(JSContext* cx, HandleObject regexp, HandleString input,
+                int32_t lastIndex, bool sticky, int32_t* endIndex);
 
 /*
  * The following functions are for use by self-hosted code.
@@ -70,7 +65,7 @@ regexp_test(JSContext *cx, unsigned argc, Value *vp);
  * Usage: match = regexp_exec_no_statics(regexp, string)
  */
 extern bool
-regexp_exec_no_statics(JSContext *cx, unsigned argc, Value *vp);
+regexp_exec_no_statics(JSContext* cx, unsigned argc, Value* vp);
 
 /*
  * Behaves like regexp.test(string), but doesn't set RegExp statics.
@@ -78,7 +73,39 @@ regexp_exec_no_statics(JSContext *cx, unsigned argc, Value *vp);
  * Usage: does_match = regexp_test_no_statics(regexp, string)
  */
 extern bool
-regexp_test_no_statics(JSContext *cx, unsigned argc, Value *vp);
+regexp_test_no_statics(JSContext* cx, unsigned argc, Value* vp);
+
+/*
+ * Behaves like RegExp(string) or RegExp(string, string), for self-hosted JS.
+ * pattern and flags should be string, and should be called without |new|.
+ *
+ * Usage: re = regexp_construct(pattern)
+ *        re = regexp_construct(pattern, flags)
+ */
+extern bool
+regexp_construct_self_hosting(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+IsRegExp(JSContext* cx, HandleValue value, bool* result);
+
+// RegExp ClassSpec members used in RegExpObject.cpp.
+extern bool
+regexp_construct(JSContext* cx, unsigned argc, Value* vp);
+extern const JSPropertySpec regexp_static_props[];
+extern const JSPropertySpec regexp_properties[];
+extern const JSFunctionSpec regexp_methods[];
+
+// Used in RegExpObject::isOriginalFlagGetter.
+extern bool
+regexp_global(JSContext* cx, unsigned argc, JS::Value* vp);
+extern bool
+regexp_ignoreCase(JSContext* cx, unsigned argc, JS::Value* vp);
+extern bool
+regexp_multiline(JSContext* cx, unsigned argc, JS::Value* vp);
+extern bool
+regexp_sticky(JSContext* cx, unsigned argc, JS::Value* vp);
+extern bool
+regexp_unicode(JSContext* cx, unsigned argc, JS::Value* vp);
 
 } /* namespace js */
 

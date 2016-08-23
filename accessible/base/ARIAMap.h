@@ -210,7 +210,7 @@ extern nsRoleMapEntry gEmptyRoleMap;
  * @return        a pointer to the role map entry for the ARIA role, or nullptr
  *                if none
  */
-nsRoleMapEntry* GetRoleMap(nsINode* aNode);
+const nsRoleMapEntry* GetRoleMap(dom::Element* aEl);
 
 /**
  * Return accessible state from ARIA universal states applied to the given
@@ -226,6 +226,11 @@ uint64_t UniversalStatesFor(mozilla::dom::Element* aElement);
  *               (see above for possible bit masks, prefixed "ATTR_")
  */
 uint8_t AttrCharacteristicsFor(nsIAtom* aAtom);
+
+/**
+ * Return true if the element has defined aria-hidden.
+ */
+bool HasDefinedARIAHidden(nsIContent* aContent);
 
  /**
   * Represents a simple enumerator for iterating through ARIA attributes

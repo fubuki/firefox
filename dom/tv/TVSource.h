@@ -26,19 +26,20 @@ class TVChannel;
 class TVProgram;
 class TVTuner;
 
-class TVSource MOZ_FINAL : public DOMEventTargetHelper
+class TVSource final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TVSource, DOMEventTargetHelper)
 
-  static already_AddRefed<TVSource> Create(nsPIDOMWindow* aWindow,
-                                           TVSourceType aType,
-                                           TVTuner* aTuner);
+  static already_AddRefed<TVSource>
+  Create(nsPIDOMWindowInner* aWindow,
+         TVSourceType aType,
+         TVTuner* aTuner);
 
   // WebIDL (internal functions)
 
-  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   nsresult SetCurrentChannel(nsITVChannelData* aChannelData);
 
@@ -83,7 +84,7 @@ public:
   IMPL_EVENT_HANDLER(scanningstatechanged);
 
 private:
-  TVSource(nsPIDOMWindow* aWindow,
+  TVSource(nsPIDOMWindowInner* aWindow,
            TVSourceType aType,
            TVTuner* aTuner);
 
@@ -101,8 +102,8 @@ private:
   nsresult DispatchEITBroadcastedEvent(const Sequence<OwningNonNull<TVProgram>>& aPrograms);
 
   nsCOMPtr<nsITVService> mTVService;
-  nsRefPtr<TVTuner> mTuner;
-  nsRefPtr<TVChannel> mCurrentChannel;
+  RefPtr<TVTuner> mTuner;
+  RefPtr<TVChannel> mCurrentChannel;
   TVSourceType mType;
   bool mIsScanning;
 };

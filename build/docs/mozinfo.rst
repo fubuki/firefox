@@ -98,6 +98,13 @@ mozconfig
 
    Optional.
 
+nightly_build
+   Whether this is a nightly build.
+
+   Values are ``true`` and ``false``.
+
+   Always defined.
+
 os
    The operating system the build is produced for. Values for tier-1
    supported platforms are ``linux``, ``win``, ``mac``, ``b2g``, and
@@ -119,6 +126,13 @@ processor
 
    If the value starts with a string of the form ``i[3-9]86]``, the
    value is ``x86``.
+
+   Always defined.
+
+release_build
+   Whether this is a release build.
+
+   Values are ``true`` and ``false``.
 
    Always defined.
 

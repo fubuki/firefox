@@ -26,6 +26,7 @@
 #include "nsContentUtils.h"
 #include "nsUTF8Utils.h"
 #include "mozilla/TextEvents.h"
+#include "mozilla/dom/Event.h"
 
 using namespace mozilla;
 
@@ -51,7 +52,6 @@ NS_QUERYFRAME_TAIL_INHERITING(nsBoxFrame)
 //
 nsMenuBarFrame::nsMenuBarFrame(nsStyleContext* aContext):
   nsBoxFrame(aContext),
-    mMenuBarListener(nullptr),
     mStayActive(false),
     mIsActive(false),
     mCurrentMenu(nullptr),
@@ -68,7 +68,6 @@ nsMenuBarFrame::Init(nsIContent*       aContent,
 
   // Create the menu bar listener.
   mMenuBarListener = new nsMenuBarListener(this);
-  NS_ADDREF(mMenuBarListener);
 
   // Hook up the menu bar as a key listener on the whole document.  It will see every
   // key press that occurs, but after everyone else does.
@@ -165,11 +164,12 @@ nsMenuBarFrame::FindMenuWithShortcut(nsIDOMKeyEvent* aKeyEvent)
   uint32_t charCode;
   aKeyEvent->GetCharCode(&charCode);
 
-  nsAutoTArray<uint32_t, 10> accessKeys;
+  AutoTArray<uint32_t, 10> accessKeys;
   WidgetKeyboardEvent* nativeKeyEvent =
-    aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
-  if (nativeKeyEvent)
-    nsContentUtils::GetAccessKeyCandidates(nativeKeyEvent, accessKeys);
+    aKeyEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
+  if (nativeKeyEvent) {
+    nativeKeyEvent->GetAccessKeyCandidates(accessKeys);
+  }
   if (accessKeys.IsEmpty() && charCode)
     accessKeys.AppendElement(charCode);
 
@@ -186,13 +186,13 @@ nsMenuBarFrame::FindMenuWithShortcut(nsIDOMKeyEvent* aKeyEvent)
   // Find a most preferred accesskey which should be returned.
   nsIFrame* foundMenu = nullptr;
   size_t foundIndex = accessKeys.NoIndex;
-  nsIFrame* currFrame = immediateParent->GetFirstPrincipalChild();
+  nsIFrame* currFrame = immediateParent->PrincipalChildList().FirstChild();
 
   while (currFrame) {
     nsIContent* current = currFrame->GetContent();
 
     // See if it's a menu item.
-    if (nsXULPopupManager::IsValidMenuItem(PresContext(), current, false)) {
+    if (nsXULPopupManager::IsValidMenuItem(current, false)) {
       // Get the shortcut attribute.
       nsAutoString shortcutKey;
       current->GetAttr(kNameSpaceID_None, nsGkAtoms::accesskey, shortcutKey);
@@ -281,7 +281,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
     if (!pm)
@@ -319,7 +319,8 @@ private:
 
 NS_IMETHODIMP
 nsMenuBarFrame::ChangeMenuItem(nsMenuFrame* aMenuItem,
-                               bool aSelectFirstItem)
+                               bool aSelectFirstItem,
+                               bool aFromKey)
 {
   if (mCurrentMenu == aMenuItem)
     return NS_OK;
@@ -420,7 +421,8 @@ nsMenuBarFrame::DestroyFrom(nsIFrame* aDestructRoot)
   mTarget->RemoveEventListener(NS_LITERAL_STRING("mousedown"), mMenuBarListener, false);
   mTarget->RemoveEventListener(NS_LITERAL_STRING("blur"), mMenuBarListener, true);
 
-  NS_IF_RELEASE(mMenuBarListener);
+  mMenuBarListener->OnDestroyMenuBarFrame();
+  mMenuBarListener = nullptr;
 
   nsBoxFrame::DestroyFrom(aDestructRoot);
 }

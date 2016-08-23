@@ -8,7 +8,7 @@
 #ifndef mozilla_BlockingResourceBase_h
 #define mozilla_BlockingResourceBase_h
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "nscore.h"
 #include "nsDebug.h"
@@ -100,7 +100,7 @@ protected:
 #ifdef MOZ_CALLSTACK_DISABLED
   typedef bool AcquisitionState;
 #else
-  typedef nsAutoTArray<void*, 24> AcquisitionState;
+  typedef AutoTArray<void*, 24> AcquisitionState;
 #endif
 
   /**

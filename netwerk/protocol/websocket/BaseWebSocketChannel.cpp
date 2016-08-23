@@ -8,31 +8,57 @@
 #include "BaseWebSocketChannel.h"
 #include "MainThreadUtils.h"
 #include "nsILoadGroup.h"
+#include "nsINode.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsAutoPtr.h"
 #include "nsProxyRelease.h"
 #include "nsStandardURL.h"
+#include "LoadInfo.h"
+#include "nsIDOMNode.h"
+#include "mozilla/dom/ContentChild.h"
 
-#if defined(PR_LOGGING)
-PRLogModuleInfo *webSocketLog = nullptr;
-#endif
+using mozilla::dom::ContentChild;
 
 namespace mozilla {
 namespace net {
 
+LazyLogModule webSocketLog("nsWebSocket");
+static uint64_t gNextWebSocketID = 0;
+
+// We use only 53 bits for the WebSocket serial ID so that it can be converted
+// to and from a JS value without loss of precision. The upper bits of the
+// WebSocket serial ID hold the process ID. The lower bits identify the
+// WebSocket.
+static const uint64_t kWebSocketIDTotalBits = 53;
+static const uint64_t kWebSocketIDProcessBits = 22;
+static const uint64_t kWebSocketIDWebSocketBits = kWebSocketIDTotalBits - kWebSocketIDProcessBits;
+
 BaseWebSocketChannel::BaseWebSocketChannel()
-  : mEncrypted(0)
-  , mWasOpened(0)
+  : mWasOpened(0)
   , mClientSetPingInterval(0)
   , mClientSetPingTimeout(0)
+  , mEncrypted(0)
   , mPingForced(0)
   , mPingInterval(0)
   , mPingResponseTimeout(10000)
 {
-#if defined(PR_LOGGING)
-  if (!webSocketLog)
-    webSocketLog = PR_NewLogModule("nsWebSocket");
-#endif
+  // Generation of a unique serial ID.
+  uint64_t processID = 0;
+  if (XRE_IsContentProcess()) {
+    ContentChild* cc = ContentChild::GetSingleton();
+    processID = cc->GetID();
+  }
+
+  uint64_t processBits = processID & ((uint64_t(1) << kWebSocketIDProcessBits) - 1);
+
+  // Make sure no actual webSocket ends up with mWebSocketID == 0 but less then
+  // what the kWebSocketIDProcessBits allows.
+  if (++gNextWebSocketID >= (uint64_t(1) << kWebSocketIDWebSocketBits)) {
+    gNextWebSocketID = 1;
+  }
+
+  uint64_t webSocketBits = gNextWebSocketID & ((uint64_t(1) << kWebSocketIDWebSocketBits) - 1);
+  mSerial = (processBits << kWebSocketIDWebSocketBits) | webSocketBits;
 }
 
 //-----------------------------------------------------------------------------
@@ -149,6 +175,8 @@ BaseWebSocketChannel::GetPingInterval(uint32_t *aSeconds)
 NS_IMETHODIMP
 BaseWebSocketChannel::SetPingInterval(uint32_t aSeconds)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (mWasOpened) {
     return NS_ERROR_IN_PROGRESS;
   }
@@ -172,6 +200,8 @@ BaseWebSocketChannel::GetPingTimeout(uint32_t *aSeconds)
 NS_IMETHODIMP
 BaseWebSocketChannel::SetPingTimeout(uint32_t aSeconds)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (mWasOpened) {
     return NS_ERROR_IN_PROGRESS;
   }
@@ -179,6 +209,37 @@ BaseWebSocketChannel::SetPingTimeout(uint32_t aSeconds)
   mPingResponseTimeout = aSeconds * 1000;
   mClientSetPingTimeout = 1;
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BaseWebSocketChannel::InitLoadInfo(nsIDOMNode* aLoadingNode,
+                                   nsIPrincipal* aLoadingPrincipal,
+                                   nsIPrincipal* aTriggeringPrincipal,
+                                   uint32_t aSecurityFlags,
+                                   uint32_t aContentPolicyType)
+{
+  nsCOMPtr<nsINode> node = do_QueryInterface(aLoadingNode);
+  mLoadInfo = new LoadInfo(aLoadingPrincipal, aTriggeringPrincipal,
+                           node, aSecurityFlags, aContentPolicyType);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BaseWebSocketChannel::GetSerial(uint32_t* aSerial)
+{
+  if (!aSerial) {
+    return NS_ERROR_FAILURE;
+  }
+
+  *aSerial = mSerial;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BaseWebSocketChannel::SetSerial(uint32_t aSerial)
+{
+  mSerial = aSerial;
   return NS_OK;
 }
 
@@ -232,12 +293,12 @@ BaseWebSocketChannel::NewURI(const nsACString & aSpec, const char *aOriginCharse
   if (NS_FAILED(rv))
     return rv;
 
-  nsRefPtr<nsStandardURL> url = new nsStandardURL();
+  RefPtr<nsStandardURL> url = new nsStandardURL();
   rv = url->Init(nsIStandardURL::URLTYPE_AUTHORITY, port, aSpec,
                 aOriginCharset, aBaseURI);
   if (NS_FAILED(rv))
     return rv;
-  NS_ADDREF(*_retval = url);
+  url.forget(_retval);
   return NS_OK;
 }
 
@@ -299,11 +360,8 @@ BaseWebSocketChannel::ListenerAndContextContainer::~ListenerAndContextContainer(
 {
   MOZ_ASSERT(mListener);
 
-  nsCOMPtr<nsIThread> mainThread;
-  NS_GetMainThread(getter_AddRefs(mainThread));
-
-  NS_ProxyRelease(mainThread, mListener, false);
-  NS_ProxyRelease(mainThread, mContext, false);
+  NS_ReleaseOnMainThread(mListener.forget());
+  NS_ReleaseOnMainThread(mContext.forget());
 }
 
 } // namespace net

@@ -20,16 +20,17 @@ public:
     , mName(aName)
   {}
 
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     mTarget->DispatchSimpleEvent(mName);
     return NS_OK;
   }
 
 private:
-  nsRefPtr<T> mTarget;
+  RefPtr<T> mTarget;
   const char* mName;
 };
 
 } // namespace mozilla
+
 #endif /* MOZILLA_ASYNCEVENTRUNNER_H_ */

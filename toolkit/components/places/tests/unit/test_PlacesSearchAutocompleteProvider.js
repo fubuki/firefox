@@ -9,6 +9,7 @@ function run_test() {
   // desired side-effect of preventing our geoip lookup.
   Services.prefs.setBoolPref("browser.search.isUS", true);
   Services.prefs.setCharPref("browser.search.countryCode", "US");
+  Services.prefs.setBoolPref("browser.search.geoSpecificDefaults", false);
   run_next_test();
 }
 
@@ -49,11 +50,44 @@ add_task(function* add_search_engine_match() {
 
 add_task(function* test_aliased_search_engine_match() {
   do_check_eq(null, yield PlacesSearchAutocompleteProvider.findMatchByAlias("sober"));
-
+  // Lower case
   let match = yield PlacesSearchAutocompleteProvider.findMatchByAlias("pork");
   do_check_eq(match.engineName, "bacon");
   do_check_eq(match.alias, "pork");
   do_check_eq(match.iconUrl, null);
+  // Upper case
+  let match1 = yield PlacesSearchAutocompleteProvider.findMatchByAlias("PORK");
+  do_check_eq(match1.engineName, "bacon");
+  do_check_eq(match1.alias, "pork");
+  do_check_eq(match1.iconUrl, null);
+  // Cap case
+  let match2 = yield PlacesSearchAutocompleteProvider.findMatchByAlias("Pork");
+  do_check_eq(match2.engineName, "bacon");
+  do_check_eq(match2.alias, "pork");
+  do_check_eq(match2.iconUrl, null);
+});
+
+add_task(function* test_aliased_search_engine_match_upper_case_alias() {
+  let promiseTopic = promiseSearchTopic("engine-added");
+  do_check_eq(null, yield PlacesSearchAutocompleteProvider.findMatchByToken("patch"));
+  Services.search.addEngineWithDetails("patch", "", "PR", "Search Patch",
+                                       "GET", "http://www.patch.moz/?search={searchTerms}");
+  yield promiseSearchTopic;
+  // lower case
+  let match = yield PlacesSearchAutocompleteProvider.findMatchByAlias("pr");
+  do_check_eq(match.engineName, "patch");
+  do_check_eq(match.alias, "PR");
+  do_check_eq(match.iconUrl, null);
+  // Upper case
+  let match1 = yield PlacesSearchAutocompleteProvider.findMatchByAlias("PR");
+  do_check_eq(match1.engineName, "patch");
+  do_check_eq(match1.alias, "PR");
+  do_check_eq(match1.iconUrl, null);
+  // Cap case
+  let match2 = yield PlacesSearchAutocompleteProvider.findMatchByAlias("Pr");
+  do_check_eq(match2.engineName, "patch");
+  do_check_eq(match2.alias, "PR");
+  do_check_eq(match2.iconUrl, null);
 });
 
 add_task(function* remove_search_engine_nomatch() {
@@ -89,7 +123,7 @@ function promiseDefaultSearchEngine() {
 function promiseSearchTopic(expectedVerb) {
   let deferred = Promise.defer();
   Services.obs.addObserver( function observe(subject, topic, verb) {
-    do_log_info("browser-search-engine-modified: " + verb);
+    do_print("browser-search-engine-modified: " + verb);
     if (verb == expectedVerb) {
       Services.obs.removeObserver(observe, "browser-search-engine-modified");
       deferred.resolve();

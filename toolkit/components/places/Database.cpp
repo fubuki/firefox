@@ -11,12 +11,14 @@
 #include "nsINavBookmarksService.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIFile.h"
+#include "nsIWritablePropertyBag2.h"
 
 #include "nsNavHistory.h"
 #include "nsPlacesTables.h"
 #include "nsPlacesIndexes.h"
 #include "nsPlacesTriggers.h"
 #include "nsPlacesMacros.h"
+#include "nsVariant.h"
 #include "SQLFunctions.h"
 #include "Helpers.h"
 
@@ -27,6 +29,8 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "prtime.h"
+
+#include "nsXULAppAPI.h"
 
 // Time between corrupt database backups.
 #define RECENT_BACKUP_TIME_MICROSEC (int64_t)86400 * PR_USEC_PER_SEC // 24H
@@ -173,7 +177,7 @@ SetJournalMode(nsCOMPtr<mozIStorageConnection>& aDBConn,
   nsAutoCString journalMode;
   switch (aJournalMode) {
     default:
-      MOZ_ASSERT(false, "Trying to set an unknown journal mode.");
+      MOZ_FALLTHROUGH_ASSERT("Trying to set an unknown journal mode.");
       // Fall through to the default DELETE journal.
     case JOURNAL_DELETE:
       journalMode.AssignLiteral("delete");
@@ -217,43 +221,6 @@ SetJournalMode(nsCOMPtr<mozIStorageConnection>& aDBConn,
 
   return JOURNAL_DELETE;
 }
-
-class ConnectionCloseCallback MOZ_FINAL : public mozIStorageCompletionCallback {
-  bool mDone;
-
-  ~ConnectionCloseCallback() {}
-
-public:
-  NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_MOZISTORAGECOMPLETIONCALLBACK
-  ConnectionCloseCallback();
-};
-
-NS_IMETHODIMP
-ConnectionCloseCallback::Complete(nsresult, nsISupports*)
-{
-  mDone = true;
-  nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
-  MOZ_ASSERT(os);
-  if (!os)
-    return NS_OK;
-  DebugOnly<nsresult> rv = os->NotifyObservers(nullptr,
-                                               TOPIC_PLACES_CONNECTION_CLOSED,
-                                               nullptr);
-  MOZ_ASSERT(NS_SUCCEEDED(rv));
-  return NS_OK;
-}
-
-ConnectionCloseCallback::ConnectionCloseCallback()
-  : mDone(false)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-}
-
-NS_IMPL_ISUPPORTS(
-  ConnectionCloseCallback
-, mozIStorageCompletionCallback
-)
 
 nsresult
 CreateRoot(nsCOMPtr<mozIStorageConnection>& aDBConn,
@@ -299,23 +266,6 @@ CreateRoot(nsCOMPtr<mozIStorageConnection>& aDBConn,
   rv = stmt->Execute();
   if (NS_FAILED(rv)) return rv;
 
-  // Create an entry in moz_bookmarks_roots to link the folder to the root.
-  nsCOMPtr<mozIStorageStatement> newRootStmt;
-  rv = aDBConn->CreateStatement(NS_LITERAL_CSTRING(
-    "INSERT INTO moz_bookmarks_roots (root_name, folder_id) "
-    "VALUES (:root_name, (SELECT id from moz_bookmarks WHERE guid = :guid))"
-  ), getter_AddRefs(newRootStmt));
-  if (NS_FAILED(rv)) return rv;
-
-  rv = newRootStmt->BindUTF8StringByName(NS_LITERAL_CSTRING("root_name"),
-                                         aRootName);
-  if (NS_FAILED(rv)) return rv;
-  rv = newRootStmt->BindUTF8StringByName(NS_LITERAL_CSTRING("guid"),
-                                         aGuid);
-  if (NS_FAILED(rv)) return rv;
-  rv = newRootStmt->Execute();
-  if (NS_FAILED(rv)) return rv;
-
   // The 'places' root is a folder containing the other roots.
   // The first bookmark in a folder has position 0.
   if (!aRootName.EqualsLiteral("places"))
@@ -325,7 +275,7 @@ CreateRoot(nsCOMPtr<mozIStorageConnection>& aDBConn,
 }
 
 
-} // Anonymous namespace
+} // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 //// Database
@@ -343,24 +293,102 @@ Database::Database()
   , mAsyncThreadStatements(mMainConn)
   , mDBPageSize(0)
   , mDatabaseStatus(nsINavHistoryService::DATABASE_STATUS_OK)
-  , mShuttingDown(false)
   , mClosed(false)
+  , mClientsShutdown(new ClientsShutdownBlocker())
+  , mConnectionShutdown(new ConnectionShutdownBlocker(this))
 {
+  MOZ_ASSERT(!XRE_IsContentProcess(),
+             "Cannot instantiate Places in the content process");
   // Attempting to create two instances of the service?
   MOZ_ASSERT(!gDatabase);
   gDatabase = this;
 }
 
+already_AddRefed<nsIAsyncShutdownClient>
+Database::GetProfileChangeTeardownPhase()
+{
+  nsCOMPtr<nsIAsyncShutdownService> asyncShutdownSvc = services::GetAsyncShutdown();
+  MOZ_ASSERT(asyncShutdownSvc);
+  if (NS_WARN_IF(!asyncShutdownSvc)) {
+    return nullptr;
+  }
+
+  // Consumers of Places should shutdown before us, at profile-change-teardown.
+  nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase;
+  DebugOnly<nsresult> rv = asyncShutdownSvc->
+    GetProfileChangeTeardown(getter_AddRefs(shutdownPhase));
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+  return shutdownPhase.forget();
+}
+
+already_AddRefed<nsIAsyncShutdownClient>
+Database::GetProfileBeforeChangePhase()
+{
+  nsCOMPtr<nsIAsyncShutdownService> asyncShutdownSvc = services::GetAsyncShutdown();
+  MOZ_ASSERT(asyncShutdownSvc);
+  if (NS_WARN_IF(!asyncShutdownSvc)) {
+    return nullptr;
+  }
+
+  // Consumers of Places should shutdown before us, at profile-change-teardown.
+  nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase;
+  DebugOnly<nsresult> rv = asyncShutdownSvc->
+    GetProfileBeforeChange(getter_AddRefs(shutdownPhase));
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+  return shutdownPhase.forget();
+}
+
 Database::~Database()
 {
-  // Check to make sure it's us, in case somebody wrongly creates an extra
-  // instance of this singleton class.
-  MOZ_ASSERT(gDatabase == this);
+}
 
-  // Remove the static reference to the service.
-  if (gDatabase == this) {
-    gDatabase = nullptr;
+bool
+Database::IsShutdownStarted() const
+{
+  if (!mConnectionShutdown) {
+    // We have already broken the cycle between `this` and `mConnectionShutdown`.
+    return true;
   }
+  return mConnectionShutdown->IsStarted();
+}
+
+already_AddRefed<mozIStorageAsyncStatement>
+Database::GetAsyncStatement(const nsACString& aQuery) const
+{
+  if (IsShutdownStarted()) {
+    return nullptr;
+  }
+  MOZ_ASSERT(NS_IsMainThread());
+  return mMainThreadAsyncStatements.GetCachedStatement(aQuery);
+}
+
+already_AddRefed<mozIStorageStatement>
+Database::GetStatement(const nsACString& aQuery) const
+{
+  if (IsShutdownStarted()) {
+    return nullptr;
+  }
+  if (NS_IsMainThread()) {
+    return mMainThreadStatements.GetCachedStatement(aQuery);
+  }
+  return mAsyncThreadStatements.GetCachedStatement(aQuery);
+}
+
+already_AddRefed<nsIAsyncShutdownClient>
+Database::GetClientsShutdown()
+{
+  MOZ_ASSERT(mClientsShutdown);
+  return mClientsShutdown->GetClient();
+}
+
+// static
+already_AddRefed<Database>
+Database::GetDatabase()
+{
+  if (PlacesShutdownBlocker::IsStarted()) {
+    return nullptr;
+  }
+  return GetSingleton();
 }
 
 nsresult
@@ -388,7 +416,7 @@ Database::Init()
   // If the database connection still cannot be opened, it may just be locked
   // by third parties.  Send out a notification and interrupt initialization.
   if (NS_FAILED(rv)) {
-    nsRefPtr<PlacesEvent> lockedEvent = new PlacesEvent(TOPIC_DATABASE_LOCKED);
+    RefPtr<PlacesEvent> lockedEvent = new PlacesEvent(TOPIC_DATABASE_LOCKED);
     (void)NS_DispatchToMainThread(lockedEvent);
     return rv;
   }
@@ -419,22 +447,51 @@ Database::Init()
   // like views, temp triggers or temp tables.  The database should not be
   // considered corrupt if any of the following fails.
 
-  rv = InitTempTriggers();
+  rv = InitTempEntities();
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Notify we have finished database initialization.
   // Enqueue the notification, so if we init another service that requires
   // nsNavHistoryService we don't recursive try to get it.
-  nsRefPtr<PlacesEvent> completeEvent =
+  RefPtr<PlacesEvent> completeEvent =
     new PlacesEvent(TOPIC_PLACES_INIT_COMPLETE);
   rv = NS_DispatchToMainThread(completeEvent);
   NS_ENSURE_SUCCESS(rv, rv);
+
+  // At this point we know the Database object points to a valid connection
+  // and we need to setup async shutdown.
+  {
+    // First of all Places clients should block profile-change-teardown.
+    nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase = GetProfileChangeTeardownPhase();
+    MOZ_ASSERT(shutdownPhase);
+    if (shutdownPhase) {
+      DebugOnly<nsresult> rv = shutdownPhase->AddBlocker(
+        static_cast<nsIAsyncShutdownBlocker*>(mClientsShutdown.get()),
+        NS_LITERAL_STRING(__FILE__),
+        __LINE__,
+        NS_LITERAL_STRING(""));
+      MOZ_ASSERT(NS_SUCCEEDED(rv));
+    }
+  }
+
+  {
+    // Then connection closing should block profile-before-change.
+    nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase = GetProfileBeforeChangePhase();
+    MOZ_ASSERT(shutdownPhase);
+    if (shutdownPhase) {
+      DebugOnly<nsresult> rv = shutdownPhase->AddBlocker(
+        static_cast<nsIAsyncShutdownBlocker*>(mConnectionShutdown.get()),
+        NS_LITERAL_STRING(__FILE__),
+        __LINE__,
+        NS_LITERAL_STRING(""));
+      MOZ_ASSERT(NS_SUCCEEDED(rv));
+    }
+  }
 
   // Finally observe profile shutdown notifications.
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   if (os) {
     (void)os->AddObserver(this, TOPIC_PROFILE_CHANGE_TEARDOWN, true);
-    (void)os->AddObserver(this, TOPIC_PROFILE_BEFORE_CHANGE, true);
   }
 
   return NS_OK;
@@ -652,22 +709,10 @@ Database::InitSchema(bool* aDatabaseMigrated)
         NS_ENSURE_SUCCESS(rv, rv);
       }
 
-      if (currentSchemaVersion < 14) {
-        rv = MigrateV14Up();
-        NS_ENSURE_SUCCESS(rv, rv);
-      }
-
       if (currentSchemaVersion < 15) {
         rv = MigrateV15Up();
         NS_ENSURE_SUCCESS(rv, rv);
       }
-
-      if (currentSchemaVersion < 16) {
-        rv = MigrateV16Up();
-        NS_ENSURE_SUCCESS(rv, rv);
-      }
-
-      // Firefox 11 uses schema version 16.
 
       if (currentSchemaVersion < 17) {
         rv = MigrateV17Up();
@@ -735,6 +780,32 @@ Database::InitSchema(bool* aDatabaseMigrated)
 
       // Firefox 37 uses schema version 26.
 
+      if (currentSchemaVersion < 27) {
+        rv = MigrateV27Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      if (currentSchemaVersion < 28) {
+        rv = MigrateV28Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 39 uses schema version 28.
+
+      if (currentSchemaVersion < 30) {
+        rv = MigrateV30Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 41 uses schema version 30.
+
+      if (currentSchemaVersion < 31) {
+        rv = MigrateV31Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 48 uses schema version 31.
+
       // Schema Upgrades must add migration code here.
 
       rv = UpdateBookmarkRootTitles();
@@ -794,12 +865,10 @@ Database::InitSchema(bool* aDatabaseMigrated)
     rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_BOOKMARKS_GUID);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    // moz_bookmarks_roots.
-    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_BOOKMARKS_ROOTS);
-    NS_ENSURE_SUCCESS(rv, rv);
-
     // moz_keywords.
     rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_KEYWORDS);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_KEYWORDS_PLACEPOSTDATA);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // moz_favicons.
@@ -884,7 +953,7 @@ Database::CreateBookmarkRoots()
                   NS_LITERAL_CSTRING("tags________"), rootTitle);
   if (NS_FAILED(rv)) return rv;
 
-  rv = bundle->GetStringFromName(MOZ_UTF16("UnsortedBookmarksFolderTitle"),
+  rv = bundle->GetStringFromName(MOZ_UTF16("OtherBookmarksFolderTitle"),
                                  getter_Copies(rootTitle));
   if (NS_FAILED(rv)) return rv;
   rv = CreateRoot(mMainConn, NS_LITERAL_CSTRING("unfiled"),
@@ -932,7 +1001,7 @@ Database::InitFunctions()
 }
 
 nsresult
-Database::InitTempTriggers()
+Database::InitTempEntities()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -944,6 +1013,10 @@ Database::InitTempTriggers()
   // Add the triggers that update the moz_hosts table as necessary.
   rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_AFTERINSERT_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_UPDATEHOSTS_TEMP);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_UPDATEHOSTS_AFTERDELETE_TRIGGER);
+  NS_ENSURE_SUCCESS(rv, rv);
   rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_AFTERDELETE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_AFTERUPDATE_FRECENCY_TRIGGER);
@@ -951,11 +1024,18 @@ Database::InitTempTriggers()
   rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_AFTERUPDATE_TYPED_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = mMainConn->ExecuteSimpleSQL(CREATE_FOREIGNCOUNT_AFTERDELETE_TRIGGER);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_BOOKMARKS_FOREIGNCOUNT_AFTERDELETE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
-  rv = mMainConn->ExecuteSimpleSQL(CREATE_FOREIGNCOUNT_AFTERINSERT_TRIGGER);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_BOOKMARKS_FOREIGNCOUNT_AFTERINSERT_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
-  rv = mMainConn->ExecuteSimpleSQL(CREATE_FOREIGNCOUNT_AFTERUPDATE_TRIGGER);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_BOOKMARKS_FOREIGNCOUNT_AFTERUPDATE_TRIGGER);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_KEYWORDS_FOREIGNCOUNT_AFTERDELETE_TRIGGER);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_KEYWORDS_FOREIGNCOUNT_AFTERINSERT_TRIGGER);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_KEYWORDS_FOREIGNCOUNT_AFTERUPDATE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -992,7 +1072,7 @@ Database::UpdateBookmarkRootTitles()
   const char *titleStringIDs[] = { "BookmarksMenuFolderTitle"
                                  , "BookmarksToolbarFolderTitle"
                                  , "TagsFolderTitle"
-                                 , "UnsortedBookmarksFolderTitle"
+                                 , "OtherBookmarksFolderTitle"
                                  };
 
   for (uint32_t i = 0; i < ArrayLength(rootGuids); ++i) {
@@ -1046,41 +1126,6 @@ Database::MigrateV13Up()
 }
 
 nsresult
-Database::MigrateV14Up()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  // For existing profiles, we may not have a moz_favicons.guid column.
-  // Add it here. We want it to be unique, but ALTER TABLE doesn't allow
-  // a uniqueness constraint, so the index must be created separately.
-  nsCOMPtr<mozIStorageStatement> hasGuidStatement;
-  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
-      "SELECT guid FROM moz_favicons"),
-    getter_AddRefs(hasGuidStatement));
-
-  if (NS_FAILED(rv)) {
-    rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "ALTER TABLE moz_favicons "
-      "ADD COLUMN guid TEXT"
-    ));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_FAVICONS_GUID);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-
-  // Generate GUID for any favicon missing it.
-  rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-    "UPDATE moz_favicons "
-    "SET guid = GENERATE_GUID() "
-    "WHERE guid ISNULL "
-  ));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return NS_OK;
-}
-
-nsresult
 Database::MigrateV15Up()
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -1100,23 +1145,6 @@ Database::MigrateV15Up()
       "FROM moz_bookmarks "
       "WHERE keyword_id = moz_keywords.id "
     ")"
-  ));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return NS_OK;
-}
-
-nsresult
-Database::MigrateV16Up()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-
-  // Due to Bug 715268 downgraded and then upgraded profiles may lack favicons
-  // guids, so fillup any missing ones.
-  nsresult rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-    "UPDATE moz_favicons "
-    "SET guid = GENERATE_GUID() "
-    "WHERE guid ISNULL "
   ));
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -1487,29 +1515,196 @@ Database::MigrateV26Up() {
   return NS_OK;
 }
 
+nsresult
+Database::MigrateV27Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // Change keywords store, moving their relation from bookmarks to urls.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+    "SELECT place_id FROM moz_keywords"
+  ), getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    // Even if these 2 columns have a unique constraint, we allow NULL values
+    // for backwards compatibility. NULL never breaks a unique constraint.
+    rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+      "ALTER TABLE moz_keywords ADD COLUMN place_id INTEGER"));
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+      "ALTER TABLE moz_keywords ADD COLUMN post_data TEXT"));
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_KEYWORDS_PLACEPOSTDATA);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  // Associate keywords with uris.  A keyword could be associated to multiple
+  // bookmarks uris, or multiple keywords could be associated to the same uri.
+  // The new system only allows multiple uris per keyword, provided they have
+  // a different post_data value.
+  rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "INSERT OR REPLACE INTO moz_keywords (id, keyword, place_id, post_data) "
+    "SELECT k.id, k.keyword, h.id, MAX(a.content) "
+    "FROM moz_places h "
+    "JOIN moz_bookmarks b ON b.fk = h.id "
+    "JOIN moz_keywords k ON k.id = b.keyword_id "
+    "LEFT JOIN moz_items_annos a ON a.item_id = b.id "
+                               "AND a.anno_attribute_id = (SELECT id FROM moz_anno_attributes "
+                                                          "WHERE name = 'bookmarkProperties/POSTData') "
+    "WHERE k.place_id ISNULL "
+    "GROUP BY keyword"));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Remove any keyword that points to a non-existing place id.
+  rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "DELETE FROM moz_keywords "
+    "WHERE NOT EXISTS (SELECT 1 FROM moz_places WHERE id = moz_keywords.place_id)"));
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "UPDATE moz_bookmarks SET keyword_id = NULL "
+    "WHERE NOT EXISTS (SELECT 1 FROM moz_keywords WHERE id = moz_bookmarks.keyword_id)"));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Adjust foreign_count for all the rows.
+  rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "UPDATE moz_places SET foreign_count = "
+    "(SELECT count(*) FROM moz_bookmarks WHERE fk = moz_places.id) + "
+    "(SELECT count(*) FROM moz_keywords WHERE place_id = moz_places.id) "
+  ));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+nsresult
+Database::MigrateV28Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // v27 migration was bogus and set some unrelated annotations as post_data for
+  // keywords having an annotated bookmark.
+  // The current v27 migration function is fixed, but we still need to handle
+  // users that hit the bogus version.  Since we can't distinguish, we'll just
+  // set again all of the post data.
+  DebugOnly<nsresult> rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "UPDATE moz_keywords "
+    "SET post_data = ( "
+      "SELECT content FROM moz_items_annos a "
+      "JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id "
+      "JOIN moz_bookmarks b on b.id = a.item_id "
+      "WHERE n.name = 'bookmarkProperties/POSTData' "
+      "AND b.keyword_id = moz_keywords.id "
+      "ORDER BY b.lastModified DESC "
+      "LIMIT 1 "
+    ") "
+    "WHERE EXISTS(SELECT 1 FROM moz_bookmarks WHERE keyword_id = moz_keywords.id) "
+  ));
+  // In case the update fails a constraint, we don't want to throw away the
+  // whole database for just a few keywords.  In rare cases the user might have
+  // to recreate them.  Though, at this point, there shouldn't be 2 keywords
+  // pointing to the same url and post data, cause the previous migration step
+  // removed them.
+  MOZ_ASSERT(NS_SUCCEEDED(rv));
+
+  return NS_OK;
+}
+
+nsresult
+Database::MigrateV30Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsresult rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "DROP INDEX IF EXISTS moz_favicons_guid_uniqueindex"
+  ));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+nsresult
+Database::MigrateV31Up() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsresult rv = mMainConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "DROP TABLE IF EXISTS moz_bookmarks_roots"
+  ));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
 void
 Database::Shutdown()
 {
+  // As the last step in the shutdown path, finalize the database handle.
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(!mShuttingDown);
   MOZ_ASSERT(!mClosed);
 
-  mShuttingDown = true;
+  // Break cycles with the shutdown blockers.
+  mClientsShutdown = nullptr;
+  nsCOMPtr<mozIStorageCompletionCallback> connectionShutdown = mConnectionShutdown.forget();
+
+  if (!mMainConn) {
+    // The connection has never been initialized. Just mark it as closed.
+    mClosed = true;
+    (void)connectionShutdown->Complete(NS_OK, nullptr);
+    return;
+  }
+
+#ifdef DEBUG
+  { // Sanity check for missing guids.
+    bool haveNullGuids = false;
+    nsCOMPtr<mozIStorageStatement> stmt;
+
+    nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+      "SELECT 1 "
+      "FROM moz_places "
+      "WHERE guid IS NULL "
+    ), getter_AddRefs(stmt));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    rv = stmt->ExecuteStep(&haveNullGuids);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    MOZ_ASSERT(!haveNullGuids && "Found a page without a GUID!");
+
+    rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+      "SELECT 1 "
+      "FROM moz_bookmarks "
+      "WHERE guid IS NULL "
+    ), getter_AddRefs(stmt));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    rv = stmt->ExecuteStep(&haveNullGuids);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    MOZ_ASSERT(!haveNullGuids && "Found a bookmark without a GUID!");
+  }
+
+  { // Sanity check for unrounded dateAdded and lastModified values (bug
+    // 1107308).
+    bool hasUnroundedDates = false;
+    nsCOMPtr<mozIStorageStatement> stmt;
+
+    nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
+        "SELECT 1 "
+        "FROM moz_bookmarks "
+        "WHERE dateAdded % 1000 > 0 OR lastModified % 1000 > 0 LIMIT 1"
+      ), getter_AddRefs(stmt));
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    rv = stmt->ExecuteStep(&hasUnroundedDates);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+    MOZ_ASSERT(!hasUnroundedDates && "Found unrounded dates!");
+  }
+#endif
 
   mMainThreadStatements.FinalizeStatements();
   mMainThreadAsyncStatements.FinalizeStatements();
 
-  nsRefPtr< FinalizeStatementCacheProxy<mozIStorageStatement> > event =
+  RefPtr< FinalizeStatementCacheProxy<mozIStorageStatement> > event =
     new FinalizeStatementCacheProxy<mozIStorageStatement>(
-          mAsyncThreadStatements, NS_ISUPPORTS_CAST(nsIObserver*, this)
+          mAsyncThreadStatements,
+          NS_ISUPPORTS_CAST(nsIObserver*, this)
         );
   DispatchToAsyncThread(event);
 
   mClosed = true;
 
-  nsRefPtr<ConnectionCloseCallback> closeListener =
-    new ConnectionCloseCallback();
-  (void)mMainConn->AsyncClose(closeListener);
+  (void)mMainConn->AsyncClose(connectionShutdown);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1521,10 +1716,9 @@ Database::Observe(nsISupports *aSubject,
                   const char16_t *aData)
 {
   MOZ_ASSERT(NS_IsMainThread());
- 
   if (strcmp(aTopic, TOPIC_PROFILE_CHANGE_TEARDOWN) == 0) {
     // Tests simulating shutdown may cause multiple notifications.
-    if (mShuttingDown) {
+    if (IsShutdownStarted()) {
       return NS_OK;
     }
 
@@ -1551,79 +1745,45 @@ Database::Observe(nsISupports *aSubject,
 
     // Notify all Places users that we are about to shutdown.
     (void)os->NotifyObservers(nullptr, TOPIC_PLACES_SHUTDOWN, nullptr);
-  }
+  } else if (strcmp(aTopic, TOPIC_SIMULATE_PLACES_SHUTDOWN) == 0) {
+    // This notification is (and must be) only used by tests that are trying
+    // to simulate Places shutdown out of the normal shutdown path.
 
-  else if (strcmp(aTopic, TOPIC_PROFILE_BEFORE_CHANGE) == 0) {
     // Tests simulating shutdown may cause re-entrance.
-    if (mShuttingDown) {
+    if (IsShutdownStarted()) {
       return NS_OK;
     }
 
-    // Fire internal shutdown notifications.
-    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
-    if (os) {
-      (void)os->NotifyObservers(nullptr, TOPIC_PLACES_WILL_CLOSE_CONNECTION, nullptr);
+    // We are simulating a shutdown, so invoke the shutdown blockers,
+    // wait for them, then proceed with connection shutdown.
+    // Since we are already going through shutdown, but it's not the real one,
+    // we won't need to block the real one anymore, so we can unblock it.
+    {
+      nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase = GetProfileChangeTeardownPhase();
+      if (shutdownPhase) {
+        shutdownPhase->RemoveBlocker(mClientsShutdown.get());
+      }
+      (void)mClientsShutdown->BlockShutdown(nullptr);
     }
 
-#ifdef DEBUG
-    { // Sanity check for missing guids.
-      bool haveNullGuids = false;
-      nsCOMPtr<mozIStorageStatement> stmt;
-
-      nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
-        "SELECT 1 "
-        "FROM moz_places "
-        "WHERE guid IS NULL "
-      ), getter_AddRefs(stmt));
-      NS_ENSURE_SUCCESS(rv, rv);
-      rv = stmt->ExecuteStep(&haveNullGuids);
-      NS_ENSURE_SUCCESS(rv, rv);
-      MOZ_ASSERT(!haveNullGuids && "Found a page without a GUID!");
-
-      rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
-        "SELECT 1 "
-        "FROM moz_bookmarks "
-        "WHERE guid IS NULL "
-      ), getter_AddRefs(stmt));
-      NS_ENSURE_SUCCESS(rv, rv);
-      rv = stmt->ExecuteStep(&haveNullGuids);
-      NS_ENSURE_SUCCESS(rv, rv);
-      MOZ_ASSERT(!haveNullGuids && "Found a bookmark without a GUID!");
-
-      rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
-        "SELECT 1 "
-        "FROM moz_favicons "
-        "WHERE guid IS NULL "
-      ), getter_AddRefs(stmt));
-      NS_ENSURE_SUCCESS(rv, rv);
-      rv = stmt->ExecuteStep(&haveNullGuids);
-      NS_ENSURE_SUCCESS(rv, rv);
-      MOZ_ASSERT(!haveNullGuids && "Found a favicon without a GUID!");
+    // Spin the events loop until the clients are done.
+    // Note, this is just for tests, specifically test_clearHistory_shutdown.js
+    while (mClientsShutdown->State() != PlacesShutdownBlocker::States::RECEIVED_DONE) {
+      (void)NS_ProcessNextEvent();
     }
 
-    { // Sanity check for unrounded dateAdded and lastModified values (bug
-      // 1107308).
-      bool hasUnroundedDates = false;
-      nsCOMPtr<mozIStorageStatement> stmt;
-
-      nsresult rv = mMainConn->CreateStatement(NS_LITERAL_CSTRING(
-        "SELECT 1 "
-        "FROM moz_bookmarks "
-        "WHERE dateAdded % 1000 > 0 OR lastModified % 1000 > 0 LIMIT 1"
-      ), getter_AddRefs(stmt));
-      NS_ENSURE_SUCCESS(rv, rv);
-      rv = stmt->ExecuteStep(&hasUnroundedDates);
-      NS_ENSURE_SUCCESS(rv, rv);
-      MOZ_ASSERT(!hasUnroundedDates && "Found unrounded dates!");
+    {
+      nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase = GetProfileBeforeChangePhase();
+      if (shutdownPhase) {
+        shutdownPhase->RemoveBlocker(mConnectionShutdown.get());
+      }
+      (void)mConnectionShutdown->BlockShutdown(nullptr);
     }
-#endif
-
-    // As the last step in the shutdown path, finalize the database handle.
-    Shutdown();
   }
-
   return NS_OK;
 }
+
+
 
 } // namespace places
 } // namespace mozilla

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +14,13 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsUnicharUtils.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
+
+namespace mozilla {
+namespace dom {
+  struct CSP;
+} // namespace dom
+} // namespace mozilla
 
 /* =============== Logging =================== */
 
@@ -58,30 +65,36 @@ void CSP_LogMessage(const nsAString& aMessage,
 // these strings map to the CSPDirectives in nsIContentSecurityPolicy
 // NOTE: When implementing a new directive, you will need to add it here but also
 // add a corresponding entry to the constants in nsIContentSecurityPolicy.idl
+// and also create an entry for the new directive in
+// nsCSPDirective::toDomCSPStruct() and add it to CSPDictionaries.webidl.
+// Order of elements below important! Make sure it matches the order as in
+// nsIContentSecurityPolicy.idl
 static const char* CSPStrDirectives[] = {
-  "-error-",    // NO_DIRECTIVE
-  "default-src",     // DEFAULT_SRC_DIRECTIVE
-  "script-src",      // SCRIPT_SRC_DIRECTIVE
-  "object-src",      // OBJECT_SRC_DIRECTIVE
-  "style-src",       // STYLE_SRC_DIRECTIVE
-  "img-src",         // IMG_SRC_DIRECTIVE
-  "media-src",       // MEDIA_SRC_DIRECTIVE
-  "frame-src",       // FRAME_SRC_DIRECTIVE
-  "font-src",        // FONT_SRC_DIRECTIVE
-  "connect-src",     // CONNECT_SRC_DIRECTIVE
-  "report-uri",      // REPORT_URI_DIRECTIVE
-  "frame-ancestors", // FRAME_ANCESTORS_DIRECTIVE
-  "reflected-xss",   // REFLECTED_XSS_DIRECTIVE
-  "base-uri",        // BASE_URI_DIRECTIVE
-  "form-action"     // FORM_ACTION_DIRECTIVE
+  "-error-",                   // NO_DIRECTIVE
+  "default-src",               // DEFAULT_SRC_DIRECTIVE
+  "script-src",                // SCRIPT_SRC_DIRECTIVE
+  "object-src",                // OBJECT_SRC_DIRECTIVE
+  "style-src",                 // STYLE_SRC_DIRECTIVE
+  "img-src",                   // IMG_SRC_DIRECTIVE
+  "media-src",                 // MEDIA_SRC_DIRECTIVE
+  "frame-src",                 // FRAME_SRC_DIRECTIVE
+  "font-src",                  // FONT_SRC_DIRECTIVE
+  "connect-src",               // CONNECT_SRC_DIRECTIVE
+  "report-uri",                // REPORT_URI_DIRECTIVE
+  "frame-ancestors",           // FRAME_ANCESTORS_DIRECTIVE
+  "reflected-xss",             // REFLECTED_XSS_DIRECTIVE
+  "base-uri",                  // BASE_URI_DIRECTIVE
+  "form-action",               // FORM_ACTION_DIRECTIVE
+  "referrer",                  // REFERRER_DIRECTIVE
+  "manifest-src",              // MANIFEST_SRC_DIRECTIVE
+  "upgrade-insecure-requests", // UPGRADE_IF_INSECURE_DIRECTIVE
+  "child-src",                 // CHILD_SRC_DIRECTIVE
+  "block-all-mixed-content"    // BLOCK_ALL_MIXED_CONTENT
 };
-// referrer is disabled for now.
-// see https://bugzilla.mozilla.org/show_bug.cgi?id=1140638
 
 inline const char* CSP_CSPDirectiveToString(CSPDirective aDir)
 {
-  uint32_t numDirs = (sizeof(CSPStrDirectives) / sizeof(CSPStrDirectives[0]));
-  return CSPStrDirectives[numDirs > aDir ? static_cast<uint32_t>(aDir) : 0];
+  return CSPStrDirectives[static_cast<uint32_t>(aDir)];
 }
 
 inline CSPDirective CSP_StringToCSPDirective(const nsAString& aDir)
@@ -132,7 +145,11 @@ inline const char* CSP_EnumToKeyword(enum CSPKeyword aKey)
   static_assert((sizeof(CSPStrKeywords) / sizeof(CSPStrKeywords[0]) ==
                 static_cast<uint32_t>(CSP_LAST_KEYWORD_VALUE)),
                 "CSP_LAST_KEYWORD_VALUE does not match length of CSPStrKeywords");
-  return CSPStrKeywords[static_cast<uint32_t>(aKey)];
+
+  if (static_cast<uint32_t>(aKey) < static_cast<uint32_t>(CSP_LAST_KEYWORD_VALUE)) {
+      return CSPStrKeywords[static_cast<uint32_t>(aKey)];
+  }
+  return "error: invalid keyword in CSP_EnumToKeyword";
 }
 
 inline CSPKeyword CSP_KeywordToEnum(const nsAString& aKey)
@@ -164,6 +181,7 @@ bool CSP_IsKeyword(const nsAString& aValue, enum CSPKeyword aKey);
 bool CSP_IsQuotelessKeyword(const nsAString& aKey);
 CSPDirective CSP_ContentTypeToDirective(nsContentPolicyType aType);
 
+class nsCSPSrcVisitor;
 
 /* =============== nsCSPSrc ================== */
 
@@ -172,8 +190,10 @@ class nsCSPBaseSrc {
     nsCSPBaseSrc();
     virtual ~nsCSPBaseSrc();
 
-    virtual bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected) const;
+    virtual bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                         bool aReportOnly, bool aUpgradeInsecure) const;
     virtual bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const;
+    virtual bool visit(nsCSPSrcVisitor* aVisitor) const = 0;
     virtual void toString(nsAString& outStr) const = 0;
 };
 
@@ -184,8 +204,13 @@ class nsCSPSchemeSrc : public nsCSPBaseSrc {
     explicit nsCSPSchemeSrc(const nsAString& aScheme);
     virtual ~nsCSPSchemeSrc();
 
-    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected) const;
+    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                 bool aReportOnly, bool aUpgradeInsecure) const;
+    bool visit(nsCSPSrcVisitor* aVisitor) const;
     void toString(nsAString& outStr) const;
+
+    inline void getScheme(nsAString& outStr) const
+      { outStr.Assign(mScheme); };
 
   private:
     nsString mScheme;
@@ -198,19 +223,32 @@ class nsCSPHostSrc : public nsCSPBaseSrc {
     explicit nsCSPHostSrc(const nsAString& aHost);
     virtual ~nsCSPHostSrc();
 
-    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected) const;
+    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                 bool aReportOnly, bool aUpgradeInsecure) const;
+    bool visit(nsCSPSrcVisitor* aVisitor) const;
     void toString(nsAString& outStr) const;
 
-    void setScheme(const nsAString& aScheme, bool aAllowHttps = false);
+    void setScheme(const nsAString& aScheme);
     void setPort(const nsAString& aPort);
     void appendPath(const nsAString &aPath);
+
+    inline void getScheme(nsAString& outStr) const
+      { outStr.Assign(mScheme); };
+
+    inline void getHost(nsAString& outStr) const
+      { outStr.Assign(mHost); };
+
+    inline void getPort(nsAString& outStr) const
+      { outStr.Assign(mPort); };
+
+    inline void getPath(nsAString& outStr) const
+      { outStr.Assign(mPath); };
 
   private:
     nsString mScheme;
     nsString mHost;
     nsString mPort;
     nsString mPath;
-    bool     mAllowHttps;
 };
 
 /* =============== nsCSPKeywordSrc ============ */
@@ -221,10 +259,17 @@ class nsCSPKeywordSrc : public nsCSPBaseSrc {
     virtual ~nsCSPKeywordSrc();
 
     bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const;
+    bool visit(nsCSPSrcVisitor* aVisitor) const;
     void toString(nsAString& outStr) const;
+    void invalidate();
+
+    inline CSPKeyword getKeyword() const
+      { return mKeyword; };
 
   private:
     CSPKeyword mKeyword;
+    // invalidate 'unsafe-inline' if nonce- or hash-source specified
+    bool       mInvalidated;
 };
 
 /* =============== nsCSPNonceSource =========== */
@@ -234,9 +279,14 @@ class nsCSPNonceSrc : public nsCSPBaseSrc {
     explicit nsCSPNonceSrc(const nsAString& aNonce);
     virtual ~nsCSPNonceSrc();
 
-    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected) const;
+    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                 bool aReportOnly, bool aUpgradeInsecure) const;
     bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const;
+    bool visit(nsCSPSrcVisitor* aVisitor) const;
     void toString(nsAString& outStr) const;
+
+    inline void getNonce(nsAString& outStr) const
+      { outStr.Assign(mNonce); };
 
   private:
     nsString mNonce;
@@ -251,6 +301,13 @@ class nsCSPHashSrc : public nsCSPBaseSrc {
 
     bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const;
     void toString(nsAString& outStr) const;
+    bool visit(nsCSPSrcVisitor* aVisitor) const;
+
+    inline void getAlgorithm(nsAString& outStr) const
+      { outStr.Assign(mAlgorithm); };
+
+    inline void getHash(nsAString& outStr) const
+      { outStr.Assign(mHash); };
 
   private:
     nsString mAlgorithm;
@@ -264,41 +321,162 @@ class nsCSPReportURI : public nsCSPBaseSrc {
     explicit nsCSPReportURI(nsIURI* aURI);
     virtual ~nsCSPReportURI();
 
+    bool visit(nsCSPSrcVisitor* aVisitor) const;
     void toString(nsAString& outStr) const;
 
   private:
     nsCOMPtr<nsIURI> mReportURI;
 };
 
+/* =============== nsCSPSrcVisitor ================== */
+
+class nsCSPSrcVisitor {
+  public:
+    virtual bool visitSchemeSrc(const nsCSPSchemeSrc& src) = 0;
+
+    virtual bool visitHostSrc(const nsCSPHostSrc& src) = 0;
+
+    virtual bool visitKeywordSrc(const nsCSPKeywordSrc& src) = 0;
+
+    virtual bool visitNonceSrc(const nsCSPNonceSrc& src) = 0;
+
+    virtual bool visitHashSrc(const nsCSPHashSrc& src) = 0;
+
+  protected:
+    explicit nsCSPSrcVisitor() {};
+    virtual ~nsCSPSrcVisitor() {};
+};
+
 /* =============== nsCSPDirective ============= */
 
 class nsCSPDirective {
   public:
-    nsCSPDirective();
     explicit nsCSPDirective(CSPDirective aDirective);
     virtual ~nsCSPDirective();
 
-    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected) const;
-    bool permits(nsIURI* aUri) const;
-    bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const;
-    void toString(nsAString& outStr) const;
+    virtual bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                         bool aReportOnly, bool aUpgradeInsecure) const;
+    virtual bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const;
+    virtual void toString(nsAString& outStr) const;
+    void toDomCSPStruct(mozilla::dom::CSP& outCSP) const;
 
-    inline void addSrcs(const nsTArray<nsCSPBaseSrc*>& aSrcs)
+    virtual void addSrcs(const nsTArray<nsCSPBaseSrc*>& aSrcs)
       { mSrcs = aSrcs; }
 
-    bool restrictsContentType(nsContentPolicyType aContentType) const;
+    virtual bool restrictsContentType(nsContentPolicyType aContentType) const;
 
     inline bool isDefaultDirective() const
      { return mDirective == nsIContentSecurityPolicy::DEFAULT_SRC_DIRECTIVE; }
 
-    inline bool equals(CSPDirective aDirective) const
-      { return (mDirective == aDirective); }
+    virtual bool equals(CSPDirective aDirective) const;
 
     void getReportURIs(nsTArray<nsString> &outReportURIs) const;
+
+    bool visitSrcs(nsCSPSrcVisitor* aVisitor) const;
 
   private:
     CSPDirective            mDirective;
     nsTArray<nsCSPBaseSrc*> mSrcs;
+};
+
+/* =============== nsCSPChildSrcDirective ============= */
+
+/*
+ * In CSP 2, the child-src directive covers both workers and
+ * subdocuments (i.e., frames and iframes). Workers were removed
+ * from script-src, but frames can be controlled by either child-src
+ * or frame-src directives, so child-src needs to know whether it should
+ * also restrict frames. When both are present the frame-src directive
+ * takes precedent.
+ */
+class nsCSPChildSrcDirective : public nsCSPDirective {
+  public:
+    explicit nsCSPChildSrcDirective(CSPDirective aDirective);
+    virtual ~nsCSPChildSrcDirective();
+
+    void setHandleFrameSrc();
+
+    virtual bool restrictsContentType(nsContentPolicyType aContentType) const;
+
+    virtual bool equals(CSPDirective aDirective) const;
+
+  private:
+    bool mHandleFrameSrc;
+};
+
+/* =============== nsBlockAllMixedContentDirective === */
+
+class nsBlockAllMixedContentDirective : public nsCSPDirective {
+  public:
+    explicit nsBlockAllMixedContentDirective(CSPDirective aDirective);
+    ~nsBlockAllMixedContentDirective();
+
+    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                 bool aReportOnly, bool aUpgradeInsecure) const
+      { return false; }
+
+    bool permits(nsIURI* aUri) const
+      { return false; }
+
+    bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const
+      { return false; }
+
+    void toString(nsAString& outStr) const;
+
+    void addSrcs(const nsTArray<nsCSPBaseSrc*>& aSrcs)
+      {  MOZ_ASSERT(false, "block-all-mixed-content does not hold any srcs"); }
+};
+
+/* =============== nsUpgradeInsecureDirective === */
+
+/*
+ * Upgrading insecure requests includes the following actors:
+ * (1) CSP:
+ *     The CSP implementation whitelists the http-request
+ *     in case the policy is executed in enforcement mode.
+ *     The CSP implementation however does not allow http
+ *     requests to succeed if executed in report-only mode.
+ *     In such a case the CSP implementation reports the
+ *     error back to the page.
+ *
+ * (2) MixedContent:
+ *     The evalution of MixedContent whitelists all http
+ *     requests with the promise that the http requests
+ *     gets upgraded to https before any data is fetched
+ *     from the network.
+ *
+ * (3) CORS:
+ *     Does not consider the http request to be of a
+ *     different origin in case the scheme is the only
+ *     difference in otherwise matching URIs.
+ *
+ * (4) nsHttpChannel:
+ *     Before connecting, the channel gets redirected
+ *     to use https.
+ *
+ * (5) WebSocketChannel:
+ *     Similar to the httpChannel, the websocketchannel
+ *     gets upgraded from ws to wss.
+ */
+class nsUpgradeInsecureDirective : public nsCSPDirective {
+  public:
+    explicit nsUpgradeInsecureDirective(CSPDirective aDirective);
+    ~nsUpgradeInsecureDirective();
+
+    bool permits(nsIURI* aUri, const nsAString& aNonce, bool aWasRedirected,
+                 bool aReportOnly, bool aUpgradeInsecure) const
+      { return false; }
+
+    bool permits(nsIURI* aUri) const
+      { return false; }
+
+    bool allows(enum CSPKeyword aKeyword, const nsAString& aHashOrNonce) const
+      { return false; }
+
+    void toString(nsAString& outStr) const;
+
+    void addSrcs(const nsTArray<nsCSPBaseSrc*>& aSrcs)
+      {  MOZ_ASSERT(false, "upgrade-insecure-requests does not hold any srcs"); }
 };
 
 /* =============== nsCSPPolicy ================== */
@@ -323,9 +501,16 @@ class nsCSPPolicy {
     bool allows(nsContentPolicyType aContentType,
                 enum CSPKeyword aKeyword) const;
     void toString(nsAString& outStr) const;
+    void toDomCSPStruct(mozilla::dom::CSP& outCSP) const;
 
     inline void addDirective(nsCSPDirective* aDir)
       { mDirectives.AppendElement(aDir); }
+
+    inline void addUpgradeInsecDir(nsUpgradeInsecureDirective* aDir)
+      {
+        mUpgradeInsecDir = aDir;
+        addDirective(aDir);
+      }
 
     bool hasDirective(CSPDirective aDir) const;
 
@@ -351,10 +536,13 @@ class nsCSPPolicy {
     inline uint32_t getNumDirectives() const
       { return mDirectives.Length(); }
 
+    bool visitDirectiveSrcs(CSPDirective aDir, nsCSPSrcVisitor* aVisitor) const;
+
   private:
-    nsTArray<nsCSPDirective*> mDirectives;
-    bool                      mReportOnly;
-    nsString                  mReferrerPolicy;
+    nsUpgradeInsecureDirective* mUpgradeInsecDir;
+    nsTArray<nsCSPDirective*>   mDirectives;
+    bool                        mReportOnly;
+    nsString                    mReferrerPolicy;
 };
 
 #endif /* nsCSPUtils_h___ */

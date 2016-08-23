@@ -153,13 +153,13 @@ RadialGradientEffectD2D1::PrepareForRender(D2D1_CHANGE_TYPE changeType)
     float transform[8];
   };
 
-  PSConstantBuffer buffer = { { dc.x, dc.y, dr }, 0,
+  PSConstantBuffer buffer = { { dc.x, dc.y, dr }, 0.0f,
                               { mCenter1.x, mCenter1.y },
                               A, mRadius1, mRadius1 * mRadius1,
-                              mStopCollection->GetExtendMode() != D2D1_EXTEND_MODE_CLAMP ? 1 : 0,
-                              mStopCollection->GetExtendMode() == D2D1_EXTEND_MODE_MIRROR ? 1 : 0,
-                              { 0 }, { mat._11, mat._21, mat._31, 0,
-                                             mat._12, mat._22, mat._32, 0 } };
+                              mStopCollection->GetExtendMode() != D2D1_EXTEND_MODE_CLAMP ? 1.0f : 0.0f,
+                              mStopCollection->GetExtendMode() == D2D1_EXTEND_MODE_MIRROR ? 1.0f : 0.0f,
+                              { 0.0f }, { mat._11, mat._21, mat._31, 0.0f,
+                                             mat._12, mat._22, mat._32, 0.0f } };
 
   hr = mDrawInfo->SetPixelShaderConstantBuffer((BYTE*)&buffer, sizeof(buffer));
 
@@ -251,7 +251,7 @@ RadialGradientEffectD2D1::MapInvalidRect(UINT32 inputIndex,
                                          D2D1_RECT_L invalidInputRect,
                                          D2D1_RECT_L* pInvalidOutputRect) const
 {
-  MOZ_ASSERT(inputIndex = 0);
+  MOZ_ASSERT(inputIndex == 0);
 
   *pInvalidOutputRect = invalidInputRect;
   return S_OK;
@@ -302,14 +302,14 @@ RadialGradientEffectD2D1::CreateEffect(IUnknown **aEffectImpl)
 HRESULT
 RadialGradientEffectD2D1::SetStopCollection(IUnknown *aStopCollection)
 {
-  if (SUCCEEDED(aStopCollection->QueryInterface((ID2D1GradientStopCollection**)byRef(mStopCollection)))) {
+  if (SUCCEEDED(aStopCollection->QueryInterface((ID2D1GradientStopCollection**)getter_AddRefs(mStopCollection)))) {
     return S_OK;
   }
 
   return E_INVALIDARG;
 }
 
-TemporaryRef<ID2D1ResourceTexture>
+already_AddRefed<ID2D1ResourceTexture>
 RadialGradientEffectD2D1::CreateGradientTexture()
 {
   std::vector<D2D1_GRADIENT_STOP> rawStops;
@@ -385,7 +385,7 @@ RadialGradientEffectD2D1::CreateGradientTexture()
   D2D1_EXTEND_MODE extendMode[] = { mStopCollection->GetExtendMode(), mStopCollection->GetExtendMode() };
   props.extendModes = extendMode;
 
-  HRESULT hr = mEffectContext->CreateResourceTexture(nullptr, &props, &textureData.front(), &stride, 4096 * 4, byRef(tex));
+  HRESULT hr = mEffectContext->CreateResourceTexture(nullptr, &props, &textureData.front(), &stride, 4096 * 4, getter_AddRefs(tex));
 
   if (FAILED(hr)) {
     gfxWarning() << "Failed to create resource texture: " << hexa(hr);

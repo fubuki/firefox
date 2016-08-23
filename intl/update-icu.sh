@@ -6,7 +6,7 @@
 set -e
 
 # Usage: update-icu.sh <URL of ICU SVN with release>
-# E.g., for ICU 52.1: update-icu.sh http://source.icu-project.org/repos/icu/icu/tags/release-52-1/
+# E.g., for ICU 55.1: update-icu.sh http://source.icu-project.org/repos/icu/icu/tags/release-55-1/
 
 if [ $# -lt 1 ]; then
   echo "Usage: update-icu.sh <URL of ICU SVN with release>"
@@ -30,7 +30,7 @@ find ${icu_dir}/source/test -name '*Makefile.in' -prune -or -type f -print | xar
 find ${icu_dir}/source/samples -name '*Makefile.in' -prune -or -type f -print | xargs rm
 
 # remove data that we currently don't need
-rm ${icu_dir}/source/data/brkitr/*
+rm -rf ${icu_dir}/source/data/brkitr/*
 rm ${icu_dir}/source/data/lang/*.mk
 rm ${icu_dir}/source/data/lang/*.txt
 rm ${icu_dir}/source/data/mappings/*.mk
@@ -42,6 +42,8 @@ rm ${icu_dir}/source/data/rbnf/*
 rm ${icu_dir}/source/data/region/*.mk
 rm ${icu_dir}/source/data/region/*.txt
 rm ${icu_dir}/source/data/translit/*
+rm ${icu_dir}/source/data/unit/*.mk
+rm ${icu_dir}/source/data/unit/*.txt
 
 # Record `svn info`, eliding the line that changes every time the entire ICU
 # repository (not just the path within it we care about) receives a commit.
@@ -50,12 +52,24 @@ rm ${icu_dir}/source/data/translit/*
 # the tree.)
 svn info $1 | grep -v '^Revision: [[:digit:]]\+$' > ${icu_dir}/SVN-INFO
 
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/bug-724533
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/bug-899722-4
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/bug-915735
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/genrb-omitCollationRules.diff
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/qualify-uinitonce-windows.diff
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/suppress-warnings.diff
-patch -d ${icu_dir}/../../ -p1 < ${icu_dir}/../icu-patches/clang-cl.diff
+for patch in \
+ bug-915735 \
+ suppress-warnings.diff \
+ bug-1172609-icu-fix.diff \
+ bug-1172609-timezone-recreateDefault.diff \
+ bug-1198952-workaround-make-3.82-bug.diff \
+ icu-release-56-1-flagparser-fix.patch \
+ bug-1228227-bug-1263325-libc++-gcc_hidden.diff \
+; do
+  echo "Applying local patch $patch"
+  patch -d ${icu_dir}/../../ -p1 --no-backup-if-mismatch < ${icu_dir}/../icu-patches/$patch
+done
 
-hg addremove ${icu_dir}
+topsrcdir=`dirname $0`/../
+python ${topsrcdir}/js/src/tests/ecma_6/String/make-normalize-generateddata-input.py $topsrcdir
+
+# Update our moz.build files in config/external/icu, and
+# build a new ICU data file.
+python `dirname $0`/icu_sources_data.py $topsrcdir
+
+hg addremove ${icu_dir} ${topsrcdir}/config/external/icu

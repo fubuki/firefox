@@ -29,7 +29,7 @@ struct unused_t;
  * because of the sheer number of usages of already_AddRefed.
  */
 template<class T>
-struct already_AddRefed
+struct MOZ_MUST_USE MOZ_NON_AUTOABLE already_AddRefed
 {
   /*
    * We want to allow returning nullptr from functions returning
@@ -66,16 +66,43 @@ struct already_AddRefed
 
   explicit already_AddRefed(T* aRawPtr) : mRawPtr(aRawPtr) {}
 
-  // Disallowed. Use move semantics instead.
+  // Disallow copy constructor and copy assignment operator: move semantics used instead.
   already_AddRefed(const already_AddRefed<T>& aOther) = delete;
+  already_AddRefed<T>& operator=(const already_AddRefed<T>& aOther) = delete;
 
   already_AddRefed(already_AddRefed<T>&& aOther) : mRawPtr(aOther.take()) {}
+
+  already_AddRefed<T>& operator=(already_AddRefed<T>&& aOther)
+  {
+    mRawPtr = aOther.take();
+    return *this;
+  }
+
+  /**
+   * This helper is useful in cases like
+   *
+   *  already_AddRefed<BaseClass>
+   *  Foo()
+   *  {
+   *    RefPtr<SubClass> x = ...;
+   *    return x.forget();
+   *  }
+   *
+   * The autoconversion allows one to omit the idiom
+   *
+   *    RefPtr<BaseClass> y = x.forget();
+   *    return y.forget();
+   *
+   * Note that nsRefPtr is the XPCOM reference counting smart pointer class.
+   */
+  template <typename U>
+  MOZ_IMPLICIT already_AddRefed(already_AddRefed<U>&& aOther) : mRawPtr(aOther.take()) {}
 
   ~already_AddRefed() { MOZ_ASSERT(!mRawPtr); }
 
   // Specialize the unused operator<< for already_AddRefed, to allow
   // nsCOMPtr<nsIFoo> foo;
-  // unused << foo.forget();
+  // Unused << foo.forget();
   // Note that nsCOMPtr is the XPCOM reference counting smart pointer class.
   friend void operator<<(const mozilla::unused_t& aUnused,
                          const already_AddRefed<T>& aRhs)
@@ -89,31 +116,6 @@ struct already_AddRefed
     T* rawPtr = mRawPtr;
     mRawPtr = nullptr;
     return rawPtr;
-  }
-
-  /**
-   * This helper is useful in cases like
-   *
-   *  already_AddRefed<BaseClass>
-   *  Foo()
-   *  {
-   *    nsRefPtr<SubClass> x = ...;
-   *    return x.forget();
-   *  }
-   *
-   * The autoconversion allows one to omit the idiom
-   *
-   *    nsRefPtr<BaseClass> y = x.forget();
-   *    return y.forget();
-   *
-   * Note that nsRefPtr is the XPCOM reference counting smart pointer class.
-   */
-  template<class U>
-  operator already_AddRefed<U>()
-  {
-    U* tmp = mRawPtr;
-    mRawPtr = nullptr;
-    return already_AddRefed<U>(tmp);
   }
 
   /**

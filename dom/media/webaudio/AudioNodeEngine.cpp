@@ -9,42 +9,45 @@
 #include "mozilla/arm.h"
 #include "AudioNodeEngineNEON.h"
 #endif
+#ifdef USE_SSE2
+#include "mozilla/SSE.h"
+#include "AlignmentUtils.h"
+#include "AudioNodeEngineSSE2.h"
+#endif
 
 namespace mozilla {
 
-void
-AllocateAudioBlock(uint32_t aChannelCount, AudioChunk* aChunk)
+already_AddRefed<ThreadSharedFloatArrayBufferList>
+ThreadSharedFloatArrayBufferList::Create(uint32_t aChannelCount,
+                                         size_t aLength,
+                                         const mozilla::fallible_t&)
 {
-  CheckedInt<size_t> size = WEBAUDIO_BLOCK_SIZE;
-  size *= aChannelCount;
-  size *= sizeof(float);
-  if (!size.isValid()) {
-    MOZ_CRASH();
-  }
-  // XXX for SIMD purposes we should do something here to make sure the
-  // channel buffers are 16-byte aligned.
-  nsRefPtr<SharedBuffer> buffer = SharedBuffer::Create(size.value());
-  aChunk->mDuration = WEBAUDIO_BLOCK_SIZE;
-  aChunk->mChannelData.SetLength(aChannelCount);
-  float* data = static_cast<float*>(buffer->Data());
+  RefPtr<ThreadSharedFloatArrayBufferList> buffer =
+    new ThreadSharedFloatArrayBufferList(aChannelCount);
+
   for (uint32_t i = 0; i < aChannelCount; ++i) {
-    aChunk->mChannelData[i] = data + i*WEBAUDIO_BLOCK_SIZE;
+    float* channelData = js_pod_malloc<float>(aLength);
+    if (!channelData) {
+      return nullptr;
+    }
+
+    buffer->SetData(i, channelData, js_free, channelData);
   }
-  aChunk->mBuffer = buffer.forget();
-  aChunk->mVolume = 1.0f;
-  aChunk->mBufferFormat = AUDIO_FORMAT_FLOAT32;
+
+  return buffer.forget();
 }
 
 void
-WriteZeroesToAudioBlock(AudioChunk* aChunk, uint32_t aStart, uint32_t aLength)
+WriteZeroesToAudioBlock(AudioBlock* aChunk,
+                        uint32_t aStart, uint32_t aLength)
 {
   MOZ_ASSERT(aStart + aLength <= WEBAUDIO_BLOCK_SIZE);
   MOZ_ASSERT(!aChunk->IsNull(), "You should pass a non-null chunk");
   if (aLength == 0)
     return;
-  for (uint32_t i = 0; i < aChunk->mChannelData.Length(); ++i) {
-    memset(static_cast<float*>(const_cast<void*>(aChunk->mChannelData[i])) + aStart,
-           0, aLength*sizeof(float));
+
+  for (uint32_t i = 0; i < aChunk->ChannelCount(); ++i) {
+    PodZero(aChunk->ChannelFloatsForWrite(i) + aStart, aLength);
   }
 }
 
@@ -73,6 +76,17 @@ void AudioBufferAddWithScale(const float* aInput,
     return;
   }
 #endif
+
+#ifdef USE_SSE2
+  // TODO: See Bug 1266112, we should either fix the source of the unaligned
+  //       buffers or do as much as possible with vector instructions and
+  //       fallback to scalar instructions where necessary.
+  if (mozilla::supports_sse2() && IS_ALIGNED16(aInput) && IS_ALIGNED16(aOutput)) {
+    AudioBufferAddWithScale_SSE(aInput, aScale, aOutput, aSize);
+    return;
+  }
+#endif
+
   if (aScale == 1.0f) {
     for (uint32_t i = 0; i < aSize; ++i) {
       aOutput[i] += aInput[i];
@@ -106,6 +120,17 @@ AudioBlockCopyChannelWithScale(const float* aInput,
       return;
     }
 #endif
+
+#ifdef USE_SSE2
+    // TODO: See Bug 1266112, we should either fix the source of the unaligned
+    //       buffers or do as much as possible with vector instructions and
+    //       fallback to scalar instructions where necessary.
+    if (mozilla::supports_sse2() && IS_ALIGNED16(aInput) && IS_ALIGNED16(aOutput)) {
+      AudioBlockCopyChannelWithScale_SSE(aInput, aScale, aOutput);
+      return;
+    }
+#endif
+
     for (uint32_t i = 0; i < WEBAUDIO_BLOCK_SIZE; ++i) {
       aOutput[i] = aInput[i]*aScale;
     }
@@ -118,6 +143,14 @@ BufferComplexMultiply(const float* aInput,
                       float* aOutput,
                       uint32_t aSize)
 {
+
+#ifdef USE_SSE2
+  if (mozilla::supports_sse()) {
+    BufferComplexMultiply_SSE(aInput, aScale, aOutput, aSize);
+    return;
+  }
+#endif
+
   for (uint32_t i = 0; i < aSize * 2; i += 2) {
     float real1 = aInput[i];
     float imag1 = aInput[i + 1];
@@ -154,6 +187,14 @@ AudioBlockCopyChannelWithScale(const float aInput[WEBAUDIO_BLOCK_SIZE],
     return;
   }
 #endif
+
+#ifdef USE_SSE2
+  if (mozilla::supports_sse2()) {
+    AudioBlockCopyChannelWithScale_SSE(aInput, aScale, aOutput);
+    return;
+  }
+#endif
+
   for (uint32_t i = 0; i < WEBAUDIO_BLOCK_SIZE; ++i) {
     aOutput[i] = aInput[i]*aScale[i];
   }
@@ -180,6 +221,14 @@ AudioBufferInPlaceScale(float* aBlock,
     return;
   }
 #endif
+
+#ifdef USE_SSE2
+  if (mozilla::supports_sse2()) {
+    AudioBufferInPlaceScale_SSE(aBlock, aScale, aSize);
+    return;
+  }
+#endif
+
   for (uint32_t i = 0; i < aSize; ++i) {
     *aBlock++ *= aScale;
   }
@@ -222,6 +271,15 @@ AudioBlockPanStereoToStereo(const float aInputL[WEBAUDIO_BLOCK_SIZE],
   }
 #endif
 
+#ifdef USE_SSE2
+  if (mozilla::supports_sse2()) {
+    AudioBlockPanStereoToStereo_SSE(aInputL, aInputR,
+                                    aGainL, aGainR, aIsOnTheLeft,
+                                    aOutputL, aOutputR);
+    return;
+  }
+#endif
+
   uint32_t i;
 
   if (aIsOnTheLeft) {
@@ -247,7 +305,12 @@ AudioBlockPanStereoToStereo(const float aInputL[WEBAUDIO_BLOCK_SIZE],
                             float aOutputR[WEBAUDIO_BLOCK_SIZE])
 {
 #ifdef BUILD_ARM_NEON
-  // No NEON version yet: bug 1105513
+   if (mozilla::supports_neon()) {
+     AudioBlockPanStereoToStereo_NEON(aInputL, aInputR,
+                                      aGainL, aGainR, aIsOnTheLeft,
+                                      aOutputL, aOutputR);
+    return;
+  }
 #endif
 
   uint32_t i;
@@ -266,6 +329,27 @@ float
 AudioBufferSumOfSquares(const float* aInput, uint32_t aLength)
 {
   float sum = 0.0f;
+
+#ifdef USE_SSE2
+  if (mozilla::supports_sse()) {
+    const float* alignedInput = ALIGNED16(aInput);
+    float vLength = (aLength >> 4) << 4;
+
+    // use scalar operations for any unaligned data at the beginning
+    while (aInput != alignedInput) {
+        sum += *aInput * *aInput;
+        ++aInput;
+    }
+
+    sum += AudioBufferSumOfSquares_SSE(alignedInput, vLength);
+
+    // adjust aInput and aLength to use scalar operations for any
+    // remaining values
+    aInput = alignedInput + 1;
+    aLength -= vLength;
+  }
+#endif
+
   while (aLength--) {
     sum += *aInput * *aInput;
     ++aInput;
@@ -273,4 +357,26 @@ AudioBufferSumOfSquares(const float* aInput, uint32_t aLength)
   return sum;
 }
 
+void
+AudioNodeEngine::ProcessBlock(AudioNodeStream* aStream,
+                              GraphTime aFrom,
+                              const AudioBlock& aInput,
+                              AudioBlock* aOutput,
+                              bool* aFinished)
+{
+  MOZ_ASSERT(mInputCount <= 1 && mOutputCount <= 1);
+  *aOutput = aInput;
 }
+
+void
+AudioNodeEngine::ProcessBlocksOnPorts(AudioNodeStream* aStream,
+                                      const OutputChunks& aInput,
+                                      OutputChunks& aOutput,
+                                      bool* aFinished)
+{
+  MOZ_ASSERT(mInputCount > 1 || mOutputCount > 1);
+  // Only produce one output port, and drop all other input ports.
+  aOutput[0] = aInput[0];
+}
+
+} // namespace mozilla

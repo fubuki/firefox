@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,20 +19,20 @@
 #include "nsJSUtils.h"
 #include "nsString.h"
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 namespace dom {
 namespace telephony {
 
-class TelephonyDialCallback MOZ_FINAL : public TelephonyCallback,
-                                        public nsITelephonyDialCallback
+class TelephonyDialCallback final : public TelephonyCallback,
+                                    public nsITelephonyDialCallback
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSITELEPHONYDIALCALLBACK
 
-  TelephonyDialCallback(nsPIDOMWindow* aWindow, Telephony* aTelephony,
+  TelephonyDialCallback(nsPIDOMWindowInner* aWindow, Telephony* aTelephony,
                         Promise* aPromise);
 
   NS_FORWARD_NSITELEPHONYCALLBACK(TelephonyCallback::)
@@ -42,11 +44,11 @@ private:
   NotifyDialMMISuccess(JSContext* aCx, const MozMMIResult& aResult);
 
 
-  nsCOMPtr<nsPIDOMWindow> mWindow;
-  nsRefPtr<Telephony> mTelephony;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
+  RefPtr<Telephony> mTelephony;
 
   nsString mServiceCode;
-  nsRefPtr<MMICall> mMMICall;
+  RefPtr<MMICall> mMMICall;
 };
 
 } // namespace telephony

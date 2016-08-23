@@ -5,7 +5,7 @@ const PREF_DISK_CACHE_SSL = "browser.cache.disk_cache_ssl";
 const URL = "://example.com/browser/toolkit/components/thumbnails/" +
             "test/privacy_cache_control.sjs";
 
-function runTests() {
+function* runTests() {
   registerCleanupFunction(function () {
     Services.prefs.clearUserPref(PREF_DISK_CACHE_SSL);
   });
@@ -62,12 +62,13 @@ function testCombination(combi, url, aCombinations, aResult) {
   let tab = gBrowser.selectedTab = gBrowser.addTab(url);
   let browser = gBrowser.selectedBrowser;
 
-  whenLoaded(browser, function () {
+  whenLoaded(browser, () => {
     let msg = JSON.stringify(combi) + " == " + aResult;
-    is(gBrowserThumbnails._shouldCapture(browser), aResult, msg);
-    gBrowser.removeTab(tab);
-
-    // Continue with the next combination.
-    checkCombinations(aCombinations, aResult);
+    PageThumbs.shouldStoreThumbnail(browser, (aIsSafeSite) => {
+      is(aIsSafeSite, aResult, msg);
+      gBrowser.removeTab(tab);
+      // Continue with the next combination.
+      checkCombinations(aCombinations, aResult);
+    });
   });
 }

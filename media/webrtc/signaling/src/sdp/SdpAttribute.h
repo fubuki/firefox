@@ -8,6 +8,7 @@
 #define _SDPATTRIBUTE_H_
 
 #include <algorithm>
+#include <cctype>
 #include <vector>
 #include <ostream>
 #include <sstream>
@@ -18,8 +19,10 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Maybe.h"
 
 #include "signaling/src/sdp/SdpEnum.h"
+#include "signaling/src/common/EncodingConstraints.h"
 
 namespace mozilla
 {
@@ -57,6 +60,7 @@ public:
     kPtimeAttribute,
     kRecvonlyAttribute,
     kRemoteCandidatesAttribute,
+    kRidAttribute,
     kRtcpAttribute,
     kRtcpFbAttribute,
     kRtcpMuxAttribute,
@@ -66,6 +70,7 @@ public:
     kSendonlyAttribute,
     kSendrecvAttribute,
     kSetupAttribute,
+    kSimulcastAttribute,
     kSsrcAttribute,
     kSsrcGroupAttribute,
     kLastAttribute = kSsrcGroupAttribute
@@ -147,7 +152,7 @@ public:
   {
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   ConnValue mValue;
 };
@@ -175,14 +180,11 @@ inline std::ostream& operator<<(std::ostream& os,
 class SdpDirectionAttribute : public SdpAttribute
 {
 public:
-  static const unsigned kSendFlag = 1;
-  static const unsigned kRecvFlag = 1 << 1;
-
   enum Direction {
     kInactive = 0,
-    kSendonly = kSendFlag,
-    kRecvonly = kRecvFlag,
-    kSendrecv = kSendFlag | kRecvFlag
+    kSendonly = sdp::kSend,
+    kRecvonly = sdp::kRecv,
+    kSendrecv = sdp::kSend | sdp::kRecv
   };
 
   explicit SdpDirectionAttribute(Direction value)
@@ -190,7 +192,7 @@ public:
   {
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   Direction mValue;
 };
@@ -262,7 +264,7 @@ public:
     mExtmaps.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Extmap> mExtmaps;
 };
@@ -307,10 +309,15 @@ public:
   // For use by application programmers. Enforces that it's a known and
   // non-crazy algorithm.
   void
-  PushEntry(const std::string& algorithm_str,
+  PushEntry(std::string algorithm_str,
             const std::vector<uint8_t>& fingerprint,
             bool enforcePlausible = true)
   {
+    std::transform(algorithm_str.begin(),
+                   algorithm_str.end(),
+                   algorithm_str.begin(),
+                   ::tolower);
+
     SdpFingerprintAttributeList::HashAlgorithm algorithm =
         SdpFingerprintAttributeList::kUnknownAlgorithm;
 
@@ -349,7 +356,7 @@ public:
     mFingerprints.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Fingerprint> mFingerprints;
 
@@ -444,7 +451,7 @@ public:
     }
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Group> mGroups;
 };
@@ -515,7 +522,7 @@ public:
     mAssertion(assertion),
     mExtensions(extensions) {}
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::string mAssertion;
   std::vector<std::string> mExtensions;
@@ -599,7 +606,87 @@ class SdpImageattrAttributeList : public SdpAttribute
 public:
   SdpImageattrAttributeList() : SdpAttribute(kImageattrAttribute) {}
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  class XYRange
+  {
+    public:
+      XYRange() : min(0), max(0), step(1) {}
+      void Serialize(std::ostream& os) const;
+      bool Parse(std::istream& is, std::string* error);
+      bool ParseAfterBracket(std::istream& is, std::string* error);
+      bool ParseAfterMin(std::istream& is, std::string* error);
+      bool ParseDiscreteValues(std::istream& is, std::string* error);
+      std::vector<uint32_t> discreteValues;
+      // min/max are used iff discreteValues is empty
+      uint32_t min;
+      uint32_t max;
+      uint32_t step;
+  };
+
+  class SRange
+  {
+    public:
+      SRange() : min(0), max(0) {}
+      void Serialize(std::ostream& os) const;
+      bool Parse(std::istream& is, std::string* error);
+      bool ParseAfterBracket(std::istream& is, std::string* error);
+      bool ParseAfterMin(std::istream& is, std::string* error);
+      bool ParseDiscreteValues(std::istream& is, std::string* error);
+      bool IsSet() const
+      {
+        return !discreteValues.empty() || (min && max);
+      }
+      std::vector<float> discreteValues;
+      // min/max are used iff discreteValues is empty
+      float min;
+      float max;
+  };
+
+  class PRange
+  {
+    public:
+      PRange() : min(0), max(0) {}
+      void Serialize(std::ostream& os) const;
+      bool Parse(std::istream& is, std::string* error);
+      bool IsSet() const
+      {
+        return min && max;
+      }
+      float min;
+      float max;
+  };
+
+  class Set
+  {
+    public:
+      Set() : qValue(-1) {}
+      void Serialize(std::ostream& os) const;
+      bool Parse(std::istream& is, std::string* error);
+      XYRange xRange;
+      XYRange yRange;
+      SRange sRange;
+      PRange pRange;
+      float qValue;
+  };
+
+  class Imageattr
+  {
+    public:
+      Imageattr() : pt(), sendAll(false), recvAll(false) {}
+      void Serialize(std::ostream& os) const;
+      bool Parse(std::istream& is, std::string* error);
+      bool ParseSets(std::istream& is, std::string* error);
+      // If not set, this means all payload types
+      Maybe<uint16_t> pt;
+      bool sendAll;
+      std::vector<Set> sendSets;
+      bool recvAll;
+      std::vector<Set> recvSets;
+  };
+
+  virtual void Serialize(std::ostream& os) const override;
+  bool PushEntry(const std::string& raw, std::string* error, size_t* errorPos);
+
+  std::vector<Imageattr> mImageattrs;
 };
 
 ///////////////////////////////////////////////////////////////////////////
@@ -625,9 +712,39 @@ public:
     mMsids.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Msid> mMsids;
+};
+
+///////////////////////////////////////////////////////////////////////////
+// a=msid-semantic, draft-ietf-mmusic-msid
+//-------------------------------------------------------------------------
+//   msid-semantic-attr = "msid-semantic:" msid-semantic msid-list
+//   msid-semantic = token ; see RFC 4566
+//   msid-list = *(" " msid-id) / " *"
+class SdpMsidSemanticAttributeList : public SdpAttribute
+{
+public:
+  SdpMsidSemanticAttributeList() : SdpAttribute(kMsidSemanticAttribute) {}
+
+  struct MsidSemantic
+  {
+    // TODO: Once we have some more of these, we might want to make an enum
+    std::string semantic;
+    std::vector<std::string> msids;
+  };
+
+  void
+  PushEntry(const std::string& semantic, const std::vector<std::string>& msids)
+  {
+    MsidSemantic value = {semantic, msids};
+    mMsidSemantics.push_back(value);
+  }
+
+  virtual void Serialize(std::ostream& os) const override;
+
+  std::vector<MsidSemantic> mMsidSemantics;
 };
 
 ///////////////////////////////////////////////////////////////////////////
@@ -651,9 +768,104 @@ public:
   {
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Candidate> mCandidates;
+};
+
+/*
+a=rid, draft-pthatcher-mmusic-rid-01
+
+   rid-syntax        = "a=rid:" rid-identifier SP rid-dir
+                       [ rid-pt-param-list / rid-param-list ]
+
+   rid-identifier    = 1*(alpha-numeric / "-" / "_")
+
+   rid-dir           = "send" / "recv"
+
+   rid-pt-param-list = SP rid-fmt-list *(";" rid-param)
+
+   rid-param-list    = SP rid-param *(";" rid-param)
+
+   rid-fmt-list      = "pt=" fmt *( "," fmt )
+                        ; fmt defined in {{RFC4566}}
+
+   rid-param         = rid-width-param
+                       / rid-height-param
+                       / rid-fps-param
+                       / rid-fs-param
+                       / rid-br-param
+                       / rid-pps-param
+                       / rid-depend-param
+                       / rid-param-other
+
+   rid-width-param   = "max-width" [ "=" int-param-val ]
+
+   rid-height-param  = "max-height" [ "=" int-param-val ]
+
+   rid-fps-param     = "max-fps" [ "=" int-param-val ]
+
+   rid-fs-param      = "max-fs" [ "=" int-param-val ]
+
+   rid-br-param      = "max-br" [ "=" int-param-val ]
+
+   rid-pps-param     = "max-pps" [ "=" int-param-val ]
+
+   rid-depend-param  = "depend=" rid-list
+
+   rid-param-other   = 1*(alpha-numeric / "-") [ "=" param-val ]
+
+   rid-list          = rid-identifier *( "," rid-identifier )
+
+   int-param-val     = 1*DIGIT
+
+   param-val         = *( %x20-58 / %x60-7E )
+                       ; Any printable character except semicolon
+*/
+class SdpRidAttributeList : public SdpAttribute
+{
+public:
+  explicit SdpRidAttributeList()
+    : SdpAttribute(kRidAttribute)
+  {}
+
+  struct Rid
+  {
+    Rid() :
+      direction(sdp::kSend)
+    {}
+
+    bool Parse(std::istream& is, std::string* error);
+    bool ParseParameters(std::istream& is, std::string* error);
+    bool ParseDepend(std::istream& is, std::string* error);
+    bool ParseFormats(std::istream& is, std::string* error);
+    void Serialize(std::ostream& os) const;
+    void SerializeParameters(std::ostream& os) const;
+    bool HasFormat(const std::string& format) const;
+    bool HasParameters() const
+    {
+      return !formats.empty() ||
+        constraints.maxWidth ||
+        constraints.maxHeight ||
+        constraints.maxFps ||
+        constraints.maxFs ||
+        constraints.maxBr ||
+        constraints.maxPps ||
+        !dependIds.empty();
+    }
+
+
+    std::string id;
+    sdp::Direction direction;
+    std::vector<uint16_t> formats; // Empty implies all
+    EncodingConstraints constraints;
+    std::vector<std::string> dependIds;
+  };
+
+  virtual void Serialize(std::ostream& os) const override;
+  bool PushEntry(const std::string& raw, std::string* error, size_t* errorPos);
+
+  std::vector<Rid> mRids;
 };
 
 ///////////////////////////////////////////////////////////////////////////
@@ -664,19 +876,29 @@ public:
 class SdpRtcpAttribute : public SdpAttribute
 {
 public:
-  explicit SdpRtcpAttribute(uint16_t port,
-                            sdp::NetType netType = sdp::kNetTypeNone,
-                            sdp::AddrType addrType = sdp::kAddrTypeNone,
-                            const std::string& address = "")
+  explicit SdpRtcpAttribute(uint16_t port)
+    : SdpAttribute(kRtcpAttribute),
+      mPort(port),
+      mNetType(sdp::kNetTypeNone),
+      mAddrType(sdp::kAddrTypeNone)
+  {}
+
+  SdpRtcpAttribute(uint16_t port,
+                   sdp::NetType netType,
+                   sdp::AddrType addrType,
+                   const std::string& address)
       : SdpAttribute(kRtcpAttribute),
         mPort(port),
         mNetType(netType),
         mAddrType(addrType),
         mAddress(address)
   {
+    MOZ_ASSERT(netType != sdp::kNetTypeNone);
+    MOZ_ASSERT(addrType != sdp::kAddrTypeNone);
+    MOZ_ASSERT(!address.empty());
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   uint16_t mPort;
   sdp::NetType mNetType;
@@ -747,7 +969,7 @@ public:
     mFeedbacks.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Feedback> mFeedbacks;
 };
@@ -819,7 +1041,7 @@ public:
     mRtpmaps.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   bool
   HasEntry(const std::string& pt) const
@@ -913,11 +1135,13 @@ public:
   class H264Parameters : public Parameters
   {
   public:
+    static const uint32_t kDefaultProfileLevelId = 0x420010;
+
     H264Parameters()
         : Parameters(SdpRtpmapAttributeList::kH264),
           packetization_mode(0),
           level_asymmetry_allowed(false),
-          profile_level_id(0),
+          profile_level_id(kDefaultProfileLevelId),
           max_mbps(0),
           max_fs(0),
           max_cpb(0),
@@ -928,13 +1152,13 @@ public:
     }
 
     virtual Parameters*
-    Clone() const MOZ_OVERRIDE
+    Clone() const override
     {
       return new H264Parameters(*this);
     }
 
     virtual void
-    Serialize(std::ostream& os) const MOZ_OVERRIDE
+    Serialize(std::ostream& os) const override
     {
       // Note: don't move this, since having an unconditional param up top
       // lets us avoid a whole bunch of conditional streaming of ';' below
@@ -984,22 +1208,23 @@ public:
     unsigned int max_br;
   };
 
+  // Also used for VP9 since they share parameters
   class VP8Parameters : public Parameters
   {
   public:
-    VP8Parameters()
-        : Parameters(SdpRtpmapAttributeList::kVP8), max_fs(0), max_fr(0)
+    explicit VP8Parameters(SdpRtpmapAttributeList::CodecType type)
+        : Parameters(type), max_fs(0), max_fr(0)
     {
     }
 
     virtual Parameters*
-    Clone() const MOZ_OVERRIDE
+    Clone() const override
     {
       return new VP8Parameters(*this);
     }
 
     virtual void
-    Serialize(std::ostream& os) const MOZ_OVERRIDE
+    Serialize(std::ostream& os) const override
     {
       // draft-ietf-payload-vp8-11 says these are mandatory, upper layer
       // needs to ensure they're set properly.
@@ -1011,14 +1236,46 @@ public:
     unsigned int max_fr;
   };
 
+  class OpusParameters : public Parameters
+  {
+  public:
+    enum { kDefaultMaxPlaybackRate = 48000,
+           kDefaultStereo = 0 };
+    OpusParameters() :
+      Parameters(SdpRtpmapAttributeList::kOpus),
+      maxplaybackrate(kDefaultMaxPlaybackRate),
+      stereo(kDefaultStereo)
+    {}
+
+    Parameters*
+    Clone() const override
+    {
+      return new OpusParameters(*this);
+    }
+
+    void
+    Serialize(std::ostream& os) const override
+    {
+      os << "maxplaybackrate=" << maxplaybackrate << ";"
+         << "stereo=" << stereo;
+    }
+
+    unsigned int maxplaybackrate;
+    unsigned int stereo;
+  };
+
   class Fmtp
   {
   public:
-    Fmtp(const std::string& aFormat, const std::string& aParametersString,
-         UniquePtr<Parameters> aParameters)
+    Fmtp(const std::string& aFormat, UniquePtr<Parameters> aParameters)
         : format(aFormat),
-          parameters_string(aParametersString),
           parameters(Move(aParameters))
+    {
+    }
+
+    Fmtp(const std::string& aFormat, const Parameters& aParameters)
+        : format(aFormat),
+          parameters(aParameters.Clone())
     {
     }
 
@@ -1029,34 +1286,28 @@ public:
     {
       if (this != &rhs) {
         format = rhs.format;
-        parameters_string = rhs.parameters_string;
         parameters.reset(rhs.parameters ? rhs.parameters->Clone() : nullptr);
       }
       return *this;
     }
 
     // The contract around these is as follows:
-    // * |format| and |parameters_string| are always set
     // * |parameters| is only set if we recognized the media type and had
     //   a subclass of Parameters to represent that type of parameters
     // * |parameters| is a best-effort representation; it might be missing
     //   stuff
-    // * if |parameters| is set, it determines the serialized form,
-    //   otherwise |parameters_string| is used
     // * Parameters::codec_type tells you the concrete class, eg
     //   kH264 -> H264Parameters
     std::string format;
-    std::string parameters_string;
     UniquePtr<Parameters> parameters;
   };
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   void
-  PushEntry(const std::string& format, const std::string& parameters_string,
-            UniquePtr<Parameters> parameters)
+  PushEntry(const std::string& format, UniquePtr<Parameters> parameters)
   {
-    mFmtps.push_back(Fmtp(format, parameters_string, Move(parameters)));
+    mFmtps.push_back(Fmtp(format, Move(parameters)));
   }
 
   std::vector<Fmtp> mFmtps;
@@ -1096,7 +1347,7 @@ public:
     mSctpmaps.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   bool
   HasEntry(const std::string& pt) const
@@ -1138,7 +1389,7 @@ public:
   {
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   Role mRole;
 };
@@ -1164,6 +1415,71 @@ inline std::ostream& operator<<(std::ostream& os, SdpSetupAttribute::Role r)
   }
   return os;
 }
+
+// sc-attr     = "a=simulcast:" 1*2( WSP sc-str-list ) [WSP sc-pause-list]
+// sc-str-list = sc-dir WSP sc-id-type "=" sc-alt-list *( ";" sc-alt-list )
+// sc-pause-list = "paused=" sc-alt-list
+// sc-dir      = "send" / "recv"
+// sc-id-type  = "pt" / "rid" / token
+// sc-alt-list = sc-id *( "," sc-id )
+// sc-id       = fmt / rid-identifier / token
+// ; WSP defined in [RFC5234]
+// ; fmt, token defined in [RFC4566]
+// ; rid-identifier defined in [I-D.pthatcher-mmusic-rid]
+class SdpSimulcastAttribute : public SdpAttribute
+{
+public:
+  SdpSimulcastAttribute() : SdpAttribute(kSimulcastAttribute) {}
+
+  void Serialize(std::ostream& os) const override;
+  bool Parse(std::istream& is, std::string* error);
+
+  class Version
+  {
+    public:
+      void Serialize(std::ostream& os) const;
+      bool IsSet() const
+      {
+        return !choices.empty();
+      }
+      bool Parse(std::istream& is, std::string* error);
+      bool GetChoicesAsFormats(std::vector<uint16_t>* formats) const;
+
+      std::vector<std::string> choices;
+  };
+
+  class Versions : public std::vector<Version>
+  {
+    public:
+      enum Type {
+        kPt,
+        kRid
+      };
+
+      Versions() : type(kRid) {}
+      void Serialize(std::ostream& os) const;
+      bool IsSet() const
+      {
+        if (empty()) {
+          return false;
+        }
+
+        for (const Version& version : *this) {
+          if (version.IsSet()) {
+            return true;
+          }
+        }
+
+        return false;
+      }
+
+      bool Parse(std::istream& is, std::string* error);
+      Type type;
+  };
+
+  Versions sendVersions;
+  Versions recvVersions;
+};
 
 ///////////////////////////////////////////////////////////////////////////
 // a=ssrc, RFC5576
@@ -1197,7 +1513,7 @@ public:
     mSsrcs.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<Ssrc> mSsrcs;
 };
@@ -1234,7 +1550,7 @@ public:
     mSsrcGroups.push_back(value);
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::vector<SsrcGroup> mSsrcGroups;
 };
@@ -1306,7 +1622,7 @@ class SdpFlagAttribute : public SdpAttribute
 public:
   explicit SdpFlagAttribute(AttributeType type) : SdpAttribute(type) {}
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 };
 
 // Used for any other kind of single-valued attribute not otherwise specialized
@@ -1318,7 +1634,7 @@ public:
   {
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   std::string mValue;
 };
@@ -1332,7 +1648,7 @@ public:
   {
   }
 
-  virtual void Serialize(std::ostream& os) const MOZ_OVERRIDE;
+  virtual void Serialize(std::ostream& os) const override;
 
   uint32_t mValue;
 };

@@ -81,7 +81,7 @@ GMPRecordImpl::WriteComplete(GMPErr aStatus)
 GMPErr
 GMPRecordImpl::Close()
 {
-  nsRefPtr<GMPRecordImpl> kungfuDeathGrip(this);
+  RefPtr<GMPRecordImpl> kungfuDeathGrip(this);
   // Delete our self reference.
   Release();
   mOwner->Close(this->Name());
@@ -114,7 +114,7 @@ GMPStorageChild::CreateRecord(const nsCString& aRecordName,
     return GMPRecordInUse;
   }
 
-  nsRefPtr<GMPRecordImpl> record(new GMPRecordImpl(this, aRecordName, aClient));
+  RefPtr<GMPRecordImpl> record(new GMPRecordImpl(this, aRecordName, aClient));
   mRecords.Put(aRecordName, record); // Addrefs
 
   // The GMPRecord holds a self reference until the GMP calls Close() on
@@ -136,7 +136,7 @@ already_AddRefed<GMPRecordImpl>
 GMPStorageChild::GetRecord(const nsCString& aRecordName)
 {
   MonitorAutoLock lock(mMonitor);
-  nsRefPtr<GMPRecordImpl> record;
+  RefPtr<GMPRecordImpl> record;
   mRecords.Get(aRecordName, getter_AddRefs(record));
   return record.forget();
 }
@@ -235,7 +235,7 @@ GMPStorageChild::RecvOpenComplete(const nsCString& aRecordName,
   if (mShutdown) {
     return true;
   }
-  nsRefPtr<GMPRecordImpl> record = GetRecord(aRecordName);
+  RefPtr<GMPRecordImpl> record = GetRecord(aRecordName);
   if (!record) {
     // Not fatal.
     return true;
@@ -247,12 +247,12 @@ GMPStorageChild::RecvOpenComplete(const nsCString& aRecordName,
 bool
 GMPStorageChild::RecvReadComplete(const nsCString& aRecordName,
                                   const GMPErr& aStatus,
-                                  const InfallibleTArray<uint8_t>& aBytes)
+                                  InfallibleTArray<uint8_t>&& aBytes)
 {
   if (mShutdown) {
     return true;
   }
-  nsRefPtr<GMPRecordImpl> record = GetRecord(aRecordName);
+  RefPtr<GMPRecordImpl> record = GetRecord(aRecordName);
   if (!record) {
     // Not fatal.
     return true;
@@ -268,7 +268,7 @@ GMPStorageChild::RecvWriteComplete(const nsCString& aRecordName,
   if (mShutdown) {
     return true;
   }
-  nsRefPtr<GMPRecordImpl> record = GetRecord(aRecordName);
+  RefPtr<GMPRecordImpl> record = GetRecord(aRecordName);
   if (!record) {
     // Not fatal.
     return true;
@@ -305,7 +305,7 @@ public:
     mRecordNames.Sort();
   }
 
-  virtual GMPErr GetName(const char** aOutName, uint32_t* aOutNameLength) MOZ_OVERRIDE {
+  GMPErr GetName(const char** aOutName, uint32_t* aOutNameLength) override {
     if (!aOutName || !aOutNameLength) {
       return GMPInvalidArgErr;
     }
@@ -317,7 +317,7 @@ public:
     return GMPNoErr;
   }
 
-  virtual GMPErr NextRecord() MOZ_OVERRIDE {
+  GMPErr NextRecord() override {
     if (mIndex < mRecordNames.Length()) {
       mIndex++;
     }
@@ -325,7 +325,7 @@ public:
                                             : GMPEndOfEnumeration;
   }
 
-  virtual void Close() MOZ_OVERRIDE {
+  void Close() override {
     delete this;
   }
 
@@ -335,7 +335,7 @@ private:
 };
 
 bool
-GMPStorageChild::RecvRecordNames(const InfallibleTArray<nsCString>& aRecordNames,
+GMPStorageChild::RecvRecordNames(InfallibleTArray<nsCString>&& aRecordNames,
                                  const GMPErr& aStatus)
 {
   RecordIteratorContext ctx;

@@ -21,33 +21,36 @@ class MediaOmxCommonReader;
 class MediaOmxCommonDecoder : public MediaDecoder
 {
 public:
-  MediaOmxCommonDecoder();
+  explicit MediaOmxCommonDecoder(MediaDecoderOwner* aOwner);
 
-  virtual void FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
-                                bool aRestoredFromDromant);
-  virtual void ChangeState(PlayState aState);
-  virtual void ApplyStateToStateMachine(PlayState aState);
-  virtual void SetVolume(double aVolume);
-  virtual void PlaybackPositionChanged();
-  virtual void UpdateReadyStateForData();
-  virtual void SetElementVisibility(bool aIsVisible);
-  virtual void SetPlatformCanOffloadAudio(bool aCanOffloadAudio);
-  virtual bool CheckDecoderCanOffloadAudio();
-  virtual void AddOutputStream(ProcessedMediaStream* aStream,
-                               bool aFinishWhenEnded);
-  virtual void SetPlaybackRate(double aPlaybackRate);
+  void FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
+                        MediaDecoderEventVisibility aEventVisibility) override;
+  void ChangeState(PlayState aState) override;
+  void CallSeek(const SeekTarget& aTarget) override;
+  void SetVolume(double aVolume) override;
+  int64_t CurrentPosition() override;
+  MediaDecoderOwner::NextFrameStatus NextFrameStatus() override;
+  void SetElementVisibility(bool aIsVisible) override;
+  void SetPlatformCanOffloadAudio(bool aCanOffloadAudio) override;
+  void AddOutputStream(ProcessedMediaStream* aStream,
+                       bool aFinishWhenEnded) override;
+  void SetPlaybackRate(double aPlaybackRate) override;
 
   void AudioOffloadTearDown();
 
-  virtual MediaDecoderStateMachine* CreateStateMachine();
+  MediaDecoderStateMachine* CreateStateMachine() override;
 
   virtual MediaOmxCommonReader* CreateReader() = 0;
   virtual MediaDecoderStateMachine* CreateStateMachineFromReader(MediaOmxCommonReader* aReader) = 0;
+
+  void NotifyOffloadPlayerPositionChanged() { UpdateLogicalPosition(); }
 
 protected:
   virtual ~MediaOmxCommonDecoder();
   void PauseStateMachine();
   void ResumeStateMachine();
+  bool CheckDecoderCanOffloadAudio();
+  void DisableStateMachineAudioOffloading();
 
   MediaOmxCommonReader* mReader;
 
@@ -62,6 +65,9 @@ protected:
   // Set when offload playback of current track fails in the middle and need to
   // fallback to state machine
   bool mFallbackToStateMachine;
+
+  // True if the media element is captured.
+  bool mIsCaptured;
 };
 
 } // namespace mozilla

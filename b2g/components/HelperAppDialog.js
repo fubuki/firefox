@@ -33,21 +33,13 @@ HelperAppLauncherDialog.prototype = {
     aLauncher.saveToDisk(null, false);
   },
 
-  promptForSaveToFile: function(aLauncher,
-                                aContext,
-                                aDefaultFile,
-                                aSuggestedFileExt,
-                                aForcePrompt) {
-    throw Cr.NS_ERROR_NOT_AVAILABLE;
-  },
-
   promptForSaveToFileAsync: function(aLauncher,
                                      aContext,
                                      aDefaultFile,
                                      aSuggestedFileExt,
                                      aForcePrompt) {
     // Retrieve the user's default download directory.
-    Task.spawn(function() {
+    Task.spawn(function*() {
       let file = null;
       try {
         let defaultFolder = yield Downloads.getPreferredDownloadsDirectory();
@@ -97,7 +89,7 @@ HelperAppLauncherDialog.prototype = {
           aLocalFile.leafName = aLocalFile.leafName.replace(/^(.*\()\d+\)/, "$1" + (collisionCount+1) + ")");
         }
       }
-      aLocalFile.create(Ci.nsIFile.NORMAL_FILE_TYPE, 0600);
+      aLocalFile.create(Ci.nsIFile.NORMAL_FILE_TYPE, 0o600);
     }
     catch (e) {
       dump("*** exception in makeFileUnique: " + e + "\n");
@@ -108,7 +100,7 @@ HelperAppLauncherDialog.prototype = {
       if (aLocalFile.leafName == "" || aLocalFile.isDirectory()) {
         aLocalFile.append("unnamed");
         if (aLocalFile.exists())
-          aLocalFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0600);
+          aLocalFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0o600);
       }
     }
   },

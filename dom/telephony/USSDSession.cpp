@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,7 +23,8 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(USSDSession)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-USSDSession::USSDSession(nsPIDOMWindow* aWindow, nsITelephonyService* aService,
+USSDSession::USSDSession(nsPIDOMWindowInner* aWindow,
+                         nsITelephonyService* aService,
                          uint32_t aServiceId)
   : mWindow(aWindow), mService(aService), mServiceId(aServiceId)
 {
@@ -33,16 +34,16 @@ USSDSession::~USSDSession()
 {
 }
 
-nsPIDOMWindow*
+nsPIDOMWindowInner*
 USSDSession::GetParentObject() const
 {
   return mWindow;
 }
 
 JSObject*
-USSDSession::WrapObject(JSContext* aCx)
+USSDSession::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return USSDSessionBinding::Wrap(aCx, this);
+  return USSDSessionBinding::Wrap(aCx, this, aGivenProto);
 }
 
 already_AddRefed<Promise>
@@ -59,7 +60,7 @@ USSDSession::CreatePromise(ErrorResult& aRv)
     return nullptr;
   }
 
-  nsRefPtr<Promise> promise = Promise::Create(global, aRv);
+  RefPtr<Promise> promise = Promise::Create(global, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -73,7 +74,7 @@ already_AddRefed<USSDSession>
 USSDSession::Constructor(const GlobalObject& aGlobal, uint32_t aServiceId,
                          ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
@@ -86,14 +87,14 @@ USSDSession::Constructor(const GlobalObject& aGlobal, uint32_t aServiceId,
     return nullptr;
   }
 
-  nsRefPtr<USSDSession> session = new USSDSession(window, ril, aServiceId);
+  RefPtr<USSDSession> session = new USSDSession(window, ril, aServiceId);
   return session.forget();
 }
 
 already_AddRefed<Promise>
 USSDSession::Send(const nsAString& aUssd, ErrorResult& aRv)
 {
-  nsRefPtr<Promise> promise = CreatePromise(aRv);
+  RefPtr<Promise> promise = CreatePromise(aRv);
   if (!promise) {
     return nullptr;
   }
@@ -111,7 +112,7 @@ USSDSession::Send(const nsAString& aUssd, ErrorResult& aRv)
 already_AddRefed<Promise>
 USSDSession::Cancel(ErrorResult& aRv)
 {
-  nsRefPtr<Promise> promise = CreatePromise(aRv);
+  RefPtr<Promise> promise = CreatePromise(aRv);
   if (!promise) {
     return nullptr;
   }

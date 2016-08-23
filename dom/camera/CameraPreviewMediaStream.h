@@ -21,7 +21,7 @@ public:
   }
 
   virtual void
-  DispatchToMainThreadAfterStreamStateUpdate(already_AddRefed<nsIRunnable> aRunnable) MOZ_OVERRIDE;
+  DispatchToMainThreadAfterStreamStateUpdate(already_AddRefed<nsIRunnable> aRunnable) override;
 
 protected:
   ~FakeMediaStreamGraph()
@@ -35,28 +35,31 @@ protected:
  * A camera preview requests no delay and no buffering stream,
  * but the SourceMediaStream does not support it.
  */
-class CameraPreviewMediaStream : public MediaStream
+class CameraPreviewMediaStream : public ProcessedMediaStream
 {
   typedef mozilla::layers::Image Image;
 
 public:
   explicit CameraPreviewMediaStream(DOMMediaStream* aWrapper);
 
-  virtual void AddAudioOutput(void* aKey) MOZ_OVERRIDE;
-  virtual void SetAudioOutputVolume(void* aKey, float aVolume) MOZ_OVERRIDE;
-  virtual void RemoveAudioOutput(void* aKey) MOZ_OVERRIDE;
-  virtual void AddVideoOutput(VideoFrameContainer* aContainer) MOZ_OVERRIDE;
-  virtual void RemoveVideoOutput(VideoFrameContainer* aContainer) MOZ_OVERRIDE;
-  virtual void ChangeExplicitBlockerCount(int32_t aDelta) MOZ_OVERRIDE;
-  virtual void AddListener(MediaStreamListener* aListener) MOZ_OVERRIDE;
-  virtual void RemoveListener(MediaStreamListener* aListener) MOZ_OVERRIDE;
-  virtual void Destroy() MOZ_OVERRIDE;
+  virtual void AddAudioOutput(void* aKey) override;
+  virtual void SetAudioOutputVolume(void* aKey, float aVolume) override;
+  virtual void RemoveAudioOutput(void* aKey) override;
+  virtual void AddVideoOutput(VideoFrameContainer* aContainer) override;
+  virtual void RemoveVideoOutput(VideoFrameContainer* aContainer) override;
+  virtual void Suspend() override {}
+  virtual void Resume() override {}
+  virtual void AddListener(MediaStreamListener* aListener) override;
+  virtual void RemoveListener(MediaStreamListener* aListener) override;
+  virtual void Destroy() override;
   void OnPreviewStateChange(bool aActive);
 
   void Invalidate();
 
+  void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) override;
+
   // Call these on any thread.
-  void SetCurrentFrame(const gfxIntSize& aIntrinsicSize, Image* aImage);
+  void SetCurrentFrame(const gfx::IntSize& aIntrinsicSize, Image* aImage);
   void ClearCurrentFrame();
   void RateLimit(bool aLimit);
 
@@ -69,9 +72,9 @@ protected:
   uint32_t mDiscardedFrames;
   bool mRateLimit;
   bool mTrackCreated;
-  nsRefPtr<FakeMediaStreamGraph> mFakeMediaStreamGraph;
+  RefPtr<FakeMediaStreamGraph> mFakeMediaStreamGraph;
 };
 
-}
+} // namespace mozilla
 
 #endif // DOM_CAMERA_CAMERAPREVIEWMEDIASTREAM_H

@@ -8,7 +8,6 @@
 #define VibrancyManager_h
 
 #include "mozilla/Assertions.h"
-#include "mozilla/TypedEnum.h"
 #include "nsClassHashtable.h"
 #include "nsRegion.h"
 #include "nsTArray.h"
@@ -18,15 +17,17 @@
 @class NSColor;
 @class NSView;
 class nsChildView;
-class nsIntRegion;
 
 namespace mozilla {
 
-MOZ_BEGIN_ENUM_CLASS(VibrancyType)
+enum class VibrancyType {
   LIGHT,
   DARK,
-  TOOLTIP
-MOZ_END_ENUM_CLASS(VibrancyType)
+  TOOLTIP,
+  MENU,
+  HIGHLIGHTED_MENUITEM,
+  SHEET
+};
 
 /**
  * VibrancyManager takes care of updating the vibrant regions of a window.
@@ -67,7 +68,8 @@ public:
    * @param aType   The vibrancy type to use in the region.
    * @param aRegion The vibrant area, in device pixels.
    */
-  void UpdateVibrantRegion(VibrancyType aType, const nsIntRegion& aRegion);
+  void UpdateVibrantRegion(VibrancyType aType,
+                           const LayoutDeviceIntRegion& aRegion);
 
   /**
    * Clear the vibrant areas that we know about.
@@ -101,7 +103,7 @@ public:
   // The following are only public because otherwise ClearVibrantRegionFunc
   // can't see them.
   struct VibrantRegion {
-    nsIntRegion region;
+    LayoutDeviceIntRegion region;
     nsTArray<NSView*> effectViews;
   };
   void ClearVibrantRegion(const VibrantRegion& aVibrantRegion) const;
@@ -114,6 +116,6 @@ protected:
   nsClassHashtable<nsUint32HashKey, VibrantRegion> mVibrantRegions;
 };
 
-}
+} // namespace mozilla
 
 #endif // VibrancyManager_h

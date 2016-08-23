@@ -12,12 +12,15 @@ const { setInterval, clearInterval } = require('../timers');
 const { getTabs, closeTab } = require("../tabs/utils");
 const { windows: getWindows } = require("../window/utils");
 const { close: closeWindow } = require("../window/helpers");
+const { isGenerator } = require("../lang/type");
+const { env } = require("../system/environment");
+const { Task } = require("resource://gre/modules/Task.jsm");
 
-function getTestNames (exports)
-  Object.keys(exports).filter(name => /^test/.test(name))
+const getTestNames = (exports) =>
+  Object.keys(exports).filter(name => /^test/.test(name));
 
-function isTestAsync (fn) fn.length > 1
-function isHelperAsync (fn) fn.length > 2
+const isTestAsync = ({length}) => length > 1;
+const isHelperAsync = ({length}) => length > 2;
 
 /*
  * Takes an `exports` object of a test file and a function `beforeFn`
@@ -29,16 +32,37 @@ function isHelperAsync (fn) fn.length > 2
 function before (exports, beforeFn) {
   getTestNames(exports).map(name => {
     let testFn = exports[name];
-    if (!isTestAsync(testFn) && !isHelperAsync(beforeFn)) {
-      exports[name] = function (assert) {
+
+    // GENERATOR TESTS
+    if (isGenerator(testFn) && isGenerator(beforeFn)) {
+      exports[name] = function*(assert) {
+        yield Task.spawn(beforeFn.bind(null, name, assert));
+        yield Task.spawn(testFn.bind(null, assert));
+      }
+    }
+    else if (isGenerator(testFn) && !isHelperAsync(beforeFn)) {
+      exports[name] = function*(assert) {
         beforeFn(name, assert);
+        yield Task.spawn(testFn.bind(null, assert));
+      }
+    }
+    else if (isGenerator(testFn) && isHelperAsync(beforeFn)) {
+      exports[name] = function*(assert) {
+        yield new Promise(resolve => beforeFn(name, assert, resolve));
+        yield Task.spawn(testFn.bind(null, assert));
+      }
+    }
+    // SYNC TESTS
+    else if (!isTestAsync(testFn) && isGenerator(beforeFn)) {
+      exports[name] = function*(assert) {
+        yield Task.spawn(beforeFn.bind(null, name, assert));
         testFn(assert);
       };
     }
-    else if (isTestAsync(testFn) && !isHelperAsync(beforeFn)) {
-      exports[name] = function (assert, done) {
+    else if (!isTestAsync(testFn) && !isHelperAsync(beforeFn)) {
+      exports[name] = function (assert) {
         beforeFn(name, assert);
-        testFn(assert, done);
+        testFn(assert);
       };
     }
     else if (!isTestAsync(testFn) && isHelperAsync(beforeFn)) {
@@ -48,7 +72,21 @@ function before (exports, beforeFn) {
           done();
         });
       };
-    } else if (isTestAsync(testFn) && isHelperAsync(beforeFn)) {
+    }
+    // ASYNC TESTS
+    else if (isTestAsync(testFn) && isGenerator(beforeFn)) {
+      exports[name] = function*(assert) {
+        yield Task.spawn(beforeFn.bind(null, name, assert));
+        yield new Promise(resolve => testFn(assert, resolve));
+      };
+    }
+    else if (isTestAsync(testFn) && !isHelperAsync(beforeFn)) {
+      exports[name] = function (assert, done) {
+        beforeFn(name, assert);
+        testFn(assert, done);
+      };
+    }
+    else if (isTestAsync(testFn) && isHelperAsync(beforeFn)) {
       exports[name] = function (assert, done) {
         beforeFn(name, assert, () => {
           testFn(assert, done);
@@ -69,18 +107,37 @@ exports.before = before;
 function after (exports, afterFn) {
   getTestNames(exports).map(name => {
     let testFn = exports[name];
-    if (!isTestAsync(testFn) && !isHelperAsync(afterFn)) {
+
+    // GENERATOR TESTS
+    if (isGenerator(testFn) && isGenerator(afterFn)) {
+      exports[name] = function*(assert) {
+        yield Task.spawn(testFn.bind(null, assert));
+        yield Task.spawn(afterFn.bind(null, name, assert));
+      }
+    }
+    else if (isGenerator(testFn) && !isHelperAsync(afterFn)) {
+      exports[name] = function*(assert) {
+        yield Task.spawn(testFn.bind(null, assert));
+        afterFn(name, assert);
+      }
+    }
+    else if (isGenerator(testFn) && isHelperAsync(afterFn)) {
+      exports[name] = function*(assert) {
+        yield Task.spawn(testFn.bind(null, assert));
+        yield new Promise(resolve => afterFn(name, assert, resolve));
+      }
+    }
+    // SYNC TESTS
+    else if (!isTestAsync(testFn) && isGenerator(afterFn)) {
+      exports[name] = function*(assert) {
+        testFn(assert);
+        yield Task.spawn(afterFn.bind(null, name, assert));
+      };
+    }
+    else if (!isTestAsync(testFn) && !isHelperAsync(afterFn)) {
       exports[name] = function (assert) {
         testFn(assert);
         afterFn(name, assert);
-      };
-    }
-    else if (isTestAsync(testFn) && !isHelperAsync(afterFn)) {
-      exports[name] = function (assert, done) {
-        testFn(assert, () => {
-          afterFn(name, assert);
-          done();
-        });
       };
     }
     else if (!isTestAsync(testFn) && isHelperAsync(afterFn)) {
@@ -88,11 +145,24 @@ function after (exports, afterFn) {
         testFn(assert);
         afterFn(name, assert, done);
       };
-    } else if (isTestAsync(testFn) && isHelperAsync(afterFn)) {
-      exports[name] = function (assert, done) {
-        testFn(assert, () => {
-          afterFn(name, assert, done);
-        });
+    }
+    // ASYNC TESTS
+    else if (isTestAsync(testFn) && isGenerator(afterFn)) {
+      exports[name] = function*(assert) {
+        yield new Promise(resolve => testFn(assert, resolve));
+        yield Task.spawn(afterFn.bind(null, name, assert));
+      };
+    }
+    else if (isTestAsync(testFn) && !isHelperAsync(afterFn)) {
+      exports[name] = function*(assert) {
+        yield new Promise(resolve => testFn(assert, resolve));
+        afterFn(name, assert);
+      };
+    }
+    else if (isTestAsync(testFn) && isHelperAsync(afterFn)) {
+      exports[name] = function*(assert) {
+        yield new Promise(resolve => testFn(assert, resolve));
+        yield new Promise(resolve => afterFn(name, assert, resolve));
       };
     }
   });
@@ -110,7 +180,7 @@ function waitUntil (predicate, delay) {
 }
 exports.waitUntil = waitUntil;
 
-let cleanUI = function cleanUI() {
+var cleanUI = function cleanUI() {
   let { promise, resolve } = defer();
 
   let windows = getWindows(null, { includePrivate: true });
@@ -125,3 +195,5 @@ let cleanUI = function cleanUI() {
   return promise;
 }
 exports.cleanUI = cleanUI;
+
+exports.isTravisCI = ("TRAVIS" in env && "CI" in env);

@@ -72,10 +72,10 @@ FRAME_STATE_BIT(Generic, 3, NS_FRAME_ANONYMOUSCONTENTCREATOR_CONTENT)
 FRAME_STATE_BIT(Generic, 4, NS_FRAME_EXTERNAL_REFERENCE)
 
 // If this bit is set, this frame or one of its descendants has a
-// percentage height that depends on an ancestor of this frame.
+// percentage block-size that depends on an ancestor of this frame.
 // (Or it did at one point in the past, since we don't necessarily clear
 // the bit when it's no longer needed; it's an optimization.)
-FRAME_STATE_BIT(Generic, 5, NS_FRAME_CONTAINS_RELATIVE_HEIGHT)
+FRAME_STATE_BIT(Generic, 5, NS_FRAME_CONTAINS_RELATIVE_BSIZE)
 
 // If this bit is set, then the frame corresponds to generated content
 FRAME_STATE_BIT(Generic, 6, NS_FRAME_GENERATED_CONTENT)
@@ -175,6 +175,17 @@ FRAME_STATE_BIT(Generic, 32, NS_FRAME_IS_PUSHED_FLOAT)
 // This bit acts as a loop flag for recursive paint server drawing.
 FRAME_STATE_BIT(Generic, 33, NS_FRAME_DRAWING_AS_PAINTSERVER)
 
+// Intrinsic ISize depending on the frame's BSize is rare but possible.
+// This flag indicates that the frame has (or once had) a descendant in that
+// situation (possibly the frame itself).
+FRAME_STATE_BIT(Generic, 34, NS_FRAME_DESCENDANT_INTRINSIC_ISIZE_DEPENDS_ON_BSIZE)
+
+// A flag that tells us we can take the common path with respect to style
+// properties for this frame when building event regions. This flag is cleared
+// when any styles are changed and then we recompute it on the next build
+// of the event regions.
+FRAME_STATE_BIT(Generic, 35, NS_FRAME_SIMPLE_EVENT_REGIONS)
+
 // Frame is a display root and the retained layer tree needs to be updated
 // at the next paint via display list construction.
 // Only meaningful for display roots, so we don't really need a global state
@@ -187,10 +198,10 @@ FRAME_STATE_BIT(Generic, 37, NS_FRAME_HAS_ABSPOS_CHILDREN)
 // A display item for this frame has been painted as part of a PaintedLayer.
 FRAME_STATE_BIT(Generic, 38, NS_FRAME_PAINTED_THEBES)
 
-// Frame is or is a descendant of something with a fixed height, unless that
-// ancestor is a body or html element, and has no closer ancestor that is
+// Frame is or is a descendant of something with a fixed block-size, unless
+// that ancestor is a body or html element, and has no closer ancestor that is
 // overflow:auto or overflow:scroll.
-FRAME_STATE_BIT(Generic, 39, NS_FRAME_IN_CONSTRAINED_HEIGHT)
+FRAME_STATE_BIT(Generic, 39, NS_FRAME_IN_CONSTRAINED_BSIZE)
 
 // This is only set during painting
 FRAME_STATE_BIT(Generic, 40, NS_FRAME_FORCE_DISPLAY_LIST_DESCEND_INTO)
@@ -217,6 +228,10 @@ FRAME_STATE_BIT(Generic, 44, NS_FRAME_MAY_HAVE_GENERATED_CONTENT)
 // alpha children. With BasicLayers we avoid creating these, so we mark
 // the frames for future reference.
 FRAME_STATE_BIT(Generic, 45, NS_FRAME_NO_COMPONENT_ALPHA)
+
+// This bit indicates that we're tracking visibility for this frame, and that
+// the frame has a VisibilityStateProperty property.
+FRAME_STATE_BIT(Generic, 46, NS_FRAME_VISIBILITY_IS_TRACKED)
 
 // The frame is a descendant of SVGTextFrame and is thus used for SVG
 // text layout.
@@ -292,6 +307,20 @@ FRAME_STATE_GROUP(FlexContainer, nsFlexContainerFrame)
 // Set for a flex container whose children have been reordered due to 'order'.
 // (Means that we have to be more thorough about checking them for sortedness.)
 FRAME_STATE_BIT(FlexContainer, 20, NS_STATE_FLEX_CHILDREN_REORDERED)
+
+// == Frame state bits that apply to grid container frames ====================
+
+FRAME_STATE_GROUP(GridContainer, nsGridContainerFrame)
+
+// True iff the normal flow children are already in CSS 'order' in the
+// order they occur in the child frame list.
+FRAME_STATE_BIT(GridContainer, 20, NS_STATE_GRID_NORMAL_FLOW_CHILDREN_IN_CSS_ORDER)
+
+// True iff some first-in-flow in-flow children were pushed.
+// Note that those child frames may have been removed without this bit
+// being updated for performance reasons, so code shouldn't depend on
+// actually finding any pushed items when this bit is set.
+FRAME_STATE_BIT(GridContainer, 21, NS_STATE_GRID_DID_PUSH_ITEMS)
 
 // == Frame state bits that apply to SVG frames ===============================
 
@@ -407,6 +436,9 @@ FRAME_STATE_BIT(Text, 32, TEXT_IS_IN_TOKEN_MATHML)
 FRAME_STATE_BIT(Text, 60, TEXT_IN_UNINFLATED_TEXTRUN_USER_DATA)
 
 FRAME_STATE_BIT(Text, 61, TEXT_HAS_FONT_INFLATION)
+
+// Set when this text frame contains nothing that will actually render
+FRAME_STATE_BIT(Text, 62, TEXT_NO_RENDERED_GLYPHS)
 
 // Whether this frame is cached in the Offset Frame Cache
 // (OffsetToFrameProperty)
@@ -541,13 +573,14 @@ FRAME_STATE_BIT(Placeholder, 20, PLACEHOLDER_FOR_FLOAT)
 FRAME_STATE_BIT(Placeholder, 21, PLACEHOLDER_FOR_ABSPOS)
 FRAME_STATE_BIT(Placeholder, 22, PLACEHOLDER_FOR_FIXEDPOS)
 FRAME_STATE_BIT(Placeholder, 23, PLACEHOLDER_FOR_POPUP)
+FRAME_STATE_BIT(Placeholder, 24, PLACEHOLDER_FOR_TOPLAYER)
 
 
 // == Frame state bits that apply to table cell frames ========================
 
 FRAME_STATE_GROUP(TableCell, nsTableCellFrame)
 
-FRAME_STATE_BIT(TableCell, 28, NS_TABLE_CELL_HAS_PCT_OVER_HEIGHT)
+FRAME_STATE_BIT(TableCell, 28, NS_TABLE_CELL_HAS_PCT_OVER_BSIZE)
 FRAME_STATE_BIT(TableCell, 29, NS_TABLE_CELL_HAD_SPECIAL_REFLOW)
 FRAME_STATE_BIT(TableCell, 31, NS_TABLE_CELL_CONTENT_EMPTY)
 
@@ -576,10 +609,10 @@ FRAME_STATE_BIT(TableRowAndRowGroup, 28, NS_REPEATED_ROW_OR_ROWGROUP)
 FRAME_STATE_GROUP(TableRow, nsTableRowFrame)
 
 // Indicates whether this row has any cells that have
-// non-auto-height and rowspan=1
-FRAME_STATE_BIT(TableRow, 29, NS_ROW_HAS_CELL_WITH_STYLE_HEIGHT)
+// non-auto-bsize and rowspan=1
+FRAME_STATE_BIT(TableRow, 29, NS_ROW_HAS_CELL_WITH_STYLE_BSIZE)
 
-FRAME_STATE_BIT(TableRow, 30, NS_TABLE_ROW_HAS_UNPAGINATED_HEIGHT)
+FRAME_STATE_BIT(TableRow, 30, NS_TABLE_ROW_HAS_UNPAGINATED_BSIZE)
 
 
 // == Frame state bits that apply to table row group frames ===================
@@ -587,11 +620,14 @@ FRAME_STATE_BIT(TableRow, 30, NS_TABLE_ROW_HAS_UNPAGINATED_HEIGHT)
 FRAME_STATE_GROUP(TableRowGroup, nsTableRowGroupFrame)
 
 FRAME_STATE_BIT(TableRowGroup, 27, NS_ROWGROUP_HAS_ROW_CURSOR)
-FRAME_STATE_BIT(TableRowGroup, 30, NS_ROWGROUP_HAS_STYLE_HEIGHT)
+FRAME_STATE_BIT(TableRowGroup, 30, NS_ROWGROUP_HAS_STYLE_BSIZE)
 
 // thead or tfoot should be repeated on every printed page
 FRAME_STATE_BIT(TableRowGroup, 31, NS_ROWGROUP_REPEATABLE)
 
+FRAME_STATE_GROUP(Table, nsTableFrame)
+
+FRAME_STATE_BIT(Table, 28, NS_TABLE_PART_HAS_FIXED_BACKGROUND)
 
 #ifdef DEFINED_FRAME_STATE_GROUP
 #undef DEFINED_FRAME_STATE_GROUP

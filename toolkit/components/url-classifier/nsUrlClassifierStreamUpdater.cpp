@@ -10,27 +10,29 @@
 #include "nsIUploadChannel.h"
 #include "nsIURI.h"
 #include "nsIUrlClassifierDBService.h"
+#include "nsNetUtil.h"
 #include "nsStreamUtils.h"
 #include "nsStringStream.h"
 #include "nsToolkitCompsCID.h"
 #include "nsUrlClassifierStreamUpdater.h"
-#include "prlog.h"
+#include "mozilla/BasePrincipal.h"
+#include "mozilla/ErrorNames.h"
+#include "mozilla/Logging.h"
 #include "nsIInterfaceRequestor.h"
 #include "mozilla/LoadContext.h"
+#include "mozilla/Telemetry.h"
 #include "nsContentUtils.h"
 
 static const char* gQuitApplicationMessage = "quit-application";
 
+// Limit the list file size to 32mb
+const uint32_t MAX_FILE_SIZE = (32 * 1024 * 1024);
+
 #undef LOG
 
 // NSPR_LOG_MODULES=UrlClassifierStreamUpdater:5
-#if defined(PR_LOGGING)
-static const PRLogModuleInfo *gUrlClassifierStreamUpdaterLog = nullptr;
-#define LOG(args) PR_LOG(gUrlClassifierStreamUpdaterLog, PR_LOG_DEBUG, args)
-#else
-#define LOG(args)
-#endif
-
+static mozilla::LazyLogModule gUrlClassifierStreamUpdaterLog("UrlClassifierStreamUpdater");
+#define LOG(args) MOZ_LOG(gUrlClassifierStreamUpdaterLog, mozilla::LogLevel::Debug, args)
 
 // This class does absolutely nothing, except pass requests onto the DBService.
 
@@ -42,10 +44,6 @@ nsUrlClassifierStreamUpdater::nsUrlClassifierStreamUpdater()
   : mIsUpdating(false), mInitialized(false), mDownloadError(false),
     mBeganStream(false), mChannel(nullptr)
 {
-#if defined(PR_LOGGING)
-  if (!gUrlClassifierStreamUpdaterLog)
-    gUrlClassifierStreamUpdaterLog = PR_NewLogModule("UrlClassifierStreamUpdater");
-#endif
   LOG(("nsUrlClassifierStreamUpdater init [this=%p]", this));
 }
 
@@ -97,13 +95,16 @@ nsUrlClassifierStreamUpdater::FetchUpdate(nsIURI *aUpdateUrl,
   rv = NS_NewChannel(getter_AddRefs(mChannel),
                      aUpdateUrl,
                      nsContentUtils::GetSystemPrincipal(),
-                     nsILoadInfo::SEC_NORMAL,
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER,
                      nullptr,  // aLoadGroup
                      this,     // aInterfaceRequestor
                      loadFlags);
 
   NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsILoadInfo> loadInfo = mChannel->GetLoadInfo();
+  loadInfo->SetOriginAttributes(mozilla::NeckoOriginAttributes(NECKO_SAFEBROWSING_APP_ID, false));
 
   mBeganStream = false;
 
@@ -139,7 +140,7 @@ nsUrlClassifierStreamUpdater::FetchUpdate(nsIURI *aUpdateUrl,
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Make the request.
-  rv = mChannel->AsyncOpen(this, nullptr);
+  rv = mChannel->AsyncOpen2(this);
   NS_ENSURE_SUCCESS(rv, rv);
 
   mStreamTable = aStreamTable;
@@ -445,6 +446,114 @@ nsUrlClassifierStreamUpdater::AddRequestBody(const nsACString &aRequestBody)
   return NS_OK;
 }
 
+// Map the HTTP response code to a Telemetry bucket
+static uint32_t HTTPStatusToBucket(uint32_t status)
+{
+  uint32_t statusBucket;
+  switch (status) {
+  case 100:
+  case 101:
+    // Unexpected 1xx return code
+    statusBucket = 0;
+    break;
+  case 200:
+    // OK - Data is available in the HTTP response body.
+    statusBucket = 1;
+    break;
+  case 201:
+  case 202:
+  case 203:
+  case 205:
+  case 206:
+    // Unexpected 2xx return code
+    statusBucket = 2;
+    break;
+  case 204:
+    // No Content
+    statusBucket = 3;
+    break;
+  case 300:
+  case 301:
+  case 302:
+  case 303:
+  case 304:
+  case 305:
+  case 307:
+  case 308:
+    // Unexpected 3xx return code
+    statusBucket = 4;
+    break;
+  case 400:
+    // Bad Request - The HTTP request was not correctly formed.
+    // The client did not provide all required CGI parameters.
+    statusBucket = 5;
+    break;
+  case 401:
+  case 402:
+  case 405:
+  case 406:
+  case 407:
+  case 409:
+  case 410:
+  case 411:
+  case 412:
+  case 414:
+  case 415:
+  case 416:
+  case 417:
+  case 421:
+  case 426:
+  case 428:
+  case 429:
+  case 431:
+  case 451:
+    // Unexpected 4xx return code
+    statusBucket = 6;
+    break;
+  case 403:
+    // Forbidden - The client id is invalid.
+    statusBucket = 7;
+    break;
+  case 404:
+    // Not Found
+    statusBucket = 8;
+    break;
+  case 408:
+    // Request Timeout
+    statusBucket = 9;
+    break;
+  case 413:
+    // Request Entity Too Large - Bug 1150334
+    statusBucket = 10;
+    break;
+  case 500:
+  case 501:
+  case 510:
+    // Unexpected 5xx return code
+    statusBucket = 11;
+    break;
+  case 502:
+  case 504:
+  case 511:
+    // Local network errors, we'll ignore these.
+    statusBucket = 12;
+    break;
+  case 503:
+    // Service Unavailable - The server cannot handle the request.
+    // Clients MUST follow the backoff behavior specified in the
+    // Request Frequency section.
+    statusBucket = 13;
+    break;
+  case 505:
+    // HTTP Version Not Supported - The server CANNOT handle the requested
+    // protocol major version.
+    statusBucket = 14;
+    break;
+  default:
+    statusBucket = 15;
+  };
+  return statusBucket;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // nsIStreamListenerObserver implementation
@@ -462,29 +571,41 @@ nsUrlClassifierStreamUpdater::OnStartRequest(nsIRequest *request,
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(request);
   if (httpChannel) {
     rv = httpChannel->GetStatus(&status);
-    LOG(("nsUrlClassifierStreamUpdater::OnStartRequest (status=%x, this=%p)",
-         status, this));
     NS_ENSURE_SUCCESS(rv, rv);
+
+    if (MOZ_LOG_TEST(gUrlClassifierStreamUpdaterLog, mozilla::LogLevel::Debug)) {
+      nsAutoCString errorName, spec;
+      mozilla::GetErrorName(status, errorName);
+      nsCOMPtr<nsIURI> uri;
+      rv = httpChannel->GetURI(getter_AddRefs(uri));
+      if (NS_SUCCEEDED(rv) && uri) {
+        uri->GetAsciiSpec(spec);
+      }
+      LOG(("nsUrlClassifierStreamUpdater::OnStartRequest "
+           "(status=%s, uri=%s, this=%p)", errorName.get(),
+           spec.get(), this));
+    }
 
     if (NS_FAILED(status)) {
       // Assume we're overloading the server and trigger backoff.
       downloadError = true;
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::URLCLASSIFIER_UPDATE_REMOTE_STATUS,
+                                     15 /* unknown response code */);
+
     } else {
       bool succeeded = false;
       rv = httpChannel->GetRequestSucceeded(&succeeded);
       NS_ENSURE_SUCCESS(rv, rv);
 
-      LOG(("nsUrlClassifierStreamUpdater::OnStartRequest (%s)", succeeded ?
-           "succeeded" : "failed"));
+      uint32_t requestStatus;
+      rv = httpChannel->GetResponseStatus(&requestStatus);
+      NS_ENSURE_SUCCESS(rv, rv);
+      mozilla::Telemetry::Accumulate(mozilla::Telemetry::URLCLASSIFIER_UPDATE_REMOTE_STATUS,
+                                     HTTPStatusToBucket(requestStatus));
+      LOG(("nsUrlClassifierStreamUpdater::OnStartRequest %s (%d)", succeeded ?
+           "succeeded" : "failed", requestStatus));
       if (!succeeded) {
         // 404 or other error, pass error status back
-        LOG(("HTTP request returned failure code."));
-
-        uint32_t requestStatus;
-        rv = httpChannel->GetResponseStatus(&requestStatus);
-        LOG(("HTTP request returned failure code: %d.", requestStatus));
-        NS_ENSURE_SUCCESS(rv, rv);
-
         strStatus.AppendInt(requestStatus);
         downloadError = true;
       }
@@ -525,6 +646,11 @@ nsUrlClassifierStreamUpdater::OnDataAvailable(nsIRequest *request,
     return NS_ERROR_NOT_INITIALIZED;
 
   LOG(("OnDataAvailable (%d bytes)", aLength));
+
+  if (aSourceOffset > MAX_FILE_SIZE) {
+    LOG(("OnDataAvailable::Abort because exceeded the maximum file size(%lld)", aSourceOffset));
+    return NS_ERROR_FILE_TOO_BIG;
+  }
 
   nsresult rv;
 

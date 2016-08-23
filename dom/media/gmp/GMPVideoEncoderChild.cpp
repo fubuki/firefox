@@ -4,26 +4,30 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GMPVideoEncoderChild.h"
-#include "GMPChild.h"
+#include "GMPContentChild.h"
 #include <stdio.h>
 #include "mozilla/unused.h"
 #include "GMPVideoEncodedFrameImpl.h"
 #include "GMPVideoi420FrameImpl.h"
+#include "runnable_utils.h"
 
 namespace mozilla {
 namespace gmp {
 
-GMPVideoEncoderChild::GMPVideoEncoderChild(GMPChild* aPlugin)
-: GMPSharedMemManager(aPlugin),
-  mPlugin(aPlugin),
-  mVideoEncoder(nullptr),
-  mVideoHost(this)
+GMPVideoEncoderChild::GMPVideoEncoderChild(GMPContentChild* aPlugin)
+  : GMPSharedMemManager(aPlugin)
+  , mPlugin(aPlugin)
+  , mVideoEncoder(nullptr)
+  , mVideoHost(this)
+  , mNeedShmemIntrCount(0)
+  , mPendingEncodeComplete(false)
 {
   MOZ_ASSERT(mPlugin);
 }
 
 GMPVideoEncoderChild::~GMPVideoEncoderChild()
 {
+  MOZ_ASSERT(!mNeedShmemIntrCount);
 }
 
 void
@@ -68,7 +72,7 @@ GMPVideoEncoderChild::Error(GMPErr aError)
 
 bool
 GMPVideoEncoderChild::RecvInitEncode(const GMPVideoCodec& aCodecSettings,
-                                     const nsTArray<uint8_t>& aCodecSpecific,
+                                     InfallibleTArray<uint8_t>&& aCodecSpecific,
                                      const int32_t& aNumberOfCores,
                                      const uint32_t& aMaxPayloadSize)
 {
@@ -89,8 +93,8 @@ GMPVideoEncoderChild::RecvInitEncode(const GMPVideoCodec& aCodecSettings,
 
 bool
 GMPVideoEncoderChild::RecvEncode(const GMPVideoi420FrameData& aInputFrame,
-                                 const nsTArray<uint8_t>& aCodecSpecificInfo,
-                                 const nsTArray<GMPVideoFrameType>& aFrameTypes)
+                                 InfallibleTArray<uint8_t>&& aCodecSpecificInfo,
+                                 InfallibleTArray<GMPVideoFrameType>&& aFrameTypes)
 {
   if (!mVideoEncoder) {
     return false;
@@ -109,7 +113,7 @@ GMPVideoEncoderChild::RecvEncode(const GMPVideoi420FrameData& aInputFrame,
 }
 
 bool
-GMPVideoEncoderChild::RecvChildShmemForPool(Shmem& aEncodedBuffer)
+GMPVideoEncoderChild::RecvChildShmemForPool(Shmem&& aEncodedBuffer)
 {
   if (aEncodedBuffer.IsWritable()) {
     mVideoHost.SharedMemMgr()->MgrDeallocShmem(GMPSharedMem::kGMPEncodedData,
@@ -162,8 +166,19 @@ GMPVideoEncoderChild::RecvSetPeriodicKeyFrames(const bool& aEnable)
 bool
 GMPVideoEncoderChild::RecvEncodingComplete()
 {
+  MOZ_ASSERT(mPlugin->GMPMessageLoop() == MessageLoop::current());
+
+  if (mNeedShmemIntrCount) {
+    // There's a GMP blocked in Alloc() waiting for the CallNeedShem() to
+    // return a frame they can use. Don't call the GMP's EncodingComplete()
+    // now and don't delete the GMPVideoEncoderChild, defer processing the
+    // EncodingComplete() until once the Alloc() finishes.
+    mPendingEncodeComplete = true;
+    return true;
+  }
+
   if (!mVideoEncoder) {
-    unused << Send__delete__(this);
+    Unused << Send__delete__(this);
     return false;
   }
 
@@ -174,9 +189,46 @@ GMPVideoEncoderChild::RecvEncodingComplete()
 
   mPlugin = nullptr;
 
-  unused << Send__delete__(this);
+  Unused << Send__delete__(this);
 
   return true;
+}
+
+bool
+GMPVideoEncoderChild::Alloc(size_t aSize,
+                            Shmem::SharedMemory::SharedMemoryType aType,
+                            Shmem* aMem)
+{
+  MOZ_ASSERT(mPlugin->GMPMessageLoop() == MessageLoop::current());
+
+  bool rv;
+#ifndef SHMEM_ALLOC_IN_CHILD
+  ++mNeedShmemIntrCount;
+  rv = CallNeedShmem(aSize, aMem);
+  --mNeedShmemIntrCount;
+  if (mPendingEncodeComplete && mNeedShmemIntrCount == 0) {
+    mPendingEncodeComplete = false;
+    auto t = NewRunnableMethod(this, &GMPVideoEncoderChild::RecvEncodingComplete);
+    mPlugin->GMPMessageLoop()->PostTask(FROM_HERE, t);
+  }
+#else
+#ifdef GMP_SAFE_SHMEM
+  rv = AllocShmem(aSize, aType, aMem);
+#else
+  rv = AllocUnsafeShmem(aSize, aType, aMem);
+#endif
+#endif
+  return rv;
+}
+
+void
+GMPVideoEncoderChild::Dealloc(Shmem& aMem)
+{
+#ifndef SHMEM_ALLOC_IN_CHILD
+  SendParentShmemForPool(aMem);
+#else
+  DeallocShmem(aMem);
+#endif
 }
 
 } // namespace gmp

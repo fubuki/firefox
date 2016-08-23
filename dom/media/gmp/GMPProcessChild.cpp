@@ -7,7 +7,6 @@
 
 #include "base/command_line.h"
 #include "base/string_util.h"
-#include "chrome/common/chrome_switches.h"
 #include "mozilla/ipc/IOThreadChild.h"
 #include "mozilla/BackgroundHangMonitor.h"
 
@@ -16,8 +15,8 @@ using mozilla::ipc::IOThreadChild;
 namespace mozilla {
 namespace gmp {
 
-GMPProcessChild::GMPProcessChild(ProcessHandle parentHandle)
-: ProcessChild(parentHandle)
+GMPProcessChild::GMPProcessChild(ProcessId aParentPid)
+: ProcessChild(aParentPid)
 {
 }
 
@@ -28,22 +27,22 @@ GMPProcessChild::~GMPProcessChild()
 bool
 GMPProcessChild::Init()
 {
-  std::string pluginFilename;
-  std::string voucherFilename;
+  nsAutoString pluginFilename;
+  nsAutoString voucherFilename;
 
 #if defined(OS_POSIX)
   // NB: need to be very careful in ensuring that the first arg
   // (after the binary name) here is indeed the plugin module path.
   // Keep in sync with dom/plugins/PluginModuleParent.
   std::vector<std::string> values = CommandLine::ForCurrentProcess()->argv();
-  NS_ABORT_IF_FALSE(values.size() >= 3, "not enough args");
-  pluginFilename = values[1];
-  voucherFilename = values[2];
+  MOZ_ASSERT(values.size() >= 3, "not enough args");
+  pluginFilename = NS_ConvertUTF8toUTF16(nsDependentCString(values[1].c_str()));
+  voucherFilename = NS_ConvertUTF8toUTF16(nsDependentCString(values[2].c_str()));
 #elif defined(OS_WIN)
   std::vector<std::wstring> values = CommandLine::ForCurrentProcess()->GetLooseValues();
-  NS_ABORT_IF_FALSE(values.size() >= 2, "not enough loose args");
-  pluginFilename = WideToUTF8(values[0]);
-  voucherFilename = WideToUTF8(values[1]);
+  MOZ_ASSERT(values.size() >= 2, "not enough loose args");
+  pluginFilename = nsDependentString(values[0].c_str());
+  voucherFilename = nsDependentString(values[1].c_str());
 #else
 #error Not implemented
 #endif
@@ -52,7 +51,7 @@ GMPProcessChild::Init()
 
   return mPlugin.Init(pluginFilename,
                       voucherFilename,
-                      ParentHandle(),
+                      ParentPid(),
                       IOThreadChild::message_loop(),
                       IOThreadChild::channel());
 }

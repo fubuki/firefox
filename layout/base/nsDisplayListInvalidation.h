@@ -13,11 +13,13 @@
 #include "nsColor.h"
 #include "gfxRect.h"
 
+class nsDisplayBackgroundImage;
+class nsCharClipDisplayItem;
 class nsDisplayItem;
 class nsDisplayListBuilder;
-class nsDisplayBackgroundImage;
-class nsDisplayThemedBackground;
 class nsDisplaySVGEffects;
+class nsDisplayTableItem;
+class nsDisplayThemedBackground;
 
 /**
  * This stores the geometry of an nsDisplayItem, and the area
@@ -68,7 +70,7 @@ class nsDisplayItemGenericGeometry : public nsDisplayItemGeometry
 public:
   nsDisplayItemGenericGeometry(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder);
 
-  virtual void MoveBy(const nsPoint& aOffset) MOZ_OVERRIDE;
+  virtual void MoveBy(const nsPoint& aOffset) override;
 
   nsRect mBorderRect;
 };
@@ -131,7 +133,8 @@ public:
       return false;
     }
 
-    if (mLastDrawResult == mozilla::image::DrawResult::SUCCESS) {
+    if (mLastDrawResult == mozilla::image::DrawResult::SUCCESS ||
+        mLastDrawResult == mozilla::image::DrawResult::BAD_IMAGE) {
       return false;
     }
 
@@ -169,12 +172,14 @@ public:
   bool mHasRoundedCorners;
 };
 
-class nsDisplayBorderGeometry : public nsDisplayItemGeometry
+class nsDisplayBorderGeometry
+  : public nsDisplayItemGeometry
+  , public nsImageGeometryMixin<nsDisplayBorderGeometry>
 {
 public:
   nsDisplayBorderGeometry(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder);
 
-  virtual void MoveBy(const nsPoint& aOffset) MOZ_OVERRIDE;
+  virtual void MoveBy(const nsPoint& aOffset) override;
 
   nsRect mContentRect;
 };
@@ -186,9 +191,10 @@ class nsDisplayBackgroundGeometry
 public:
   nsDisplayBackgroundGeometry(nsDisplayBackgroundImage* aItem, nsDisplayListBuilder* aBuilder);
 
-  virtual void MoveBy(const nsPoint& aOffset) MOZ_OVERRIDE;
+  virtual void MoveBy(const nsPoint& aOffset) override;
 
   nsRect mPositioningArea;
+  nsRect mDestRect;
 };
 
 class nsDisplayThemedBackgroundGeometry : public nsDisplayItemGeometry
@@ -196,7 +202,7 @@ class nsDisplayThemedBackgroundGeometry : public nsDisplayItemGeometry
 public:
   nsDisplayThemedBackgroundGeometry(nsDisplayThemedBackground* aItem, nsDisplayListBuilder* aBuilder);
 
-  virtual void MoveBy(const nsPoint& aOffset) MOZ_OVERRIDE;
+  virtual void MoveBy(const nsPoint& aOffset) override;
 
   nsRect mPositioningArea;
   bool mWindowIsActive;
@@ -207,7 +213,7 @@ class nsDisplayBoxShadowInnerGeometry : public nsDisplayItemGeometry
 public:
   nsDisplayBoxShadowInnerGeometry(nsDisplayItem* aItem, nsDisplayListBuilder* aBuilder);
   
-  virtual void MoveBy(const nsPoint& aOffset) MOZ_OVERRIDE;
+  virtual void MoveBy(const nsPoint& aOffset) override;
 
   nsRect mPaddingRect;
 };
@@ -240,11 +246,32 @@ class nsDisplaySVGEffectsGeometry : public nsDisplayItemGeometry
 public:
   nsDisplaySVGEffectsGeometry(nsDisplaySVGEffects* aItem, nsDisplayListBuilder* aBuilder);
 
-  virtual void MoveBy(const nsPoint& aOffset) MOZ_OVERRIDE;
+  virtual void MoveBy(const nsPoint& aOffset) override;
 
   gfxRect mBBox;
   gfxPoint mUserSpaceOffset;
   nsPoint mFrameOffsetToReferenceFrame;
+};
+
+class nsCharClipGeometry : public nsDisplayItemGenericGeometry
+{
+public:
+  nsCharClipGeometry(nsCharClipDisplayItem* aItem, nsDisplayListBuilder* aBuilder);
+
+  nscoord mVisIStartEdge;
+  nscoord mVisIEndEdge;
+};
+
+class nsDisplayTableItemGeometry
+  : public nsDisplayItemGenericGeometry
+  , public nsImageGeometryMixin<nsDisplayTableItemGeometry>
+{
+public:
+  nsDisplayTableItemGeometry(nsDisplayTableItem* aItem,
+                             nsDisplayListBuilder* aBuilder,
+                             const nsPoint& aFrameOffsetToViewport);
+
+  nsPoint mFrameOffsetToViewport;
 };
 
 #endif /*NSDISPLAYLISTINVALIDATION_H_*/

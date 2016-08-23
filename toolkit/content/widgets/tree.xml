@@ -13,7 +13,7 @@
    xmlns="http://www.mozilla.org/xbl"
    xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
    xmlns:xbl="http://www.mozilla.org/xbl">
-  
+
   <binding id="tree-base" extends="chrome://global/content/bindings/general.xml#basecontrol">
     <resources>
       <stylesheet src="chrome://global/skin/tree.css"/>
@@ -22,12 +22,7 @@
       <method name="_isAccelPressed">
         <parameter name="aEvent"/>
         <body><![CDATA[
-# Workaround until bug 302174 is fixed
-#ifdef XP_MACOSX
-          return aEvent.metaKey;
-#else
-          return aEvent.ctrlKey;
-#endif
+          return aEvent.getModifierState("Accel");
         ]]></body>
       </method>
     </implementation>
@@ -47,7 +42,7 @@
         <xul:scrollcorner xbl:inherits="collapsed=hidevscroll"/>
       </xul:hbox>
     </content>
-    
+
     <implementation implements="nsIDOMXULTreeElement, nsIDOMXULMultiSelectControlElement">
 
       <!-- ///////////////// nsIDOMXULTreeElement ///////////////// -->
@@ -93,11 +88,11 @@
                 onget="return this.view; /*.QueryInterface(Components.interfaces.nsIXULTreeBuilder)*/"
                 readonly="true"/>
       <field name="pageUpOrDownMovesSelection">
-#ifdef XP_MACOSX
-        false
-#else
-        true
-#endif
+        {
+          let { AppConstants } =
+              Components.utils.import("resource://gre/modules/AppConstants.jsm", {});
+          AppConstants.platform != "macosx";
+        }
       </field>
       <property name="keepCurrentInView"
                 onget="return (this.getAttribute('keepcurrentinview') == 'true');"
@@ -132,7 +127,7 @@
       <property name="editingColumn" readonly="true"
                 onget="return this._editingColumn;"/>
 
-      <property name="_selectDelay" 
+      <property name="_selectDelay"
                 onset="this.setAttribute('_selectDelay', val);"
                 onget="return this.getAttribute('_selectDelay') || 50;"/>
       <field name="_columnsDirty">true</field>
@@ -154,7 +149,7 @@
             for (i = 0; i < cols.length; ++i)
               cols[i].setAttribute("ordinal", (i*2)+1);
 
-            // update the ordinal positions of splitters to even numbers, so that 
+            // update the ordinal positions of splitters to even numbers, so that
             // they are in between columns
             var splitters = this.getElementsByTagName("splitter");
             for (i = 0; i < splitters.length; ++i)
@@ -197,7 +192,7 @@
           }
         ]]></body>
       </method>
-      
+
       <method name="_getColumnAtX">
         <parameter name="aX"/>
         <parameter name="aThresh"/>
@@ -237,7 +232,7 @@
 
       <method name="changeOpenState">
         <parameter name="row"/>
-        <!-- Optional parameter openState == true or false to set. 
+        <!-- Optional parameter openState == true or false to set.
              No openState param == toggle -->
         <parameter name="openState"/>
         <body><![CDATA[
@@ -341,8 +336,10 @@
               return false;
             if (row < 0 || row >= this.view.rowCount || !column)
               return false;
-            if (column.type != Components.interfaces.nsITreeColumn.TYPE_TEXT ||
-                column.cycler || !this.view.isEditable(row, column))
+            if (column.type != Components.interfaces.nsITreeColumn.TYPE_TEXT &&
+                column.type != Components.interfaces.nsITreeColumn.TYPE_PASSWORD)
+              return false;
+            if (column.cycler || !this.view.isEditable(row, column))
               return false;
 
             // Beyond this point, we are going to edit the cell.
@@ -370,7 +367,7 @@
             var left, widthdiff;
             if (style.direction == "rtl") {
               left = cellRect.x;
-              widthdiff = cellRect.x + cellRect.width - textRect.x - textRect.width;
+              widthdiff = cellRect.x - textRect.x;
             } else {
               left = textRect.x;
               widthdiff = textRect.x - cellRect.x;
@@ -438,26 +435,26 @@
               this.treeBoxObject.scrollByLines(offset);
               return;
             }
-   
+
             var c = this.currentIndex + offset;
             if (offset > 0 ? c > edge : c < edge) {
               if (this.view.selection.isSelected(edge) && this.view.selection.count <= 1)
                 return;
               c = edge;
             }
-   
+
             var cellSelType = this._cellSelType;
             if (cellSelType) {
               var column = this.view.selection.currentColumn;
               if (!column)
                 return;
-   
+
               while ((offset > 0 ? c <= edge : c >= edge) && !this.view.isSelectable(c, column))
                 c += offset;
               if (offset > 0 ? c > edge : c < edge)
                 return;
             }
-   
+
             if (!this._isAccelPressed(event))
               this.view.selection.timedSelect(c, this._selectDelay);
             else // Ctrl+Up/Down moves the anchor without selecting
@@ -487,7 +484,7 @@
               this.view.selection.timedSelect(0, this._selectDelay);
               return;
             }
-      
+
             var c = this.currentIndex;
             if (c == -1)
                 c = 0;
@@ -496,7 +493,7 @@
               if (this.view.selection.isSelected(c))
                 return;
             }
-      
+
             // Extend the selection from the existing pivot, if any
             this.view.selection.rangedSelect(-1, c + offset,
                                              this._isAccelPressed(event));
@@ -674,21 +671,23 @@
             return true;
           }
 
-#ifdef XP_MACOSX
-          // See if we can edit the cell.
-          var row = this.currentIndex;
-          if (this._cellSelType) {
-            var column = this.view.selection.currentColumn;
-            var startedEditing = this.startEditing(row, column);
-            if (startedEditing)
-              return true;
+          let { AppConstants } =
+              Components.utils.import("resource://gre/modules/AppConstants.jsm", {});
+          if (AppConstants.platform == "macosx") {
+            // See if we can edit the cell.
+            var row = this.currentIndex;
+            if (this._cellSelType) {
+              var column = this.view.selection.currentColumn;
+              var startedEditing = this.startEditing(row, column);
+              if (startedEditing)
+                return true;
+            }
           }
-#endif
           return this.changeOpenState(this.currentIndex);
         ]]></body>
       </method>
     </implementation>
-    
+
     <handlers>
       <handler event="MozMousePixelScroll" preventdefault="true"/>
       <handler event="DOMMouseScroll" preventdefault="true">
@@ -851,7 +850,7 @@
                 // The getParentIndex test above ensures that the children
                 // are already populated and ready.
                 if (cellSelType && !this.view.isSelectable(c , currentColumn)) {
-                  var col = this._getNextColumn(c, false);
+                  let col = this._getNextColumn(c, false);
                   if (col) {
                     this.view.selection.currentColumn = col;
                   }
@@ -865,7 +864,7 @@
           }
 
           if (cellSelType) {
-            var col = this._getNextColumn(row, false);
+            let col = this._getNextColumn(row, false);
             if (col) {
               this.view.selection.currentColumn = col;
               this.treeBoxObject.ensureCellIsVisible(row, col);
@@ -983,7 +982,7 @@
          }
          ]]>
       </handler>
-    </handlers>    
+    </handlers>
   </binding>
 
   <binding id="treecols" role="xul:treecolumns">
@@ -1078,7 +1077,7 @@
            if (cell.childElt == "twisty")
              return;
 
-           if (cell.col) {
+           if (cell.col && event.button == 0) {
              if (cell.col.cycler) {
                view.cycleCell(cell.row, cell.col);
                return;
@@ -1091,7 +1090,7 @@
                  return;
                }
              }
-           } 
+           }
 
            var cellSelType = this.parentNode._cellSelType;
            if (cellSelType == "text" && cell.childElt != "text" && cell.childElt != "image")
@@ -1172,7 +1171,7 @@
 
         if (!cell.col) return;
 
-        // if the last row has changed in between the time we 
+        // if the last row has changed in between the time we
         // mousedown and the time we click, don't fire the select handler.
         // see bug #92366
         if (!cell.col.cycler && this._lastSelectedRow == cell.row &&
@@ -1224,7 +1223,7 @@
           this.parentNode.changeOpenState(row);
       ]]>
       </handler>
-      
+
     </handlers>
   </binding>
 
@@ -1238,14 +1237,17 @@
       <property name="ordinal">
         <getter><![CDATA[
           var val = this.getAttribute("ordinal");
-          return "" + (val == "" ? 1 : (val == "0" ? 0 : parseInt(val)));
+          if (val == "")
+            return "1";
+
+          return "" + (val == "0" ? 0 : parseInt(val));
         ]]></getter>
         <setter><![CDATA[
           this.setAttribute("ordinal", val);
           return val;
         ]]></setter>
       </property>
-      
+
       <property name="_previousVisibleColumn">
         <getter><![CDATA[
           var sib = this.boxObject.previousSibling;
@@ -1276,10 +1278,10 @@
               window.addEventListener("click", col._onDragMouseClick, true);
             }
           }
-                    
+
           var pos = {};
           var targetCol = col.parentNode.parentNode._getColumnAtX(aEvent.clientX, 0.5, pos);
-          
+
           // bail if we haven't mousemoved to a different column
           if (col.mTargetCol == targetCol && col.mTargetDir == pos.value)
             return;
@@ -1302,7 +1304,7 @@
             col.mTargetCol = null;
             col.mTargetDir = null;
           }
-          
+
           if (targetCol) {
             // set insertbefore/after attributes
             if (pos.value == "after") {
@@ -1321,7 +1323,7 @@
             col.mTargetCol = targetCol;
             col.mTargetDir = pos.value;
           }
-        ]]></body>        
+        ]]></body>
       </method>
 
       <method name="_onDragMouseUp">
@@ -1329,7 +1331,7 @@
         <body><![CDATA[
           var col = document.treecolDragging;
           if (!col) return;
-          
+
           if (!col.mDragGesturing) {
             if (col.mTargetCol) {
               // remove insertbefore/after attributes
@@ -1362,24 +1364,24 @@
 
               // repaint to remove lines
               col.parentNode.parentNode.treeBoxObject.invalidate();
-  
+
               col.mTargetCol = null;
             }
           } else
             col.mDragGesturing = false;
-                    
+
           document.treecolDragging = null;
           col.removeAttribute("dragging");
-          
+
           window.removeEventListener("mousemove", col._onDragMouseMove, true);
           window.removeEventListener("mouseup", col._onDragMouseUp, true);
           // we have to wait for the click event to fire before removing
           // cancelling handler
-          var clickHandler = function(handler) { 
+          var clickHandler = function(handler) {
             window.removeEventListener("click", handler, true);
           };
           window.setTimeout(clickHandler, 0, col._onDragMouseClick);
-        ]]></body>        
+        ]]></body>
       </method>
 
       <method name="_onDragMouseClick">
@@ -1388,21 +1390,21 @@
           // prevent click event from firing after column drag and drop
           aEvent.stopPropagation();
           aEvent.preventDefault();
-        ]]></body>        
+        ]]></body>
       </method>
     </implementation>
-    
+
     <handlers>
       <handler event="mousedown" button="0"><![CDATA[
         if (this.parentNode.parentNode.enableColumnDrag) {
           var xulns = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
           var cols = this.parentNode.getElementsByTagNameNS(xulns, "treecol");
-          
+
           // only start column drag operation if there are at least 2 visible columns
           var visible = 0;
           for (var i = 0; i < cols.length; ++i)
             if (cols[i].boxObject.width > 0) ++visible;
-            
+
           if (visible > 1) {
             window.addEventListener("mousemove", this._onDragMouseMove, true);
             window.addEventListener("mouseup", this._onDragMouseUp, true);
@@ -1418,12 +1420,12 @@
           if (event.target != event.originalTarget)
             return;
 
-#ifdef XP_WIN
+          let { AppConstants } =
+              Components.utils.import("resource://gre/modules/AppConstants.jsm", {});
           // On Windows multiple clicking on tree columns only cycles one time
           // every 2 clicks.
-          if (event.detail % 2 == 0)
+          if (AppConstants.platform == "win" && event.detail % 2 == 0)
             return;
-#endif
 
           var tree = this.parentNode.parentNode;
           var column = tree.columns.getColumnFor(this);
@@ -1455,7 +1457,7 @@
         <xul:menuitem anonid="menuitem" label="&restoreColumnOrder.label;"/>
       </xul:menupopup>
     </content>
-    
+
     <implementation>
       <method name="buildPopup">
         <parameter name="aPopup"/>

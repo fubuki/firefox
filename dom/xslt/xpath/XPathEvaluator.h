@@ -29,7 +29,7 @@ class XPathResult;
 /**
  * A class for evaluating an XPath expression string
  */
-class XPathEvaluator MOZ_FINAL : public nsIDOMXPathEvaluator
+class XPathEvaluator final : public nsIDOMXPathEvaluator
 {
     ~XPathEvaluator();
 
@@ -42,7 +42,7 @@ public:
     NS_DECL_NSIDOMXPATHEVALUATOR
 
     // WebIDL API
-    JSObject* WrapObject(JSContext* aCx);
+    bool WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto, JS::MutableHandle<JSObject*> aReflector);
     nsIDocument* GetParentObject()
     {
         nsCOMPtr<nsIDocument> doc = do_QueryReferent(mDocument);
@@ -75,7 +75,7 @@ private:
                          ErrorResult& aRv);
 
     nsWeakPtr mDocument;
-    nsRefPtr<txResultRecycler> mRecycler;
+    RefPtr<txResultRecycler> mRecycler;
 };
 
 inline nsISupports*

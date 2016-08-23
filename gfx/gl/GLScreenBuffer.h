@@ -24,6 +24,11 @@
 #include "SurfaceTypes.h"
 
 namespace mozilla {
+namespace layers {
+class CompositableForwarder;
+class SharedSurfaceTextureClient;
+} // namespace layers
+
 namespace gl {
 
 class GLContext;
@@ -46,6 +51,7 @@ protected:
     GLContext* const mGL;
 public:
     const gfx::IntSize mSize;
+    const GLsizei mSamples;
     const GLuint mFB;
 protected:
     const GLuint mColorMSRB;
@@ -54,12 +60,14 @@ protected:
 
     DrawBuffer(GLContext* gl,
                const gfx::IntSize& size,
+               GLsizei samples,
                GLuint fb,
                GLuint colorMSRB,
                GLuint depthRB,
                GLuint stencilRB)
         : mGL(gl)
         , mSize(size)
+        , mSamples(samples)
         , mFB(fb)
         , mColorMSRB(colorMSRB)
         , mDepthRB(depthRB)
@@ -113,6 +121,8 @@ public:
     SharedSurface* SharedSurf() const {
         return mSurf;
     }
+
+    void SetReadBuffer(GLenum mode) const;
 };
 
 
@@ -124,6 +134,12 @@ public:
                                             const gfx::IntSize& size,
                                             const SurfaceCaps& caps);
 
+    static UniquePtr<SurfaceFactory>
+    CreateFactory(GLContext* gl,
+                  const SurfaceCaps& caps,
+                  const RefPtr<layers::CompositableForwarder>& forwarder,
+                  const layers::TextureFlags& flags);
+
 protected:
     GLContext* const mGL; // Owns us.
 public:
@@ -131,13 +147,16 @@ public:
 protected:
     UniquePtr<SurfaceFactory> mFactory;
 
-    RefPtr<ShSurfHandle> mBack;
-    RefPtr<ShSurfHandle> mFront;
+    RefPtr<layers::SharedSurfaceTextureClient> mBack;
+    RefPtr<layers::SharedSurfaceTextureClient> mFront;
 
     UniquePtr<DrawBuffer> mDraw;
     UniquePtr<ReadBuffer> mRead;
 
     bool mNeedsBlit;
+
+    GLenum mUserReadBufferMode;
+    GLenum mUserDrawBufferMode;
 
     // Below are the parts that help us pretend to be framebuffer 0:
     GLuint mUserDrawFB;
@@ -152,20 +171,7 @@ protected:
 
     GLScreenBuffer(GLContext* gl,
                    const SurfaceCaps& caps,
-                   UniquePtr<SurfaceFactory> factory)
-        : mGL(gl)
-        , mCaps(caps)
-        , mFactory(Move(factory))
-        , mNeedsBlit(true)
-        , mUserDrawFB(0)
-        , mUserReadFB(0)
-        , mInternalDrawFB(0)
-        , mInternalReadFB(0)
-#ifdef DEBUG
-        , mInInternalMode_DrawFB(true)
-        , mInInternalMode_ReadFB(true)
-#endif
-    {}
+                   UniquePtr<SurfaceFactory> factory);
 
 public:
     virtual ~GLScreenBuffer();
@@ -174,7 +180,7 @@ public:
         return mFactory.get();
     }
 
-    ShSurfHandle* Front() const {
+    const RefPtr<layers::SharedSurfaceTextureClient>& Front() const {
         return mFront;
     }
 
@@ -198,6 +204,13 @@ public:
         return mRead->mFB;
     }
 
+    GLsizei Samples() const {
+        if (!mDraw)
+            return 0;
+
+        return mDraw->mSamples;
+    }
+
     void DeletingFB(GLuint fb);
 
     const gfx::IntSize& Size() const {
@@ -212,6 +225,16 @@ public:
     void AssureBlitted();
     void AfterDrawCall();
     void BeforeReadCall();
+
+    bool CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x,
+                        GLint y, GLsizei width, GLsizei height, GLint border);
+
+    void SetReadBuffer(GLenum userMode);
+    void SetDrawBuffer(GLenum userMode);
+
+    GLenum GetReadBufferMode() const {
+        return mUserReadBufferMode;
+    }
 
     /**
      * Attempts to read pixels from the current bound framebuffer, if
@@ -234,8 +257,6 @@ public:
     bool PublishFrame(const gfx::IntSize& size);
 
     bool Resize(const gfx::IntSize& size);
-
-    void Readback(SharedSurface* src, gfx::DataSourceSurface* dest);
 
 protected:
     bool Attach(SharedSurface* surf, const gfx::IntSize& size);
@@ -266,7 +287,7 @@ public:
     bool IsReadFramebufferDefault() const;
 };
 
-}   // namespace gl
-}   // namespace mozilla
+} // namespace gl
+} // namespace mozilla
 
 #endif  // SCREEN_BUFFER_H_

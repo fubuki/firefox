@@ -7,11 +7,8 @@
 
 #include "nsAutoPtr.h"
 #include "nsIUrlClassifierUtils.h"
-#include "nsTArray.h"
-#include "nsDataHashtable.h"
-#include "mozilla/Attributes.h"
 
-class nsUrlClassifierUtils MOZ_FINAL : public nsIUrlClassifierUtils
+class nsUrlClassifierUtils final : public nsIUrlClassifierUtils
 {
 private:
   /**

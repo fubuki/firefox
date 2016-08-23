@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set tw=80 expandtab softtabstop=2 ts=2 sw=2: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -43,14 +43,14 @@ public:
 protected:
   virtual ~PropertyStringList();
 
-  virtual void EnsureFresh() MOZ_OVERRIDE;
+  virtual void EnsureFresh() override;
 
-  nsRefPtr<HTMLPropertiesCollection> mCollection;
+  RefPtr<HTMLPropertiesCollection> mCollection;
 };
 
-class HTMLPropertiesCollection MOZ_FINAL : public nsIHTMLCollection,
-                                           public nsStubMutationObserver,
-                                           public nsWrapperCache
+class HTMLPropertiesCollection final : public nsIHTMLCollection,
+                                       public nsStubMutationObserver,
+                                       public nsWrapperCache
 {
   friend class PropertyNodeList;
   friend class PropertyStringList;
@@ -59,23 +59,24 @@ public:
 
   // nsWrapperCache
   using nsWrapperCache::GetWrapperPreserveColor;
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  using nsWrapperCache::GetWrapper;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 protected:
   virtual ~HTMLPropertiesCollection();
 
-  virtual JSObject* GetWrapperPreserveColorInternal() MOZ_OVERRIDE
+  virtual JSObject* GetWrapperPreserveColorInternal() override
   {
     return nsWrapperCache::GetWrapperPreserveColor();
   }
 public:
 
-  virtual Element* GetElementAt(uint32_t aIndex) MOZ_OVERRIDE;
+  virtual Element* GetElementAt(uint32_t aIndex) override;
 
   void SetDocument(nsIDocument* aDocument);
-  nsINode* GetParentObject() MOZ_OVERRIDE;
+  nsINode* GetParentObject() override;
 
   virtual Element*
-  GetFirstNamedElement(const nsAString& aName, bool& aFound) MOZ_OVERRIDE
+  GetFirstNamedElement(const nsAString& aName, bool& aFound) override
   {
     // HTMLPropertiesCollection.namedItem and the named getter call the
     // NamedItem that returns a PropertyNodeList, calling
@@ -99,7 +100,7 @@ public:
     return mNames;
   }
   virtual void GetSupportedNames(unsigned,
-                                 nsTArray<nsString>& aNames) MOZ_OVERRIDE;
+                                 nsTArray<nsString>& aNames) override;
 
   NS_DECL_NSIDOMHTMLCOLLECTION
 
@@ -130,16 +131,16 @@ protected:
   }
 
   // the items that make up this collection
-  nsTArray<nsRefPtr<nsGenericHTMLElement> > mProperties;
+  nsTArray<RefPtr<nsGenericHTMLElement> > mProperties;
 
   // the itemprop attribute of the properties
-  nsRefPtr<PropertyStringList> mNames;
+  RefPtr<PropertyStringList> mNames;
 
   // The cached PropertyNodeLists that are NamedItems of this collection
   nsRefPtrHashtable<nsStringHashKey, PropertyNodeList> mNamedItemEntries;
 
   // The element this collection is rooted at
-  nsRefPtr<nsGenericHTMLElement> mRoot;
+  RefPtr<nsGenericHTMLElement> mRoot;
 
   // The document mRoot is in, if any
   nsCOMPtr<nsIDocument> mDoc;
@@ -148,21 +149,21 @@ protected:
   bool mIsDirty;
 };
 
-class PropertyNodeList MOZ_FINAL : public nsINodeList,
-                                   public nsStubMutationObserver
+class PropertyNodeList final : public nsINodeList,
+                               public nsStubMutationObserver
 {
 public:
   PropertyNodeList(HTMLPropertiesCollection* aCollection,
                    nsIContent* aRoot, const nsAString& aName);
 
-  virtual JSObject* WrapObject(JSContext *cx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
 
   void SetDocument(nsIDocument* aDocument);
 
   void GetValues(JSContext* aCx, nsTArray<JS::Value >& aResult,
                  ErrorResult& aError);
 
-  virtual nsIContent* Item(uint32_t aIndex) MOZ_OVERRIDE;
+  virtual nsIContent* Item(uint32_t aIndex) override;
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
@@ -176,8 +177,8 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
   // nsINodeList interface
-  virtual int32_t IndexOf(nsIContent* aContent) MOZ_OVERRIDE;
-  virtual nsINode* GetParentObject() MOZ_OVERRIDE;
+  virtual int32_t IndexOf(nsIContent* aContent) override;
+  virtual nsINode* GetParentObject() override;
 
   void AppendElement(nsGenericHTMLElement* aElement)
   {
@@ -204,13 +205,13 @@ protected:
   nsCOMPtr<nsIDocument> mDoc;
 
   // the collection that this list is a named item of
-  nsRefPtr<HTMLPropertiesCollection> mCollection;
+  RefPtr<HTMLPropertiesCollection> mCollection;
 
   // the node this list is rooted at
   nsCOMPtr<nsINode> mParent;
 
   // the properties that make up this list
-  nsTArray<nsRefPtr<nsGenericHTMLElement> > mElements;
+  nsTArray<RefPtr<nsGenericHTMLElement> > mElements;
 
   // True if there have been DOM modifications since the last EnsureFresh call. 
   bool mIsDirty;
@@ -218,4 +219,5 @@ protected:
 
 } // namespace dom
 } // namespace mozilla
+
 #endif // HTMLPropertiesCollection_h_

@@ -1,15 +1,16 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_indexeddb_idbkeyrange_h__
-#define mozilla_dom_indexeddb_idbkeyrange_h__
+#ifndef mozilla_dom_idbkeyrange_h__
+#define mozilla_dom_idbkeyrange_h__
 
 #include "js/RootingAPI.h"
 #include "js/Value.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/indexedDB/Key.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
@@ -28,15 +29,16 @@ namespace dom {
 class GlobalObject;
 
 namespace indexedDB {
-
 class SerializedKeyRange;
+} // namespace indexedDB
 
-class IDBKeyRange MOZ_FINAL
+class IDBKeyRange
   : public nsISupports
 {
+protected:
   nsCOMPtr<nsISupports> mGlobal;
-  Key mLower;
-  Key mUpper;
+  indexedDB::Key mLower;
+  indexedDB::Key mUpper;
   JS::Heap<JS::Value> mCachedLowerVal;
   JS::Heap<JS::Value> mCachedUpperVal;
 
@@ -55,13 +57,14 @@ public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(IDBKeyRange)
 
+  // aCx is allowed to be null, but only if aVal.isUndefined().
   static nsresult
   FromJSVal(JSContext* aCx,
             JS::Handle<JS::Value> aVal,
             IDBKeyRange** aKeyRange);
 
   static already_AddRefed<IDBKeyRange>
-  FromSerialized(const SerializedKeyRange& aKeyRange);
+  FromSerialized(const indexedDB::SerializedKeyRange& aKeyRange);
 
   static already_AddRefed<IDBKeyRange>
   Only(const GlobalObject& aGlobal,
@@ -97,31 +100,36 @@ public:
 #endif
 
   void
-  ToSerialized(SerializedKeyRange& aKeyRange) const;
+  ToSerialized(indexedDB::SerializedKeyRange& aKeyRange) const;
 
-  const Key&
+  const indexedDB::Key&
   Lower() const
   {
     return mLower;
   }
 
-  Key&
+  indexedDB::Key&
   Lower()
   {
     return mLower;
   }
 
-  const Key&
+  const indexedDB::Key&
   Upper() const
   {
     return mIsOnly ? mLower : mUpper;
   }
 
-  Key&
+  indexedDB::Key&
   Upper()
   {
     return mIsOnly ? mLower : mUpper;
   }
+
+  bool
+  Includes(JSContext* aCx,
+           JS::Handle<JS::Value> aKey,
+           ErrorResult& aRv) const;
 
   bool
   IsOnly() const
@@ -140,8 +148,8 @@ public:
   DropJSObjects();
 
   // WebIDL
-  JSObject*
-  WrapObject(JSContext* aCx);
+  bool
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto, JS::MutableHandle<JSObject*> aReflector);
 
   nsISupports*
   GetParentObject() const
@@ -169,17 +177,42 @@ public:
     return mUpperOpen;
   }
 
-private:
+protected:
   IDBKeyRange(nsISupports* aGlobal,
               bool aLowerOpen,
               bool aUpperOpen,
               bool aIsOnly);
 
-  ~IDBKeyRange();
+  virtual ~IDBKeyRange();
 };
 
-} // namespace indexedDB
+class IDBLocaleAwareKeyRange final
+  : public IDBKeyRange
+{
+  IDBLocaleAwareKeyRange(nsISupports* aGlobal,
+                         bool aLowerOpen,
+                         bool aUpperOpen,
+                         bool aIsOnly);
+
+  ~IDBLocaleAwareKeyRange();
+
+public:
+  static already_AddRefed<IDBLocaleAwareKeyRange>
+  Bound(const GlobalObject& aGlobal,
+        JS::Handle<JS::Value> aLower,
+        JS::Handle<JS::Value> aUpper,
+        bool aLowerOpen,
+        bool aUpperOpen,
+        ErrorResult& aRv);
+
+  NS_DECL_ISUPPORTS_INHERITED
+
+  // WebIDL
+  bool
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto, JS::MutableHandle<JSObject*> aReflector);
+};
+
 } // namespace dom
 } // namespace mozilla
 
-#endif // mozilla_dom_indexeddb_idbkeyrange_h__
+#endif // mozilla_dom_idbkeyrange_h__

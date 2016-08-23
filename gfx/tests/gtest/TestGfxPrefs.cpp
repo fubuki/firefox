@@ -25,7 +25,7 @@ TEST(GfxPrefs, LiveValues) {
   ASSERT_TRUE(gfxPrefs::SingletonExists());
 
   // Live boolean, default false
-  ASSERT_FALSE(gfxPrefs::CanvasAzureAccelerated());
+  ASSERT_FALSE(gfxPrefs::LayersDumpTexture());
 
   // Live int32_t, default 23456
   ASSERT_TRUE(gfxPrefs::LayerScopePort() == 23456);
@@ -66,11 +66,11 @@ TEST(GfxPrefs, Set) {
   ASSERT_FALSE(gfxPrefs::LayersDump());
 
   // Live boolean, default false
-  ASSERT_FALSE(gfxPrefs::CanvasAzureAccelerated());
-  gfxPrefs::SetCanvasAzureAccelerated(true);
-  ASSERT_TRUE(gfxPrefs::CanvasAzureAccelerated());
-  gfxPrefs::SetCanvasAzureAccelerated(false);
-  ASSERT_FALSE(gfxPrefs::CanvasAzureAccelerated());
+  ASSERT_FALSE(gfxPrefs::LayersDumpTexture());
+  gfxPrefs::SetLayersDumpTexture(true);
+  ASSERT_TRUE(gfxPrefs::LayersDumpTexture());
+  gfxPrefs::SetLayersDumpTexture(false);
+  ASSERT_FALSE(gfxPrefs::LayersDumpTexture());
 
   // Once float, default -1
   ASSERT_TRUE(gfxPrefs::APZMaxVelocity() == -1.0f);
@@ -79,3 +79,28 @@ TEST(GfxPrefs, Set) {
   gfxPrefs::SetAPZMaxVelocity(-1.0f);
   ASSERT_TRUE(gfxPrefs::APZMaxVelocity() == -1.0f);
 }
+
+#ifdef MOZ_CRASHREPORTER
+// Randomly test the function we use in nsExceptionHandler.cpp here:
+extern bool SimpleNoCLibDtoA(double aValue, char* aBuffer, int aBufferLength);
+TEST(GfxPrefs, StringUtility)
+{
+  char testBuffer[64];
+  double testVal[] = {13.4,
+                      3324243.42,
+                      0.332424342,
+                      864.0,
+                      86400 * 100000000.0 * 10000000000.0 * 10000000000.0 * 100.0,
+                      86400.0 * 366.0 * 100.0 + 14243.44332};
+  for (size_t i=0; i<mozilla::ArrayLength(testVal); i++) {
+    ASSERT_TRUE(SimpleNoCLibDtoA(testVal[i], testBuffer, sizeof(testBuffer)));
+    ASSERT_TRUE(fabs(1.0 - atof(testBuffer)/testVal[i]) < 0.0001);
+  }
+
+  // We do not like negative numbers (random limitation)
+  ASSERT_FALSE(SimpleNoCLibDtoA(-864.0, testBuffer, sizeof(testBuffer)));
+
+  // It won't fit into 32:
+  ASSERT_FALSE(SimpleNoCLibDtoA(testVal[4], testBuffer, sizeof(testBuffer)/2));
+}
+#endif

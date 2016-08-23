@@ -4,15 +4,15 @@
 
 // Tests that state menu is displayed correctly (enabled or disabled) in the add-on manager
 // when the preference is unlocked / locked
-const {classes: Cc, interfaces: Ci} = Components;
+var {classes: Cc, interfaces: Ci} = Components;
 const gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
 const gIsOSX = ("nsILocalFileMac" in Ci);
 const gIsLinux = ("@mozilla.org/gnome-gconf-service;1" in Cc) ||
   ("@mozilla.org/gio-service;1" in Cc);
 
-let gManagerWindow;
-let gCategoryUtilities;
-let gPluginElement;
+var gManagerWindow;
+var gCategoryUtilities;
+var gPluginElement;
 
 function getTestPluginPref() {
   let prefix = "plugin.state.";
@@ -30,9 +30,9 @@ registerCleanupFunction(() => {
 });
 
 function getPlugins() {
-  let deferred = Promise.defer();
-  AddonManager.getAddonsByTypes(["plugin"], plugins => deferred.resolve(plugins));
-  return deferred.promise;
+  return new Promise(resolve => {
+    AddonManager.getAddonsByTypes(["plugin"], plugins => resolve(plugins));
+  });
 }
 
 function getTestPlugin(aPlugins) {
@@ -76,15 +76,15 @@ function checkStateMenuDetail(locked) {
   is_element_visible(details, "Details link should be visible.");
   EventUtils.synthesizeMouseAtCenter(details, {}, gManagerWindow);
 
-  let deferred = Promise.defer();
-  wait_for_view_load(gManagerWindow, function() {
-    let menuList = gManagerWindow.document.getElementById("detail-state-menulist");
-    is_element_visible(menuList, "Details state menu should be visible.");
-    Assert.equal(menuList.disabled, locked,
-      "Details state menu enabled state should be correct.");
-    deferred.resolve();
+  return new Promise(resolve => {
+    wait_for_view_load(gManagerWindow, function() {
+      let menuList = gManagerWindow.document.getElementById("detail-state-menulist");
+      is_element_visible(menuList, "Details state menu should be visible.");
+      Assert.equal(menuList.disabled, locked,
+        "Details state menu enabled state should be correct.");
+      resolve();
+    });
   });
-  return deferred.promise;
 }
 
 add_task(function* initializeState() {

@@ -15,21 +15,25 @@
 #include "nsIHttpChannel.h"
 #include "nsIIOService.h"
 #include "nsIPrefService.h"
-#include "nsIScriptSecurityManager.h"
+#include "nsISimpleEnumerator.h"
 #include "nsIStreamListener.h"
 #include "nsIStringStream.h"
+#include "nsITimer.h"
 #include "nsIUploadChannel2.h"
 #include "nsIURI.h"
+#include "nsIURL.h"
 #include "nsIUrlClassifierDBService.h"
 #include "nsIX509Cert.h"
 #include "nsIX509CertDB.h"
 #include "nsIX509CertList.h"
 
+#include "mozilla/BasePrincipal.h"
+#include "mozilla/ErrorNames.h"
+#include "mozilla/LoadContext.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
-#include "mozilla/LoadContext.h"
 
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
@@ -43,6 +47,12 @@
 #include "nsThreadUtils.h"
 #include "nsXPCOMStrings.h"
 
+#include "nsIContentPolicy.h"
+#include "nsILoadInfo.h"
+#include "nsContentUtils.h"
+
+using mozilla::BasePrincipal;
+using mozilla::PrincipalOriginAttributes;
 using mozilla::Preferences;
 using mozilla::TimeStamp;
 using mozilla::Telemetry::Accumulate;
@@ -52,23 +62,25 @@ using safe_browsing::ClientDownloadRequest_Resource;
 using safe_browsing::ClientDownloadRequest_SignatureInfo;
 
 // Preferences that we need to initialize the query.
-#define PREF_SB_APP_REP_URL "browser.safebrowsing.appRepURL"
+#define PREF_SB_APP_REP_URL "browser.safebrowsing.downloads.remote.url"
 #define PREF_SB_MALWARE_ENABLED "browser.safebrowsing.malware.enabled"
 #define PREF_SB_DOWNLOADS_ENABLED "browser.safebrowsing.downloads.enabled"
 #define PREF_SB_DOWNLOADS_REMOTE_ENABLED "browser.safebrowsing.downloads.remote.enabled"
+#define PREF_SB_DOWNLOADS_REMOTE_TIMEOUT "browser.safebrowsing.downloads.remote.timeout_ms"
 #define PREF_GENERAL_LOCALE "general.useragent.locale"
 #define PREF_DOWNLOAD_BLOCK_TABLE "urlclassifier.downloadBlockTable"
 #define PREF_DOWNLOAD_ALLOW_TABLE "urlclassifier.downloadAllowTable"
 
+// Preferences that are needed to action the verdict.
+#define PREF_BLOCK_DANGEROUS            "browser.safebrowsing.downloads.remote.block_dangerous"
+#define PREF_BLOCK_DANGEROUS_HOST       "browser.safebrowsing.downloads.remote.block_dangerous_host"
+#define PREF_BLOCK_POTENTIALLY_UNWANTED "browser.safebrowsing.downloads.remote.block_potentially_unwanted"
+#define PREF_BLOCK_UNCOMMON             "browser.safebrowsing.downloads.remote.block_uncommon"
+
 // NSPR_LOG_MODULES=ApplicationReputation:5
-#if defined(PR_LOGGING)
-PRLogModuleInfo *ApplicationReputationService::prlog = nullptr;
-#define LOG(args) PR_LOG(ApplicationReputationService::prlog, PR_LOG_DEBUG, args)
-#define LOG_ENABLED() PR_LOG_TEST(ApplicationReputationService::prlog, 4)
-#else
-#define LOG(args)
-#define LOG_ENABLED() (false)
-#endif
+mozilla::LazyLogModule ApplicationReputationService::prlog("ApplicationReputation");
+#define LOG(args) MOZ_LOG(ApplicationReputationService::prlog, mozilla::LogLevel::Debug, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(ApplicationReputationService::prlog, mozilla::LogLevel::Debug)
 
 class PendingDBLookup;
 
@@ -76,12 +88,14 @@ class PendingDBLookup;
 // nsIApplicationReputationQuery and an nsIApplicationReputationCallback. Once
 // created by ApplicationReputationService, it is guaranteed to call mCallback.
 // This class is private to ApplicationReputationService.
-class PendingLookup MOZ_FINAL : public nsIStreamListener
+class PendingLookup final : public nsIStreamListener,
+                            public nsITimerCallback
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
+  NS_DECL_NSITIMERCALLBACK
 
   // Constructor and destructor.
   PendingLookup(nsIApplicationReputationQuery* aQuery,
@@ -126,6 +140,12 @@ private:
   // When we started this query
   TimeStamp mStartTime;
 
+  // The channel used to talk to the remote lookup server
+  nsCOMPtr<nsIChannel> mChannel;
+
+  // Timer to abort this lookup if it takes too long
+  nsCOMPtr<nsITimer> mTimeoutTimer;
+
   // A protocol buffer for storing things we need in the remote request. We
   // store the resource chain (redirect information) as well as signature
   // information extracted using the Windows Authenticode API, if the binary is
@@ -137,19 +157,24 @@ private:
   // NULLs.
   nsCString mResponse;
 
-  // Returns true if the file is likely to be binary on Windows.
+  // Returns true if the file is likely to be binary.
   bool IsBinaryFile();
+
+  // Returns the type of download binary for the file.
+  ClientDownloadRequest::DownloadType GetDownloadType(const nsAString& aFilename);
 
   // Clean up and call the callback. PendingLookup must not be used after this
   // function is called.
-  nsresult OnComplete(bool shouldBlock, nsresult rv);
+  nsresult OnComplete(bool shouldBlock, nsresult rv,
+    uint32_t verdict = nsIApplicationReputationService::VERDICT_SAFE);
 
   // Wrapper function for nsIStreamListener.onStopRequest to make it easy to
   // guarantee calling the callback
   nsresult OnStopRequestInternal(nsIRequest *aRequest,
                                  nsISupports *aContext,
                                  nsresult aResult,
-                                 bool* aShouldBlock);
+                                 bool* aShouldBlock,
+                                 uint32_t* aVerdict);
 
   // Strip url parameters, fragments, and user@pass fields from the URI spec
   // using nsIURL. If aURI is not an nsIURL, returns the original nsIURI.spec.
@@ -205,7 +230,7 @@ private:
 
 // A single-use class for looking up a single URI in the safebrowsing DB. This
 // class is private to PendingLookup.
-class PendingDBLookup MOZ_FINAL : public nsIUrlClassifierCallback
+class PendingDBLookup final : public nsIUrlClassifierCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -232,7 +257,7 @@ private:
 
   nsCString mSpec;
   bool mAllowlistOnly;
-  nsRefPtr<PendingLookup> mPendingLookup;
+  RefPtr<PendingLookup> mPendingLookup;
   nsresult LookupSpecInternal(const nsACString& aSpec);
 };
 
@@ -279,19 +304,20 @@ PendingDBLookup::LookupSpecInternal(const nsACString& aSpec)
   rv = ios->NewURI(aSpec, nullptr, nullptr, getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIPrincipal> principal;
-  nsCOMPtr<nsIScriptSecurityManager> secMan =
-    do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = secMan->GetNoAppCodebasePrincipal(uri, getter_AddRefs(principal));
-  NS_ENSURE_SUCCESS(rv, rv);
+  PrincipalOriginAttributes attrs;
+  nsCOMPtr<nsIPrincipal> principal =
+    BasePrincipal::CreateCodebasePrincipal(uri, attrs);
+  if (!principal) {
+    return NS_ERROR_FAILURE;
+  }
 
   // Check local lists to see if the URI has already been whitelisted or
   // blacklisted.
   LOG(("Checking DB service for principal %s [this = %p]", mSpec.get(), this));
   nsCOMPtr<nsIUrlClassifierDBService> dbService =
     do_GetService(NS_URLCLASSIFIERDBSERVICE_CONTRACTID, &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+
   nsAutoCString tables;
   nsAutoCString allowlist;
   Preferences::GetCString(PREF_DOWNLOAD_ALLOW_TABLE, &allowlist);
@@ -320,7 +346,8 @@ PendingDBLookup::HandleEvent(const nsACString& tables)
     mPendingLookup->mBlocklistCount++;
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_LOCAL, BLOCK_LIST);
     LOG(("Found principal %s on blocklist [this = %p]", mSpec.get(), this));
-    return mPendingLookup->OnComplete(true, NS_OK);
+    return mPendingLookup->OnComplete(true, NS_OK,
+      nsIApplicationReputationService::VERDICT_DANGEROUS);
   }
 
   nsAutoCString allowList;
@@ -369,9 +396,14 @@ PendingLookup::IsBinaryFile()
   LOG(("Suggested filename: %s [this = %p]",
        NS_ConvertUTF16toUTF8(fileName).get(), this));
   return
-    // Executable extensions for MS Windows, from
-    // https://code.google.com/p/chromium/codesearch#chromium/src/chrome/common/safe_browsing/download_protection_util.cc&l=14
+    // From https://code.google.com/p/chromium/codesearch#chromium/src/chrome/common/safe_browsing/download_protection_util.cc&l=14
+    // Archives _may_ contain binaries
+#ifdef XP_WIN // disable on Mac/Linux, see 1167493
+    StringEndsWith(fileName, NS_LITERAL_STRING(".zip")) ||
+#endif
+    // Android extensions
     StringEndsWith(fileName, NS_LITERAL_STRING(".apk")) ||
+    // Windows extensions
     StringEndsWith(fileName, NS_LITERAL_STRING(".bas")) ||
     StringEndsWith(fileName, NS_LITERAL_STRING(".bat")) ||
     StringEndsWith(fileName, NS_LITERAL_STRING(".cab")) ||
@@ -385,7 +417,30 @@ PendingLookup::IsBinaryFile()
     StringEndsWith(fileName, NS_LITERAL_STRING(".scr")) ||
     StringEndsWith(fileName, NS_LITERAL_STRING(".vb")) ||
     StringEndsWith(fileName, NS_LITERAL_STRING(".vbs")) ||
-    StringEndsWith(fileName, NS_LITERAL_STRING(".zip"));
+    // Mac extensions
+    StringEndsWith(fileName, NS_LITERAL_STRING(".app")) ||
+    StringEndsWith(fileName, NS_LITERAL_STRING(".dmg")) ||
+    StringEndsWith(fileName, NS_LITERAL_STRING(".osx")) ||
+    StringEndsWith(fileName, NS_LITERAL_STRING(".pkg"));
+}
+
+ClientDownloadRequest::DownloadType
+PendingLookup::GetDownloadType(const nsAString& aFilename) {
+  MOZ_ASSERT(IsBinaryFile());
+
+  // From https://code.google.com/p/chromium/codesearch#chromium/src/chrome/common/safe_browsing/download_protection_util.cc&l=46
+  if (StringEndsWith(aFilename, NS_LITERAL_STRING(".zip"))) {
+    return ClientDownloadRequest::ZIPPED_EXECUTABLE;
+  } else if (StringEndsWith(aFilename, NS_LITERAL_STRING(".apk"))) {
+    return ClientDownloadRequest::ANDROID_APK;
+  } else if (StringEndsWith(aFilename, NS_LITERAL_STRING(".app")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".dmg")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".osx")) ||
+             StringEndsWith(aFilename, NS_LITERAL_STRING(".pkg"))) {
+    return ClientDownloadRequest::MAC_EXECUTABLE;
+  }
+
+  return ClientDownloadRequest::WIN_EXECUTABLE; // default to Windows binaries
 }
 
 nsresult
@@ -395,7 +450,8 @@ PendingLookup::LookupNext()
   // Look up all of the URLs that could allow or block this download.
   // Blocklist first.
   if (mBlocklistCount > 0) {
-    return OnComplete(true, NS_OK);
+    return OnComplete(true, NS_OK,
+                      nsIApplicationReputationService::VERDICT_DANGEROUS);
   }
   int index = mAnylistSpecs.Length() - 1;
   nsCString spec;
@@ -403,12 +459,13 @@ PendingLookup::LookupNext()
     // Check the source URI, referrer and redirect chain.
     spec = mAnylistSpecs[index];
     mAnylistSpecs.RemoveElementAt(index);
-    nsRefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
+    RefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
     return lookup->LookupSpec(spec, false);
   }
   // If any of mAnylistSpecs matched the blocklist, go ahead and block.
   if (mBlocklistCount > 0) {
-    return OnComplete(true, NS_OK);
+    return OnComplete(true, NS_OK,
+                      nsIApplicationReputationService::VERDICT_DANGEROUS);
   }
   // If any of mAnylistSpecs matched the allowlist, go ahead and pass.
   if (mAllowlistCount > 0) {
@@ -420,26 +477,20 @@ PendingLookup::LookupNext()
     spec = mAllowlistSpecs[index];
     LOG(("PendingLookup::LookupNext: checking %s on allowlist", spec.get()));
     mAllowlistSpecs.RemoveElementAt(index);
-    nsRefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
+    RefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
     return lookup->LookupSpec(spec, true);
   }
-#ifdef XP_WIN
   // There are no more URIs to check against local list. If the file is
   // not eligible for remote lookup, bail.
   if (!IsBinaryFile()) {
     LOG(("Not eligible for remote lookups [this=%x]", this));
     return OnComplete(false, NS_OK);
   }
-  // Send the remote query if we are on Windows.
   nsresult rv = SendRemoteQuery();
   if (NS_FAILED(rv)) {
     return OnComplete(false, rv);
   }
   return NS_OK;
-#else
-  LOG(("PendingLookup: Nothing left to check [this=%p]", this));
-  return OnComplete(false, NS_OK);
-#endif
 }
 
 nsCString
@@ -557,7 +608,7 @@ PendingLookup::GenerateWhitelistStringsForChain(
       aChain.element(i).certificate().size(), getter_AddRefs(issuer));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsresult rv = GenerateWhitelistStringsForPair(signer, issuer);
+    rv = GenerateWhitelistStringsForPair(signer, issuer);
     NS_ENSURE_SUCCESS(rv, rv);
   }
   return NS_OK;
@@ -626,7 +677,7 @@ PendingLookup::StartLookup()
   nsresult rv = DoLookupInternal();
   if (NS_FAILED(rv)) {
     return OnComplete(false, NS_OK);
-  };
+  }
   return rv;
 }
 
@@ -667,24 +718,24 @@ PendingLookup::DoLookupInternal()
   nsresult rv = mQuery->GetSourceURI(getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCString spec;
-  rv = GetStrippedSpec(uri, spec);
+  nsCString sourceSpec;
+  rv = GetStrippedSpec(uri, sourceSpec);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mAnylistSpecs.AppendElement(spec);
+  mAnylistSpecs.AppendElement(sourceSpec);
 
   ClientDownloadRequest_Resource* resource = mRequest.add_resources();
-  resource->set_url(spec.get());
+  resource->set_url(sourceSpec.get());
   resource->set_type(ClientDownloadRequest::DOWNLOAD_URL);
 
   nsCOMPtr<nsIURI> referrer = nullptr;
   rv = mQuery->GetReferrerURI(getter_AddRefs(referrer));
   if (referrer) {
-    nsCString spec;
-    rv = GetStrippedSpec(referrer, spec);
+    nsCString referrerSpec;
+    rv = GetStrippedSpec(referrer, referrerSpec);
     NS_ENSURE_SUCCESS(rv, rv);
-    mAnylistSpecs.AppendElement(spec);
-    resource->set_referrer(spec.get());
+    mAnylistSpecs.AppendElement(referrerSpec);
+    resource->set_referrer(referrerSpec.get());
   }
   nsCOMPtr<nsIArray> redirects;
   rv = mQuery->GetRedirects(getter_AddRefs(redirects));
@@ -713,20 +764,35 @@ PendingLookup::DoLookupInternal()
 }
 
 nsresult
-PendingLookup::OnComplete(bool shouldBlock, nsresult rv)
+PendingLookup::OnComplete(bool shouldBlock, nsresult rv, uint32_t verdict)
 {
+  MOZ_ASSERT(!shouldBlock ||
+             verdict != nsIApplicationReputationService::VERDICT_SAFE);
+
+  if (NS_FAILED(rv)) {
+    nsAutoCString errorName;
+    mozilla::GetErrorName(rv, errorName);
+    LOG(("Failed sending remote query for application reputation "
+         "[rv = %s, this = %p]", errorName.get(), this));
+  }
+
+  if (mTimeoutTimer) {
+    mTimeoutTimer->Cancel();
+    mTimeoutTimer = nullptr;
+  }
+
   Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_SHOULD_BLOCK,
     shouldBlock);
-#if defined(PR_LOGGING)
   double t = (TimeStamp::Now() - mStartTime).ToMilliseconds();
-#endif
+  LOG(("Application Reputation verdict is %lu, obtained in %f ms [this = %p]",
+       verdict, t, this));
   if (shouldBlock) {
-    LOG(("Application Reputation check failed, blocking bad binary in %f ms "
-         "[this = %p]", t, this));
+    LOG(("Application Reputation check failed, blocking bad binary [this = %p]",
+        this));
   } else {
-    LOG(("Application Reputation check passed in %f ms [this = %p]", t, this));
+    LOG(("Application Reputation check passed [this = %p]", this));
   }
-  nsresult res = mCallback->OnComplete(shouldBlock, rv);
+  nsresult res = mCallback->OnComplete(shouldBlock, rv, verdict);
   return res;
 }
 
@@ -748,11 +814,11 @@ PendingLookup::ParseCertificates(nsIArray* aSigArray)
   NS_ENSURE_SUCCESS(rv, rv);
 
   while (hasMoreChains) {
-    nsCOMPtr<nsISupports> supports;
-    rv = chains->GetNext(getter_AddRefs(supports));
+    nsCOMPtr<nsISupports> chainSupports;
+    rv = chains->GetNext(getter_AddRefs(chainSupports));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIX509CertList> certList = do_QueryInterface(supports, &rv);
+    nsCOMPtr<nsIX509CertList> certList = do_QueryInterface(chainSupports, &rv);
     NS_ENSURE_SUCCESS(rv, rv);
 
     safe_browsing::ClientDownloadRequest_CertificateChain* certChain =
@@ -765,11 +831,11 @@ PendingLookup::ParseCertificates(nsIArray* aSigArray)
     bool hasMoreCerts = false;
     rv = chainElt->HasMoreElements(&hasMoreCerts);
     while (hasMoreCerts) {
-      nsCOMPtr<nsISupports> supports;
-      rv = chainElt->GetNext(getter_AddRefs(supports));
+      nsCOMPtr<nsISupports> certSupports;
+      rv = chainElt->GetNext(getter_AddRefs(certSupports));
       NS_ENSURE_SUCCESS(rv, rv);
 
-      nsCOMPtr<nsIX509Cert> cert = do_QueryInterface(supports, &rv);
+      nsCOMPtr<nsIX509Cert> cert = do_QueryInterface(certSupports, &rv);
       NS_ENSURE_SUCCESS(rv, rv);
 
       uint8_t* data = nullptr;
@@ -779,7 +845,7 @@ PendingLookup::ParseCertificates(nsIArray* aSigArray)
 
       // Add this certificate to the protobuf to send remotely.
       certChain->add_element()->set_certificate(data, len);
-      nsMemory::Free(data);
+      free(data);
 
       rv = chainElt->HasMoreElements(&hasMoreCerts);
       NS_ENSURE_SUCCESS(rv, rv);
@@ -798,8 +864,6 @@ PendingLookup::SendRemoteQuery()
 {
   nsresult rv = SendRemoteQueryInternal();
   if (NS_FAILED(rv)) {
-    LOG(("Failed sending remote query for application reputation "
-         "[this = %p]", this));
     return OnComplete(false, rv);
   }
   // SendRemoteQueryInternal has fired off the query and we call OnComplete in
@@ -812,29 +876,43 @@ PendingLookup::SendRemoteQueryInternal()
 {
   // If we aren't supposed to do remote lookups, bail.
   if (!Preferences::GetBool(PREF_SB_DOWNLOADS_REMOTE_ENABLED, false)) {
+    LOG(("Remote lookups are disabled [this = %p]", this));
     return NS_ERROR_NOT_AVAILABLE;
   }
   // If the remote lookup URL is empty or absent, bail.
   nsCString serviceUrl;
   NS_ENSURE_SUCCESS(Preferences::GetCString(PREF_SB_APP_REP_URL, &serviceUrl),
                     NS_ERROR_NOT_AVAILABLE);
-  if (serviceUrl.EqualsLiteral("")) {
+  if (serviceUrl.IsEmpty()) {
+    LOG(("Remote lookup URL is empty [this = %p]", this));
     return NS_ERROR_NOT_AVAILABLE;
   }
 
   // If the blocklist or allowlist is empty (so we couldn't do local lookups),
   // bail
-  nsCString table;
-  NS_ENSURE_SUCCESS(Preferences::GetCString(PREF_DOWNLOAD_BLOCK_TABLE, &table),
-                    NS_ERROR_NOT_AVAILABLE);
-  if (table.EqualsLiteral("")) {
-    return NS_ERROR_NOT_AVAILABLE;
+  {
+    nsAutoCString table;
+    NS_ENSURE_SUCCESS(Preferences::GetCString(PREF_DOWNLOAD_BLOCK_TABLE,
+                                              &table),
+                      NS_ERROR_NOT_AVAILABLE);
+    if (table.IsEmpty()) {
+      LOG(("Blocklist is empty [this = %p]", this));
+      return NS_ERROR_NOT_AVAILABLE;
+    }
   }
-  NS_ENSURE_SUCCESS(Preferences::GetCString(PREF_DOWNLOAD_ALLOW_TABLE, &table),
-                    NS_ERROR_NOT_AVAILABLE);
-  if (table.EqualsLiteral("")) {
-    return NS_ERROR_NOT_AVAILABLE;
+#ifdef XP_WIN
+  // The allowlist is only needed to do signature verification on Windows
+  {
+    nsAutoCString table;
+    NS_ENSURE_SUCCESS(Preferences::GetCString(PREF_DOWNLOAD_ALLOW_TABLE,
+                                              &table),
+                      NS_ERROR_NOT_AVAILABLE);
+    if (table.IsEmpty()) {
+      LOG(("Allowlist is empty [this = %p]", this));
+      return NS_ERROR_NOT_AVAILABLE;
+    }
   }
+#endif
 
   LOG(("Sending remote query for application reputation [this = %p]",
        this));
@@ -869,6 +947,7 @@ PendingLookup::SendRemoteQueryInternal()
   rv = mQuery->GetSuggestedFileName(fileName);
   NS_ENSURE_SUCCESS(rv, rv);
   mRequest.set_file_basename(NS_ConvertUTF16toUTF8(fileName).get());
+  mRequest.set_download_type(GetDownloadType(fileName));
 
   if (mRequest.signature().trusted()) {
     LOG(("Got signed binary for remote application reputation check "
@@ -885,6 +964,8 @@ PendingLookup::SendRemoteQueryInternal()
   if (!mRequest.SerializeToString(&serialized)) {
     return NS_ERROR_UNEXPECTED;
   }
+  LOG(("Serialized protocol buffer [this = %p]: (length=%d) %s", this,
+       serialized.length(), serialized.c_str()));
 
   // Set the input stream to the serialized protocol buffer
   nsCOMPtr<nsIStringInputStream> sstream =
@@ -895,16 +976,29 @@ PendingLookup::SendRemoteQueryInternal()
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Set up the channel to transmit the request to the service.
-  nsCOMPtr<nsIChannel> channel;
   nsCOMPtr<nsIIOService> ios = do_GetService(NS_IOSERVICE_CONTRACTID, &rv);
-  rv = ios->NewChannel(serviceUrl, nullptr, nullptr, getter_AddRefs(channel));
+  rv = ios->NewChannel2(serviceUrl,
+                        nullptr,
+                        nullptr,
+                        nullptr, // aLoadingNode
+                        nsContentUtils::GetSystemPrincipal(),
+                        nullptr, // aTriggeringPrincipal
+                        nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                        nsIContentPolicy::TYPE_OTHER,
+                        getter_AddRefs(mChannel));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel, &rv));
+  nsCOMPtr<nsILoadInfo> loadInfo = mChannel->GetLoadInfo();
+  if (loadInfo) {
+    loadInfo->SetOriginAttributes(
+      mozilla::NeckoOriginAttributes(NECKO_SAFEBROWSING_APP_ID, false));
+  }
+
+  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel, &rv));
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Upload the protobuf to the application reputation service.
-  nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(channel, &rv);
+  nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(mChannel, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = uploadChannel->ExplicitSetUploadStream(sstream,
@@ -916,12 +1010,26 @@ PendingLookup::SendRemoteQueryInternal()
   // sent with this request. See bug 897516.
   nsCOMPtr<nsIInterfaceRequestor> loadContext =
     new mozilla::LoadContext(NECKO_SAFEBROWSING_APP_ID);
-  rv = channel->SetNotificationCallbacks(loadContext);
+  rv = mChannel->SetNotificationCallbacks(loadContext);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = channel->AsyncOpen(this, nullptr);
+  uint32_t timeoutMs = Preferences::GetUint(PREF_SB_DOWNLOADS_REMOTE_TIMEOUT, 10000);
+  mTimeoutTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+  mTimeoutTimer->InitWithCallback(this, timeoutMs, nsITimer::TYPE_ONE_SHOT);
+
+  rv = mChannel->AsyncOpen2(this);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PendingLookup::Notify(nsITimer* aTimer)
+{
+  LOG(("Remote lookup timed out [this = %p]", this));
+  MOZ_ASSERT(aTimer == mTimeoutTimer);
+  mChannel->Cancel(NS_ERROR_NET_TIMEOUT);
+  mTimeoutTimer->Cancel();
   return NS_OK;
 }
 
@@ -963,9 +1071,10 @@ PendingLookup::OnStopRequest(nsIRequest *aRequest,
   NS_ENSURE_STATE(mCallback);
 
   bool shouldBlock = false;
+  uint32_t verdict = nsIApplicationReputationService::VERDICT_SAFE;
   nsresult rv = OnStopRequestInternal(aRequest, aContext, aResult,
-                                      &shouldBlock);
-  OnComplete(shouldBlock, rv);
+                                      &shouldBlock, &verdict);
+  OnComplete(shouldBlock, rv, verdict);
   return rv;
 }
 
@@ -973,7 +1082,8 @@ nsresult
 PendingLookup::OnStopRequestInternal(nsIRequest *aRequest,
                                      nsISupports *aContext,
                                      nsresult aResult,
-                                     bool* aShouldBlock) {
+                                     bool* aShouldBlock,
+                                     uint32_t* aVerdict) {
   if (NS_FAILED(aResult)) {
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_SERVER,
       SERVER_RESPONSE_FAILED);
@@ -981,6 +1091,7 @@ PendingLookup::OnStopRequestInternal(nsIRequest *aRequest,
   }
 
   *aShouldBlock = false;
+  *aVerdict = nsIApplicationReputationService::VERDICT_SAFE;
   nsresult rv;
   nsCOMPtr<nsIHttpChannel> channel = do_QueryInterface(aRequest, &rv);
   if (NS_FAILED(rv)) {
@@ -1006,14 +1117,12 @@ PendingLookup::OnStopRequestInternal(nsIRequest *aRequest,
   std::string buf(mResponse.Data(), mResponse.Length());
   safe_browsing::ClientDownloadResponse response;
   if (!response.ParseFromString(buf)) {
-    NS_WARNING("Could not parse protocol buffer");
+    LOG(("Invalid protocol buffer response [this = %p]: %s", this, buf.c_str()));
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_SERVER,
                                    SERVER_RESPONSE_INVALID);
     return NS_ERROR_CANNOT_CONVERT_DATA;
   }
 
-  // There are several more verdicts, but we only respect DANGEROUS and
-  // DANGEROUS_HOST for now and treat everything else as SAFE.
   Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_SERVER,
     SERVER_RESPONSE_VALID);
   // Clamp responses 0-7, we only know about 0-4 for now.
@@ -1021,10 +1130,23 @@ PendingLookup::OnStopRequestInternal(nsIRequest *aRequest,
     std::min<uint32_t>(response.verdict(), 7));
   switch(response.verdict()) {
     case safe_browsing::ClientDownloadResponse::DANGEROUS:
+      *aShouldBlock = Preferences::GetBool(PREF_BLOCK_DANGEROUS, true);
+      *aVerdict = nsIApplicationReputationService::VERDICT_DANGEROUS;
+      break;
     case safe_browsing::ClientDownloadResponse::DANGEROUS_HOST:
-      *aShouldBlock = true;
+      *aShouldBlock = Preferences::GetBool(PREF_BLOCK_DANGEROUS_HOST, true);
+      *aVerdict = nsIApplicationReputationService::VERDICT_DANGEROUS_HOST;
+      break;
+    case safe_browsing::ClientDownloadResponse::POTENTIALLY_UNWANTED:
+      *aShouldBlock = Preferences::GetBool(PREF_BLOCK_POTENTIALLY_UNWANTED, false);
+      *aVerdict = nsIApplicationReputationService::VERDICT_POTENTIALLY_UNWANTED;
+      break;
+    case safe_browsing::ClientDownloadResponse::UNCOMMON:
+      *aShouldBlock = Preferences::GetBool(PREF_BLOCK_UNCOMMON, false);
+      *aVerdict = nsIApplicationReputationService::VERDICT_UNCOMMON;
       break;
     default:
+      // Treat everything else as safe
       break;
   }
 
@@ -1056,11 +1178,6 @@ ApplicationReputationService::GetSingleton()
 
 ApplicationReputationService::ApplicationReputationService()
 {
-#if defined(PR_LOGGING)
-  if (!prlog) {
-    prlog = PR_NewLogModule("ApplicationReputation");
-  }
-#endif
   LOG(("Application reputation service started up"));
 }
 
@@ -1081,7 +1198,8 @@ ApplicationReputationService::QueryReputation(
   if (NS_FAILED(rv)) {
     Accumulate(mozilla::Telemetry::APPLICATION_REPUTATION_SHOULD_BLOCK,
       false);
-    aCallback->OnComplete(false, rv);
+    aCallback->OnComplete(false, rv,
+                          nsIApplicationReputationService::VERDICT_SAFE);
   }
   return NS_OK;
 }
@@ -1106,7 +1224,7 @@ nsresult ApplicationReputationService::QueryReputationInternal(
   NS_ENSURE_STATE(uri);
 
   // Create a new pending lookup and start the call chain.
-  nsRefPtr<PendingLookup> lookup(new PendingLookup(aQuery, aCallback));
+  RefPtr<PendingLookup> lookup(new PendingLookup(aQuery, aCallback));
   NS_ENSURE_STATE(lookup);
 
   return lookup->StartLookup();

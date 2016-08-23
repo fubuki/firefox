@@ -12,7 +12,6 @@ DIRS += [
     'base',
     'components',
     'experiments',
-    'fuel',
     'locales',
     'modules',
     'themes',
@@ -20,15 +19,15 @@ DIRS += [
 ]
 
 DIRS += [
-    'devtools',
     'app',
 ]
 
-if CONFIG['MOZ_METRO']:
-    DIRS += ['metro']
-
 if CONFIG['MAKENSISU']:
     DIRS += ['installer/windows']
+
+TEST_DIRS += [
+    'tools/mozscreenshots',
+]
 
 DIST_SUBDIR = 'browser'
 export('DIST_SUBDIR')

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -134,7 +135,7 @@ public:
   }
 
   bool SetCapacity(uint32_t aSize) {
-    return mData.SetCapacity(aSize);
+    return mData.SetCapacity(aSize, fallible);
   }
 
   void Compact() {
@@ -163,9 +164,9 @@ public:
    * ApproximateZeroLengthSubpathSquareCaps can insert if we have square-caps.
    * See the comment for that function for more info on that.
    */
-  TemporaryRef<Path> BuildPathForMeasuring() const;
+  already_AddRefed<Path> BuildPathForMeasuring() const;
 
-  TemporaryRef<Path> BuildPath(PathBuilder* aBuilder,
+  already_AddRefed<Path> BuildPath(PathBuilder* aBuilder,
                                uint8_t aCapStyle,
                                Float aStrokeWidth) const;
 
@@ -201,7 +202,7 @@ protected:
    * increased, in which case the list will be left unmodified.
    */
   bool SetLength(uint32_t aLength) {
-    return mData.SetLength(aLength);
+    return mData.SetLength(aLength, fallible);
   }
 
   nsresult SetValueFromString(const nsAString& aValue);
@@ -235,7 +236,7 @@ protected:
  * sync, so we can safely expose any protected base class methods required by
  * the SMIL code.
  */
-class SVGPathDataAndInfo MOZ_FINAL : public SVGPathData
+class SVGPathDataAndInfo final : public SVGPathData
 {
 public:
   explicit SVGPathDataAndInfo(nsSVGElement *aElement = nullptr)
@@ -263,7 +264,7 @@ public:
    */
   bool IsIdentity() const {
     if (!mElement) {
-      NS_ABORT_IF_FALSE(IsEmpty(), "target element propagation failure");
+      MOZ_ASSERT(IsEmpty(), "target element propagation failure");
       return true;
     }
     return false;

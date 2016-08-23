@@ -4,6 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+for cdm in CONFIG['MOZ_EME_MODULES']:
+    DEFINES['MOZ_%s_EME' % cdm.upper()] = True
+
 EXPORTS.mozilla.dom += [
     'MediaEncryptedEvent.h',
     'MediaKeyError.h',
@@ -12,19 +15,22 @@ EXPORTS.mozilla.dom += [
     'MediaKeySession.h',
     'MediaKeyStatusMap.h',
     'MediaKeySystemAccess.h',
+    'MediaKeySystemAccessManager.h',
 ]
 
 EXPORTS.mozilla += [
     'CDMCallbackProxy.h',
     'CDMCaps.h',
     'CDMProxy.h',
-    'EMEUtils.h'
+    'DetailedPromise.h',
+    'EMEUtils.h',
 ]
 
 UNIFIED_SOURCES += [
     'CDMCallbackProxy.cpp',
     'CDMCaps.cpp',
     'CDMProxy.cpp',
+    'DetailedPromise.cpp',
     'EMEUtils.cpp',
     'MediaEncryptedEvent.cpp',
     'MediaKeyError.cpp',
@@ -33,8 +39,9 @@ UNIFIED_SOURCES += [
     'MediaKeySession.cpp',
     'MediaKeyStatusMap.cpp',
     'MediaKeySystemAccess.cpp',
+    'MediaKeySystemAccessManager.cpp',
 ]
 
-FINAL_LIBRARY = 'xul'
+include('/ipc/chromium/chromium-config.mozbuild')
 
-FAIL_ON_WARNINGS = True
+FINAL_LIBRARY = 'xul'

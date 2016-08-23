@@ -23,12 +23,12 @@ public:
       mImplData = static_cast<ClientLayer*>(this);
   }
 
-  virtual ShadowableLayer* AsShadowableLayer() MOZ_OVERRIDE { return this; }
-  virtual Layer* AsLayer() { return this; }
-  virtual void RenderLayer() {}
+  virtual ShadowableLayer* AsShadowableLayer() override { return this; }
+  virtual Layer* AsLayer() override { return this; }
+  virtual void RenderLayer() override {}
 };
 
-} /* layers */
-} /* mozilla */
+} // namespace layers
+} // namespace mozilla
 
 #endif /* GFX_CLIENTREADBACKLAYER_H */

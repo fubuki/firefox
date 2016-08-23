@@ -4,7 +4,7 @@
     <title>W3C WebSocket API - Create WebSocket - wsocket.protocol is empty before connection is established</title>
     <script type="text/javascript" src="/resources/testharness.js"></script>
     <script type="text/javascript" src="/resources/testharnessreport.js"></script>
-    <script type="text/javascript" src="websocket.js?pipe=sub"></script>
+    <script type="text/javascript" src="websocket.sub.js"></script>
 </head>
 <body>
     <div id="log"></div>
@@ -13,7 +13,7 @@
             var wsocket = CreateWebSocket(false, true, false);
             assert_equals(wsocket.protocol, "", "protocol should be empty");
             wsocket.close();
-        }, "W3C WebSocket API - Create WebSocket - wsocket.protocol should be empty before connection is established")            
+        }, "W3C WebSocket API - Create WebSocket - wsocket.protocol should be empty before connection is established")
     </script>
 </body>
 </html>

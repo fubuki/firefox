@@ -8,7 +8,6 @@
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
 <script src="resources/webperftestharness.js"></script>
-<link rel="stylesheet" href="/resources/testharness.css" />
 <script>
 setup({explicit_done: true});
 
@@ -34,7 +33,7 @@ function testTimingWithDocumentOpen() {
     done();
     return;
   }
-  
+
   var timing = subcontentWindow.performance.timing;
   for (i in timingAttributes) {
     originalTiming[timingAttributes[i]] = timing[timingAttributes[i]];

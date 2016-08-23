@@ -4,14 +4,16 @@
 
 #include "mozilla/net/ChildDNSService.h"
 #include "nsIDNSListener.h"
-#include "nsNetUtil.h"
+#include "nsIIOService.h"
 #include "nsIThread.h"
 #include "nsThreadUtils.h"
 #include "nsIXPConnect.h"
 #include "nsIPrefService.h"
 #include "nsIProtocolProxyService.h"
+#include "nsNetCID.h"
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/net/DNSListenerProxy.h"
+#include "nsServiceManagerUtils.h"
 
 namespace mozilla {
 namespace net {
@@ -42,7 +44,7 @@ NS_IMPL_ISUPPORTS(ChildDNSService,
 
 ChildDNSService::ChildDNSService()
   : mFirstTime(true)
-  , mOffline(false)
+  , mDisablePrefetch(false)
   , mPendingRequestsLock("DNSPendingRequestsLock")
 {
   MOZ_ASSERT(IsNeckoChild());
@@ -56,11 +58,15 @@ ChildDNSService::~ChildDNSService()
 void
 ChildDNSService::GetDNSRecordHashKey(const nsACString &aHost,
                                      uint32_t aFlags,
+                                     const nsACString &aNetworkInterface,
                                      nsIDNSListener* aListener,
                                      nsACString &aHashKey)
 {
   aHashKey.Assign(aHost);
   aHashKey.AppendInt(aFlags);
+  if (!aNetworkInterface.IsEmpty()) {
+    aHashKey.Append(aNetworkInterface);
+  }
   aHashKey.AppendPrintf("%p", aListener);
 }
 
@@ -75,6 +81,18 @@ ChildDNSService::AsyncResolve(const nsACString  &hostname,
                               nsIEventTarget    *target_,
                               nsICancelable    **result)
 {
+  return AsyncResolveExtended(hostname, flags, EmptyCString(), listener,
+                              target_, result);
+}
+
+NS_IMETHODIMP
+ChildDNSService::AsyncResolveExtended(const nsACString  &hostname,
+                                      uint32_t           flags,
+                                      const nsACString  &aNetworkInterface,
+                                      nsIDNSListener    *listener,
+                                      nsIEventTarget    *target_,
+                                      nsICancelable    **result)
+{
   NS_ENSURE_TRUE(gNeckoChild != nullptr, NS_ERROR_FAILURE);
 
   if (mDisablePrefetch && (flags & RESOLVE_SPECULATE)) {
@@ -86,7 +104,7 @@ ChildDNSService::AsyncResolve(const nsACString  &hostname,
 
   // Support apps being 'offline' even if parent is not: avoids DNS traffic by
   // apps that have been told they are offline.
-  if (mOffline) {
+  if (GetOffline()) {
     flags |= RESOLVE_OFFLINE;
   }
 
@@ -107,18 +125,21 @@ ChildDNSService::AsyncResolve(const nsACString  &hostname,
     listener = new DNSListenerProxy(listener, target);
   }
 
-  nsRefPtr<DNSRequestChild> childReq =
-    new DNSRequestChild(nsCString(hostname), flags, listener, target);
+  RefPtr<DNSRequestChild> childReq =
+    new DNSRequestChild(nsCString(hostname), flags,
+                        nsCString(aNetworkInterface),
+                        listener, target);
 
   {
     MutexAutoLock lock(mPendingRequestsLock);
     nsCString key;
-    GetDNSRecordHashKey(hostname, originalFlags, originalListener, key);
-    nsTArray<nsRefPtr<DNSRequestChild>> *hashEntry;
+    GetDNSRecordHashKey(hostname, originalFlags, aNetworkInterface,
+                        originalListener, key);
+    nsTArray<RefPtr<DNSRequestChild>> *hashEntry;
     if (mPendingRequests.Get(key, &hashEntry)) {
       hashEntry->AppendElement(childReq);
     } else {
-      hashEntry = new nsTArray<nsRefPtr<DNSRequestChild>>();
+      hashEntry = new nsTArray<RefPtr<DNSRequestChild>>();
       hashEntry->AppendElement(childReq);
       mPendingRequests.Put(key, hashEntry);
     }
@@ -136,14 +157,25 @@ ChildDNSService::CancelAsyncResolve(const nsACString  &aHostname,
                                     nsIDNSListener    *aListener,
                                     nsresult           aReason)
 {
+  return CancelAsyncResolveExtended(aHostname, aFlags, EmptyCString(),
+                                    aListener, aReason);
+}
+
+NS_IMETHODIMP
+ChildDNSService::CancelAsyncResolveExtended(const nsACString &aHostname,
+                                            uint32_t          aFlags,
+                                            const nsACString &aNetworkInterface,
+                                            nsIDNSListener   *aListener,
+                                            nsresult          aReason)
+{
   if (mDisablePrefetch && (aFlags & RESOLVE_SPECULATE)) {
     return NS_ERROR_DNS_LOOKUP_QUEUE_FULL;
   }
 
   MutexAutoLock lock(mPendingRequestsLock);
-  nsTArray<nsRefPtr<DNSRequestChild>> *hashEntry;
+  nsTArray<RefPtr<DNSRequestChild>> *hashEntry;
   nsCString key;
-  GetDNSRecordHashKey(aHostname, aFlags, aListener, key);
+  GetDNSRecordHashKey(aHostname, aFlags, aNetworkInterface, aListener, key);
   if (mPendingRequests.Get(key, &hashEntry)) {
     // We cancel just one.
     hashEntry->ElementAt(0)->Cancel(aReason);
@@ -195,9 +227,10 @@ ChildDNSService::NotifyRequestDone(DNSRequestChild *aDnsRequest)
   MutexAutoLock lock(mPendingRequestsLock);
 
   nsCString key;
-  GetDNSRecordHashKey(aDnsRequest->mHost, originalFlags, originalListener, key);
+  GetDNSRecordHashKey(aDnsRequest->mHost, originalFlags,
+                      aDnsRequest->mNetworkInterface, originalListener, key);
 
-  nsTArray<nsRefPtr<DNSRequestChild>> *hashEntry;
+  nsTArray<RefPtr<DNSRequestChild>> *hashEntry;
 
   if (mPendingRequests.Get(key, &hashEntry)) {
     int idx;
@@ -266,18 +299,15 @@ ChildDNSService::SetPrefetchEnabled(bool inVal)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-ChildDNSService::GetOffline(bool* aResult)
+bool
+ChildDNSService::GetOffline() const
 {
-  *aResult = mOffline;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ChildDNSService::SetOffline(bool value)
-{
-  mOffline = value;
-  return NS_OK;
+  bool offline = false;
+  nsCOMPtr<nsIIOService> io = do_GetService(NS_IOSERVICE_CONTRACTID);
+  if (io) {
+    io->GetOffline(&offline);
+  }
+  return offline;
 }
 
 //-----------------------------------------------------------------------------

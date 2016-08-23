@@ -3,45 +3,86 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/PlacesUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                  "resource://gre/modules/AppConstants.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+                                  "resource://gre/modules/PlacesUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Task",
+                                  "resource://gre/modules/Task.jsm");
 
 const ENGINE_FLAVOR = "text/x-moz-search-engine";
+
+document.addEventListener("Initialized", () => {
+  if (!AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+    document.getElementById("redirectSearchCheckbox").hidden = true;
+  }
+});
 
 var gEngineView = null;
 
 var gSearchPane = {
 
+  /**
+   * Initialize autocomplete to ensure prefs are in sync.
+   */
+  _initAutocomplete: function () {
+    Components.classes["@mozilla.org/autocomplete/search;1?name=unifiedcomplete"]
+              .getService(Components.interfaces.mozIPlacesAutoComplete);
+  },
+
   init: function ()
   {
-    if (!Services.prefs.getBoolPref("browser.search.showOneOffButtons")) {
-      document.getElementById("category-search").hidden = true;
-      if (document.location.hash == "#search")
-        document.location.hash = "";
-      return;
-    }
-
     gEngineView = new EngineView(new EngineStore());
     document.getElementById("engineList").view = gEngineView;
     this.buildDefaultEngineDropDown();
+
+    window.addEventListener("click", this, false);
+    window.addEventListener("command", this, false);
+    window.addEventListener("dragstart", this, false);
+    window.addEventListener("keypress", this, false);
+    window.addEventListener("select", this, false);
+    window.addEventListener("blur", this, true);
 
     Services.obs.addObserver(this, "browser-search-engine-modified", false);
     window.addEventListener("unload", () => {
       Services.obs.removeObserver(this, "browser-search-engine-modified", false);
     });
+
+    this._initAutocomplete();
+
+    let suggestsPref =
+      document.getElementById("browser.search.suggest.enabled");
+    suggestsPref.addEventListener("change", () => {
+      this.updateSuggestsCheckbox();
+    });
+    this.updateSuggestsCheckbox();
+  },
+
+  updateSuggestsCheckbox() {
+    let suggestsPref =
+      document.getElementById("browser.search.suggest.enabled");
+    let permanentPB =
+      Services.prefs.getBoolPref("browser.privatebrowsing.autostart");
+    let urlbarSuggests = document.getElementById("urlBarSuggestion");
+    urlbarSuggests.disabled = !suggestsPref.value || permanentPB;
+
+    let urlbarSuggestsPref =
+      document.getElementById("browser.urlbar.suggest.searches");
+    urlbarSuggests.checked = urlbarSuggestsPref.value;
+    if (urlbarSuggests.disabled) {
+      urlbarSuggests.checked = false;
+    }
+
+    let permanentPBLabel =
+      document.getElementById("urlBarSuggestionPermanentPBLabel");
+    permanentPBLabel.hidden = urlbarSuggests.hidden || !permanentPB;
   },
 
   buildDefaultEngineDropDown: function() {
     // This is called each time something affects the list of engines.
     let list = document.getElementById("defaultEngine");
-    let currentEngine;
-
-    // First, try to preserve the current selection.
-    if (list.selectedItem)
-      currentEngine = list.selectedItem.label;
-
-    // If there's no current selection, use the current default engine.
-    if (!currentEngine)
-      currentEngine = Services.search.currentEngine.name;
+    // Set selection to the current default engine.
+    let currentEngine = Services.search.currentEngine.name;
 
     // If the current engine isn't in the list any more, select the first item.
     let engines = gEngineView._engineStore._engines;
@@ -54,13 +95,61 @@ var gSearchPane = {
       let item = list.appendItem(e.name);
       item.setAttribute("class", "menuitem-iconic searchengine-menuitem menuitem-with-favicon");
       if (e.iconURI) {
-        let uri = PlacesUtils.getImageURLForResolution(window, e.iconURI.spec);
-        item.setAttribute("image", uri);
+        item.setAttribute("image", e.iconURI.spec);
       }
       item.engine = e;
       if (e.name == currentEngine)
         list.selectedItem = item;
     });
+  },
+
+  handleEvent: function(aEvent) {
+    switch (aEvent.type) {
+      case "click":
+        if (aEvent.target.id == "addEngines" && aEvent.button == 0) {
+          Services.wm.getMostRecentWindow('navigator:browser')
+                     .BrowserSearch.loadAddEngines();
+        }
+        break;
+      case "command":
+        switch (aEvent.target.id) {
+          case "":
+            if (aEvent.target.parentNode &&
+                aEvent.target.parentNode.parentNode &&
+                aEvent.target.parentNode.parentNode.id == "defaultEngine") {
+              gSearchPane.setDefaultEngine();
+            }
+            break;
+          case "restoreDefaultSearchEngines":
+            gSearchPane.onRestoreDefaults();
+            break;
+          case "removeEngineButton":
+            Services.search.removeEngine(gEngineView.selectedEngine.originalEngine);
+            break;
+        }
+        break;
+      case "dragstart":
+        if (aEvent.target.id == "engineChildren") {
+          onDragEngineStart(aEvent);
+        }
+        break;
+      case "keypress":
+        if (aEvent.target.id == "engineList") {
+          gSearchPane.onTreeKeyPress(aEvent);
+        }
+        break;
+      case "select":
+        if (aEvent.target.id == "engineList") {
+          gSearchPane.onTreeSelect();
+        }
+        break;
+      case "blur":
+        if (aEvent.target.id == "engineList" &&
+            aEvent.target.inputField == document.getBindingParent(aEvent.originalTarget)) {
+          gSearchPane.onInputBlur();
+        }
+        break;
+    }
   },
 
   observe: function(aEngine, aTopic, aVerb) {
@@ -77,12 +166,27 @@ var gSearchPane = {
         gEngineView.invalidate();
         break;
       case "engine-removed":
+        gSearchPane.remove(aEngine);
+        break;
       case "engine-current":
+        // If the user is going through the drop down using up/down keys, the
+        // dropdown may still be open (eg. on Windows) when engine-current is
+        // fired, so rebuilding the list unconditionally would get in the way.
+        let selectedEngine =
+          document.getElementById("defaultEngine").selectedItem.engine;
+        if (selectedEngine.name != aEngine.name)
+          gSearchPane.buildDefaultEngineDropDown();
+        break;
       case "engine-default":
         // Not relevant
         break;
       }
     }
+  },
+
+  onInputBlur: function() {
+    let tree = document.getElementById("engineList");
+    tree.stopEditing(false);
   },
 
   onTreeSelect: function() {
@@ -120,9 +224,8 @@ var gSearchPane = {
     document.getElementById("restoreDefaultSearchEngines").disabled = !aEnable;
   },
 
-  remove: function() {
-    gEngineView._engineStore.removeEngine(gEngineView.selectedEngine);
-    let index = gEngineView.selectedIndex;
+  remove: function(aEngine) {
+    let index = gEngineView._engineStore.removeEngine(aEngine);
     gEngineView.rowCountChanged(index, -1);
     gEngineView.invalidate();
     gEngineView.selection.select(Math.min(index, gEngineView.lastIndex));
@@ -130,23 +233,17 @@ var gSearchPane = {
     document.getElementById("engineList").focus();
   },
 
-  editKeyword: function(aEngine, aNewKeyword) {
+  editKeyword: Task.async(function* (aEngine, aNewKeyword) {
     if (aNewKeyword) {
-      let bduplicate = false;
       let eduplicate = false;
       let dupName = "";
 
-      try {
-        let bmserv =
-          Components.classes["@mozilla.org/browser/nav-bookmarks-service;1"]
-                    .getService(Components.interfaces.nsINavBookmarksService);
-        if (bmserv.getURIForKeyword(aNewKeyword))
-          bduplicate = true;
-      } catch(ex) {}
+      // Check for duplicates in Places keywords.
+      let bduplicate = !!(yield PlacesUtils.keywords.fetch(aNewKeyword));
 
       // Check for duplicates in changes we haven't committed yet
       let engines = gEngineView._engineStore.engines;
-      for each (let engine in engines) {
+      for (let engine of engines) {
         if (engine.alias == aNewKeyword &&
             engine.name != aEngine.name) {
           eduplicate = true;
@@ -170,7 +267,7 @@ var gSearchPane = {
     gEngineView._engineStore.changeEngine(aEngine, "alias", aNewKeyword);
     gEngineView.invalidate();
     return true;
-  },
+  }),
 
   saveOneClickEnginesList: function () {
     let hiddenList = [];
@@ -190,7 +287,10 @@ var gSearchPane = {
 
 function onDragEngineStart(event) {
   var selectedIndex = gEngineView.selectedIndex;
-  if (selectedIndex >= 0) {
+  var tree = document.getElementById("engineList");
+  var row = { }, col = { }, child = { };
+  tree.treeBoxObject.getCellAt(event.clientX, event.clientY, row, col, child);
+  if (selectedIndex >= 0 && !gEngineView.isCheckBox(row.value, col.value)) {
     event.dataTransfer.setData(ENGINE_FLAVOR, selectedIndex.toString());
     event.dataTransfer.effectAllowed = "move";
   }
@@ -205,7 +305,7 @@ function EngineStore() {
   this._defaultEngines = Services.search.getDefaultEngines().map(this._cloneEngine, this);
 
   // check if we need to disable the restore defaults button
-  var someHidden = this._defaultEngines.some(function (e) e.hidden);
+  var someHidden = this._defaultEngines.some(e => e.hidden);
   gSearchPane.showRestoreDefaults(someHidden);
 }
 EngineStore.prototype = {
@@ -225,11 +325,7 @@ EngineStore.prototype = {
   },
 
   _getEngineByName: function ES_getEngineByName(aName) {
-    for each (var engine in this._engines)
-      if (engine.name == aName)
-        return engine;
-
-    return null;
+    return this._engines.find(engine => engine.name == aName);
   },
 
   _cloneEngine: function ES_cloneEngine(aEngine) {
@@ -268,16 +364,18 @@ EngineStore.prototype = {
   },
 
   removeEngine: function ES_removeEngine(aEngine) {
-    var index = this._getIndexForEngine(aEngine);
+    let engineName = aEngine.name;
+    let index = this._engines.findIndex(element => element.name == engineName);
+
     if (index == -1)
       throw new Error("invalid engine?");
 
     this._engines.splice(index, 1);
-    Services.search.removeEngine(aEngine.originalEngine);
 
-    if (this._defaultEngines.some(this._isSameEngine, aEngine))
+    if (this._defaultEngines.some(this._isSameEngine, this._engines[index]))
       gSearchPane.showRestoreDefaults(true);
     gSearchPane.buildDefaultEngineDropDown();
+    return index;
   },
 
   restoreDefaultEngines: function ES_restoreDefaultEngines() {
@@ -291,6 +389,11 @@ EngineStore.prototype = {
         this.moveEngine(this._getEngineByName(e.name), i);
       } else {
         // Otherwise, add it back to our internal store
+
+        // The search service removes the alias when an engine is hidden,
+        // so clear any alias we may have cached before unhiding the engine.
+        e.alias = "";
+
         this._engines.splice(i, 0, e);
         let engine = e.originalEngine;
         engine.hidden = false;
@@ -298,6 +401,7 @@ EngineStore.prototype = {
         added++;
       }
     }
+    Services.search.resetToOriginalDefaultEngine();
     gSearchPane.showRestoreDefaults(false);
     gSearchPane.buildDefaultEngineDropDown();
     return added;
@@ -359,6 +463,10 @@ EngineView.prototype = {
     return parseInt(dataTransfer.getData(ENGINE_FLAVOR));
   },
 
+  isCheckBox: function(index, column) {
+    return column.id == "engineShown";
+  },
+
   // nsITreeView
   get rowCount() {
     return this._engineStore.engines.length;
@@ -366,8 +474,7 @@ EngineView.prototype = {
 
   getImageSrc: function(index, column) {
     if (column.id == "engineName" && this._engineStore.engines[index].iconURI) {
-      let uri = this._engineStore.engines[index].iconURI.spec;
-      return PlacesUtils.getImageURLForResolution(window, uri);
+      return this._engineStore.engines[index].iconURI.spec;
     }
     return "";
   },
@@ -446,11 +553,11 @@ EngineView.prototype = {
   },
   setCellText: function(index, column, value) {
     if (column.id == "engineKeyword") {
-      if (!gSearchPane.editKeyword(this._engineStore.engines[index], value)) {
-        setTimeout(() => {
+      gSearchPane.editKeyword(this._engineStore.engines[index], value)
+                 .then(valid => {
+        if (!valid)
           document.getElementById("engineList").startEditing(index, column);
-        }, 0);
-      }
+      });
     }
   },
   performAction: function(action) { },

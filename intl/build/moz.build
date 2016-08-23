@@ -9,9 +9,9 @@ SOURCES += [
 ]
 
 FINAL_LIBRARY = 'xul'
+CXXFLAGS += CONFIG['MOZ_ICU_CFLAGS']
+LOCAL_INCLUDES += CONFIG['MOZ_ICU_INCLUDES']
 LOCAL_INCLUDES += [
-    '../icu/source/common',
-    '../icu/source/i18n',
     '../locale',
     '../lwbrk',
     '../strres',
@@ -19,3 +19,5 @@ LOCAL_INCLUDES += [
     '../unicharutil',
 ]
 
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

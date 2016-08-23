@@ -14,7 +14,7 @@
 namespace mozilla {
 namespace gl {
 class GLContext;
-}
+} // namespace gl
 
 /**
  * This class tracks the state of the context for debugging and profiling.
@@ -56,7 +56,7 @@ protected:
 /*
 class ID3D11DeviceContext;
 
-class ContextStateTrackerD3D11 MOZ_FINAL : public ContextStateTracker {
+class ContextStateTrackerD3D11 final : public ContextStateTracker {
 public:
   // TODO Implement me
   void PushD3D11Section(ID3D11DeviceContext* aCtxt, const char* aSectionName) {}
@@ -68,7 +68,7 @@ private:
 };
 */
 
-class ContextStateTrackerOGL MOZ_FINAL : public ContextStateTracker {
+class ContextStateTrackerOGL final : public ContextStateTracker {
   typedef mozilla::gl::GLContext GLContext;
 public:
   void PushOGLSection(GLContext* aGL, const char* aSectionName);
@@ -78,6 +78,7 @@ private:
   void Flush(GLContext* aGL);
 };
 
-}
+} // namespace mozilla
+
 #endif
 

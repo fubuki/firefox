@@ -7,11 +7,14 @@
 #define InputData_h__
 
 #include "nsDebug.h"
+#include "nsIDOMWheelEvent.h"
+#include "nsIScrollableFrame.h"
 #include "nsPoint.h"
 #include "nsTArray.h"
 #include "Units.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/TimeStamp.h"
+#include "mozilla/gfx/MatrixFwd.h"
 
 template<class E> struct already_AddRefed;
 class nsIWidget;
@@ -20,11 +23,12 @@ namespace mozilla {
 
 namespace dom {
 class Touch;
-}
+} // namespace dom
 
 enum InputType
 {
   MULTITOUCH_INPUT,
+  MOUSE_INPUT,
   PANGESTURE_INPUT,
   PINCHGESTURE_INPUT,
   TAPGESTURE_INPUT,
@@ -32,6 +36,7 @@ enum InputType
 };
 
 class MultiTouchInput;
+class MouseInput;
 class PanGestureInput;
 class PinchGestureInput;
 class TapGestureInput;
@@ -44,12 +49,12 @@ class ScrollWheelInput;
 #define INPUTDATA_AS_CHILD_TYPE(type, enumID) \
   const type& As##type() const \
   { \
-    NS_ABORT_IF_FALSE(mInputType == enumID, "Invalid cast of InputData."); \
+    MOZ_ASSERT(mInputType == enumID, "Invalid cast of InputData."); \
     return (const type&) *this; \
   } \
   type& As##type() \
   { \
-    NS_ABORT_IF_FALSE(mInputType == enumID, "Invalid cast of InputData."); \
+    MOZ_ASSERT(mInputType == enumID, "Invalid cast of InputData."); \
     return (type&) *this; \
   }
 
@@ -71,12 +76,16 @@ public:
   Modifiers modifiers;
 
   INPUTDATA_AS_CHILD_TYPE(MultiTouchInput, MULTITOUCH_INPUT)
+  INPUTDATA_AS_CHILD_TYPE(MouseInput, MOUSE_INPUT)
   INPUTDATA_AS_CHILD_TYPE(PanGestureInput, PANGESTURE_INPUT)
   INPUTDATA_AS_CHILD_TYPE(PinchGestureInput, PINCHGESTURE_INPUT)
   INPUTDATA_AS_CHILD_TYPE(TapGestureInput, TAPGESTURE_INPUT)
   INPUTDATA_AS_CHILD_TYPE(ScrollWheelInput, SCROLLWHEEL_INPUT)
 
-  InputData()
+  explicit InputData(InputType aInputType)
+    : mInputType(aInputType),
+      mTime(0),
+      modifiers(0)
   {
   }
 
@@ -197,12 +206,15 @@ public:
 
   MultiTouchInput(MultiTouchType aType, uint32_t aTime, TimeStamp aTimeStamp,
                   Modifiers aModifiers)
-    : InputData(MULTITOUCH_INPUT, aTime, aTimeStamp, aModifiers),
-      mType(aType)
+    : InputData(MULTITOUCH_INPUT, aTime, aTimeStamp, aModifiers)
+    , mType(aType)
+    , mHandledByAPZ(false)
   {
   }
 
   MultiTouchInput()
+    : InputData(MULTITOUCH_INPUT)
+    , mHandledByAPZ(false)
   {
   }
 
@@ -210,6 +222,7 @@ public:
     : InputData(MULTITOUCH_INPUT, aOther.mTime,
                 aOther.mTimeStamp, aOther.modifiers)
     , mType(aOther.mType)
+    , mHandledByAPZ(aOther.mHandledByAPZ)
   {
     mTouches.AppendElements(aOther.mTouches);
   }
@@ -217,6 +230,10 @@ public:
   explicit MultiTouchInput(const WidgetTouchEvent& aTouchEvent);
   WidgetTouchEvent ToWidgetTouchEvent(nsIWidget* aWidget) const;
   WidgetMouseEvent ToWidgetMouseEvent(nsIWidget* aWidget) const;
+
+  // Return the index into mTouches of the SingleTouchData with the given
+  // identifier, or -1 if there is no such SingleTouchData.
+  int32_t IndexOfTouch(int32_t aTouchIdentifier);
 
   // This conversion from WidgetMouseEvent to MultiTouchInput is needed because
   // on the B2G emulator we can only receive mouse events, but we need to be
@@ -226,8 +243,67 @@ public:
   // and rotation angle.
   explicit MultiTouchInput(const WidgetMouseEvent& aMouseEvent);
 
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+
   MultiTouchType mType;
   nsTArray<SingleTouchData> mTouches;
+  bool mHandledByAPZ;
+};
+
+class MouseInput : public InputData
+{
+public:
+  enum MouseType
+  {
+    MOUSE_NONE,
+    MOUSE_MOVE,
+    MOUSE_DOWN,
+    MOUSE_UP,
+    MOUSE_DRAG_START,
+    MOUSE_DRAG_END,
+    MOUSE_WIDGET_ENTER,
+    MOUSE_WIDGET_EXIT,
+  };
+
+  enum ButtonType
+  {
+    LEFT_BUTTON,
+    MIDDLE_BUTTON,
+    RIGHT_BUTTON,
+    NONE
+  };
+
+  MouseInput(MouseType aType, ButtonType aButtonType, uint16_t aInputSource, int16_t aButtons, const ScreenPoint& aPoint,
+             uint32_t aTime, TimeStamp aTimeStamp, Modifiers aModifiers)
+    : InputData(MOUSE_INPUT, aTime, aTimeStamp, aModifiers)
+    , mType(aType)
+    , mButtonType(aButtonType)
+    , mInputSource(aInputSource)
+    , mButtons(aButtons)
+    , mOrigin(aPoint)
+  {}
+
+  MouseInput()
+    : InputData(MOUSE_INPUT)
+    , mType(MOUSE_NONE)
+    , mButtonType(NONE)
+    , mInputSource(0)
+    , mButtons(0)
+  {}
+
+  explicit MouseInput(const WidgetMouseEventBase& aMouseEvent);
+
+  bool IsLeftButton() const { return mButtonType == LEFT_BUTTON; }
+
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+  WidgetMouseEvent ToWidgetMouseEvent(nsIWidget* aWidget) const;
+
+  MouseType mType;
+  ButtonType mButtonType;
+  uint16_t mInputSource;
+  int16_t mButtons;
+  ScreenPoint mOrigin;
+  ParentLayerPoint mLocalOrigin;
 };
 
 /**
@@ -292,20 +368,58 @@ public:
     : InputData(PANGESTURE_INPUT, aTime, aTimeStamp, aModifiers),
       mType(aType),
       mPanStartPoint(aPanStartPoint),
-      mPanDisplacement(aPanDisplacement)
+      mPanDisplacement(aPanDisplacement),
+      mLineOrPageDeltaX(0),
+      mLineOrPageDeltaY(0),
+      mUserDeltaMultiplierX(1.0),
+      mUserDeltaMultiplierY(1.0),
+      mHandledByAPZ(false),
+      mFollowedByMomentum(false),
+      mRequiresContentResponseIfCannotScrollHorizontallyInStartDirection(false)
   {
   }
+
+  bool IsMomentum() const;
+
+  WidgetWheelEvent ToWidgetWheelEvent(nsIWidget* aWidget) const;
+
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+
+  ScreenPoint UserMultipliedPanDisplacement() const;
+  ParentLayerPoint UserMultipliedLocalPanDisplacement() const;
 
   PanGestureType mType;
   ScreenPoint mPanStartPoint;
 
-  // Only non-zero if mType is PANGESTURE_PAN or PANGESTURE_MOMENTUMPAN.
+  // The delta. This can be non-zero on any type of event.
   ScreenPoint mPanDisplacement;
 
   // Versions of |mPanStartPoint| and |mPanDisplacement| in the local
   // coordinates of the APZC receiving the pan. These are set and used by APZ.
   ParentLayerPoint mLocalPanStartPoint;
   ParentLayerPoint mLocalPanDisplacement;
+
+  // See lineOrPageDeltaX/Y on WidgetWheelEvent.
+  int32_t mLineOrPageDeltaX;
+  int32_t mLineOrPageDeltaY;
+
+  // User-set delta multipliers.
+  double mUserDeltaMultiplierX;
+  double mUserDeltaMultiplierY;
+
+  bool mHandledByAPZ;
+
+  // true if this is a PANGESTURE_END event that will be followed by a
+  // PANGESTURE_MOMENTUMSTART event.
+  bool mFollowedByMomentum;
+
+  // If this is true, and this event started a new input block that couldn't
+  // find a scrollable target which is scrollable in the horizontal component
+  // of the scroll start direction, then this input block needs to be put on
+  // hold until a content response has arrived, even if the block has a
+  // confirmed target.
+  // This is used by events that can result in a swipe instead of a scroll.
+  bool mRequiresContentResponseIfCannotScrollHorizontallyInStartDirection;
 };
 
 /**
@@ -357,6 +471,8 @@ public:
   {
   }
 
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+
   PinchGestureType mType;
 
   // Center point of the pinch gesture. That is, if there are two fingers on the
@@ -364,6 +480,9 @@ public:
   // point is implementation-specific, but can for example be the midpoint
   // between the very first and very last touch. This is in device pixels and
   // are the coordinates on the screen of this midpoint.
+  // For PINCHGESTURE_END events, this instead will hold the coordinates of
+  // the remaining finger, if there is one. If there isn't one then it will
+  // store -1, -1.
   ScreenPoint mFocusPoint;
 
   // |mFocusPoint| transformed to the local coordinates of the APZC targeted
@@ -425,6 +544,8 @@ public:
   {
   }
 
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+
   TapGestureType mType;
 
   // The location of the tap in screen pixels.
@@ -444,9 +565,43 @@ public:
   enum ScrollDeltaType
   {
     // There are three kinds of scroll delta modes in Gecko: "page", "line" and
-    // "pixel". For apz, we currently only support "line" mode.
-    SCROLLDELTA_LINE
+    // "pixel".
+    SCROLLDELTA_LINE,
+    SCROLLDELTA_PAGE,
+    SCROLLDELTA_PIXEL
   };
+
+  static ScrollDeltaType
+  DeltaTypeForDeltaMode(uint32_t aDeltaMode)
+  {
+    switch (aDeltaMode) {
+      case nsIDOMWheelEvent::DOM_DELTA_LINE:
+        return SCROLLDELTA_LINE;
+      case nsIDOMWheelEvent::DOM_DELTA_PAGE:
+        return SCROLLDELTA_PAGE;
+      case nsIDOMWheelEvent::DOM_DELTA_PIXEL:
+        return SCROLLDELTA_PIXEL;
+      default:
+        MOZ_CRASH();
+    }
+    return SCROLLDELTA_LINE;
+  }
+
+  static nsIScrollableFrame::ScrollUnit
+  ScrollUnitForDeltaType(ScrollDeltaType aDeltaType)
+  {
+    switch (aDeltaType) {
+    case SCROLLDELTA_LINE:
+      return nsIScrollableFrame::LINES;
+    case SCROLLDELTA_PAGE:
+      return nsIScrollableFrame::PAGES;
+    case SCROLLDELTA_PIXEL:
+      return nsIScrollableFrame::DEVICE_PIXELS;
+    default:
+      MOZ_CRASH();
+    }
+    return nsIScrollableFrame::LINES;
+  }
 
   enum ScrollMode
   {
@@ -461,22 +616,42 @@ public:
                    ScrollDeltaType aDeltaType,
                    const ScreenPoint& aOrigin,
                    double aDeltaX,
-                   double aDeltaY)
-   : InputData(SCROLLWHEEL_INPUT, aTime, aTimeStamp, aModifiers),
-     mDeltaType(aDeltaType),
-     mScrollMode(aScrollMode),
-     mOrigin(aOrigin),
-     mDeltaX(aDeltaX),
-     mDeltaY(aDeltaY)
+                   double aDeltaY,
+                   bool aAllowToOverrideSystemScrollSpeed)
+    : InputData(SCROLLWHEEL_INPUT, aTime, aTimeStamp, aModifiers)
+    , mDeltaType(aDeltaType)
+    , mScrollMode(aScrollMode)
+    , mOrigin(aOrigin)
+    , mHandledByAPZ(false)
+    , mDeltaX(aDeltaX)
+    , mDeltaY(aDeltaY)
+    , mLineOrPageDeltaX(0)
+    , mLineOrPageDeltaY(0)
+    , mScrollSeriesNumber(0)
+    , mUserDeltaMultiplierX(1.0)
+    , mUserDeltaMultiplierY(1.0)
+    , mMayHaveMomentum(false)
+    , mIsMomentum(false)
+    , mAllowToOverrideSystemScrollSpeed(aAllowToOverrideSystemScrollSpeed)
   {}
+
+  explicit ScrollWheelInput(const WidgetWheelEvent& aEvent);
+
+  WidgetWheelEvent ToWidgetWheelEvent(nsIWidget* aWidget) const;
+  bool TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform);
+
+  bool IsCustomizedByUserPrefs() const;
 
   ScrollDeltaType mDeltaType;
   ScrollMode mScrollMode;
   ScreenPoint mOrigin;
 
+  bool mHandledByAPZ;
+
   // Deltas are in units corresponding to the delta type. For line deltas, they
   // are the number of line units to scroll. The number of device pixels for a
   // horizontal and vertical line unit are in FrameMetrics::mLineScrollAmount.
+  // For pixel deltas, these values are in ScreenCoords.
   //
   // The horizontal (X) delta is > 0 for scrolling right and < 0 for scrolling
   // left. The vertical (Y) delta is < 0 for scrolling up and > 0 for
@@ -487,8 +662,24 @@ public:
   // The location of the scroll in local coordinates. This is set and used by
   // APZ.
   ParentLayerPoint mLocalOrigin;
+
+  // See lineOrPageDeltaX/Y on WidgetWheelEvent.
+  int32_t mLineOrPageDeltaX;
+  int32_t mLineOrPageDeltaY;
+
+  // Indicates the order in which this event was added to a transaction. The
+  // first event is 1; if not a member of a transaction, this is 0.
+  uint32_t mScrollSeriesNumber;
+
+  // User-set delta multipliers.
+  double mUserDeltaMultiplierX;
+  double mUserDeltaMultiplierY;
+
+  bool mMayHaveMomentum;
+  bool mIsMomentum;
+  bool mAllowToOverrideSystemScrollSpeed;
 };
 
-}
+} // namespace mozilla
 
 #endif // InputData_h__

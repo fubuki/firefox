@@ -4,9 +4,17 @@
 // found in the LICENSE file.
 //
 
+#ifdef ANGLE_ENABLE_ESSL
 #include "compiler/translator/TranslatorESSL.h"
+#endif
+
+#ifdef ANGLE_ENABLE_GLSL
 #include "compiler/translator/TranslatorGLSL.h"
+#endif
+
+#ifdef ANGLE_ENABLE_HLSL
 #include "compiler/translator/TranslatorHLSL.h"
+#endif // ANGLE_ENABLE_HLSL
 
 //
 // This function must be provided to create the actual
@@ -17,15 +25,45 @@ TCompiler* ConstructCompiler(
     sh::GLenum type, ShShaderSpec spec, ShShaderOutput output)
 {
     switch (output) {
-    case SH_ESSL_OUTPUT:
+      case SH_ESSL_OUTPUT:
+#ifdef ANGLE_ENABLE_ESSL
         return new TranslatorESSL(type, spec);
-    case SH_GLSL_OUTPUT:
-        return new TranslatorGLSL(type, spec);
-    case SH_HLSL9_OUTPUT:
-    case SH_HLSL11_OUTPUT:
+#else
+        // This compiler is not supported in this
+        // configuration. Return NULL per the ShConstructCompiler API.
+        return nullptr;
+#endif // ANGLE_ENABLE_ESSL
+      case SH_GLSL_130_OUTPUT:
+      case SH_GLSL_140_OUTPUT:
+      case SH_GLSL_150_CORE_OUTPUT:
+      case SH_GLSL_330_CORE_OUTPUT:
+      case SH_GLSL_400_CORE_OUTPUT:
+      case SH_GLSL_410_CORE_OUTPUT:
+      case SH_GLSL_420_CORE_OUTPUT:
+      case SH_GLSL_430_CORE_OUTPUT:
+      case SH_GLSL_440_CORE_OUTPUT:
+      case SH_GLSL_450_CORE_OUTPUT:
+      case SH_GLSL_COMPATIBILITY_OUTPUT:
+#ifdef ANGLE_ENABLE_GLSL
+        return new TranslatorGLSL(type, spec, output);
+#else
+        // This compiler is not supported in this
+        // configuration. Return NULL per the ShConstructCompiler API.
+        return nullptr;
+#endif // ANGLE_ENABLE_GLSL
+      case SH_HLSL_3_0_OUTPUT:
+      case SH_HLSL_4_1_OUTPUT:
+      case SH_HLSL_4_0_FL9_3_OUTPUT:
+#ifdef ANGLE_ENABLE_HLSL
         return new TranslatorHLSL(type, spec, output);
-    default:
-        return NULL;
+#else
+        // This compiler is not supported in this
+        // configuration. Return NULL per the ShConstructCompiler API.
+        return nullptr;
+#endif // ANGLE_ENABLE_HLSL
+      default:
+        // Unknown format. Return NULL per the ShConstructCompiler API.
+        return nullptr;
     }
 }
 

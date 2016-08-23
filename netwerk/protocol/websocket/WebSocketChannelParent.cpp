@@ -9,6 +9,7 @@
 #include "nsIAuthPromptProvider.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
+#include "mozilla/ipc/BackgroundUtils.h"
 #include "SerializedLoadContext.h"
 #include "nsIOService.h"
 #include "mozilla/net/NeckoCommon.h"
@@ -25,17 +26,15 @@ NS_IMPL_ISUPPORTS(WebSocketChannelParent,
 
 WebSocketChannelParent::WebSocketChannelParent(nsIAuthPromptProvider* aAuthProvider,
                                                nsILoadContext* aLoadContext,
-                                               PBOverrideStatus aOverrideStatus)
+                                               PBOverrideStatus aOverrideStatus,
+                                               uint32_t aSerial)
   : mAuthProvider(aAuthProvider)
   , mLoadContext(aLoadContext)
   , mIPCOpen(true)
+  , mSerial(aSerial)
 {
   // Websocket channels can't have a private browsing override
   MOZ_ASSERT_IF(!aLoadContext, aOverrideStatus == kPBOverride_Unset);
-#if defined(PR_LOGGING)
-  if (!webSocketLog)
-    webSocketLog = PR_NewLogModule("nsWebSocket");
-#endif
   mObserver = new OfflineObserver(this);
 }
 
@@ -61,18 +60,20 @@ WebSocketChannelParent::RecvDeleteSelf()
 bool
 WebSocketChannelParent::RecvAsyncOpen(const URIParams& aURI,
                                       const nsCString& aOrigin,
+                                      const uint64_t& aInnerWindowID,
                                       const nsCString& aProtocol,
                                       const bool& aSecure,
                                       const uint32_t& aPingInterval,
                                       const bool& aClientSetPingInterval,
                                       const uint32_t& aPingTimeout,
-                                      const bool& aClientSetPingTimeout)
+                                      const bool& aClientSetPingTimeout,
+                                      const OptionalLoadInfoArgs& aLoadInfoArgs)
 {
   LOG(("WebSocketChannelParent::RecvAsyncOpen() %p\n", this));
 
   nsresult rv;
   nsCOMPtr<nsIURI> uri;
-
+  nsCOMPtr<nsILoadInfo> loadInfo;
 
   bool appOffline = false;
   uint32_t appId = GetAppId();
@@ -93,6 +94,20 @@ WebSocketChannelParent::RecvAsyncOpen(const URIParams& aURI,
   }
   if (NS_FAILED(rv))
     goto fail;
+
+  rv = mChannel->SetSerial(mSerial);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    goto fail;
+  }
+
+  rv = LoadInfoArgsToLoadInfo(aLoadInfoArgs, getter_AddRefs(loadInfo));
+  if (NS_FAILED(rv))
+    goto fail;
+
+  rv = mChannel->SetLoadInfo(loadInfo);
+  if (NS_FAILED(rv)) {
+    goto fail;
+  }
 
   rv = mChannel->SetNotificationCallbacks(this);
   if (NS_FAILED(rv))
@@ -119,7 +134,7 @@ WebSocketChannelParent::RecvAsyncOpen(const URIParams& aURI,
     mChannel->SetPingTimeout(aPingTimeout / 1000);
   }
 
-  rv = mChannel->AsyncOpen(uri, aOrigin, this, nullptr);
+  rv = mChannel->AsyncOpen(uri, aOrigin, aInnerWindowID, this, nullptr);
   if (NS_FAILED(rv))
     goto fail;
 
@@ -196,7 +211,7 @@ WebSocketChannelParent::OnStart(nsISupports *aContext)
     mChannel->GetProtocol(protocol);
     mChannel->GetExtensions(extensions);
 
-    nsRefPtr<WebSocketChannel> channel;
+    RefPtr<WebSocketChannel> channel;
     channel = static_cast<WebSocketChannel*>(mChannel.get());
     MOZ_ASSERT(channel);
 
@@ -281,8 +296,8 @@ WebSocketChannelParent::GetInterface(const nsIID & iid, void **result)
 
   // Only support nsILoadContext if child channel's callbacks did too
   if (iid.Equals(NS_GET_IID(nsILoadContext)) && mLoadContext) {
-    NS_ADDREF(mLoadContext);
-    *result = static_cast<nsILoadContext*>(mLoadContext);
+    nsCOMPtr<nsILoadContext> copy = mLoadContext;
+    copy.forget(result);
     return NS_OK;
   }
 

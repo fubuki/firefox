@@ -9,14 +9,19 @@
 
 #include "mozilla/dom/PBrowserParent.h"
 #include "mozilla/embedding/PPrintingParent.h"
-#include "mozilla/embedding/PPrintProgressDialogParent.h"
 
-class nsIDOMWindow;
+class nsPIDOMWindowOuter;
+class PPrintProgressDialogParent;
+class PPrintSettingsDialogParent;
 
 namespace mozilla {
+namespace layout {
+class PRemotePrintJobParent;
+}
+
 namespace embedding {
 
-class PrintingParent MOZ_FINAL : public PPrintingParent
+class PrintingParent final : public PPrintingParent
 {
 public:
     virtual bool
@@ -24,18 +29,35 @@ public:
                      PPrintProgressDialogParent* printProgressDialog,
                      const bool& isForPrinting,
                      bool* notifyOnOpen,
-                     bool* success);
+                     nsresult* result);
     virtual bool
-    RecvShowPrintDialog(PBrowserParent* parent,
-                        const PrintData& initSettings,
-                        PrintData* retVal,
-                        bool* success);
+    RecvShowPrintDialog(PPrintSettingsDialogParent* aDialog,
+                        PBrowserParent* aParent,
+                        const PrintData& aData);
+
+    virtual bool
+    RecvSavePrintSettings(const PrintData& data,
+                          const bool& usePrinterNamePrefix,
+                          const uint32_t& flags,
+                          nsresult* rv);
 
     virtual PPrintProgressDialogParent*
     AllocPPrintProgressDialogParent();
 
     virtual bool
     DeallocPPrintProgressDialogParent(PPrintProgressDialogParent* aActor);
+
+    virtual PPrintSettingsDialogParent*
+    AllocPPrintSettingsDialogParent();
+
+    virtual bool
+    DeallocPPrintSettingsDialogParent(PPrintSettingsDialogParent* aActor);
+
+    virtual PRemotePrintJobParent*
+    AllocPRemotePrintJobParent();
+
+    virtual bool
+    DeallocPRemotePrintJobParent(PRemotePrintJobParent* aActor);
 
     virtual void
     ActorDestroy(ActorDestroyReason aWhy);
@@ -44,11 +66,16 @@ public:
     virtual ~PrintingParent();
 
 private:
-    nsIDOMWindow*
+    nsPIDOMWindowOuter*
     DOMWindowFromBrowserParent(PBrowserParent* parent);
+
+    nsresult
+    ShowPrintDialog(PBrowserParent* parent,
+                    const PrintData& data,
+                    PrintData* result);
 };
+
 } // namespace embedding
 } // namespace mozilla
 
 #endif
-

@@ -20,38 +20,6 @@ using namespace mozilla;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-nsIDOMWindow*
-inLayoutUtils::GetWindowFor(nsIDOMNode* aNode)
-{
-  nsCOMPtr<nsIDOMDocument> doc1;
-  aNode->GetOwnerDocument(getter_AddRefs(doc1));
-  return GetWindowFor(doc1.get());
-}
-
-nsIDOMWindow*
-inLayoutUtils::GetWindowFor(nsIDOMDocument* aDoc)
-{
-  nsCOMPtr<nsIDOMWindow> window;
-  aDoc->GetDefaultView(getter_AddRefs(window));
-  return window;
-}
-
-nsIPresShell* 
-inLayoutUtils::GetPresShellFor(nsISupports* aThing)
-{
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aThing);
-
-  return window->GetDocShell()->GetPresShell();
-}
-
-/*static*/
-nsIFrame*
-inLayoutUtils::GetFrameFor(nsIDOMElement* aElement)
-{
-  nsCOMPtr<nsIContent> content = do_QueryInterface(aElement);
-  return content->GetPrimaryFrame();
-}
-
 EventStateManager*
 inLayoutUtils::GetEventStateManagerFor(nsIDOMElement *aElement)
 {
@@ -92,7 +60,7 @@ inLayoutUtils::GetSubDocumentFor(nsIDOMNode* aNode)
 nsIDOMNode*
 inLayoutUtils::GetContainerFor(const nsIDocument& aDoc)
 {
-  nsPIDOMWindow* pwin = aDoc.GetWindow();
+  nsPIDOMWindowOuter* pwin = aDoc.GetWindow();
   if (!pwin) {
     return nullptr;
   }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,28 +34,28 @@ public:
   {
   }
 
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(DOMPointReadOnly)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(DOMPointReadOnly)
+
   double X() const { return mX; }
   double Y() const { return mY; }
   double Z() const { return mZ; }
   double W() const { return mW; }
 
 protected:
+  virtual ~DOMPointReadOnly() {}
+
   nsCOMPtr<nsISupports> mParent;
   double mX, mY, mZ, mW;
 };
 
-class DOMPoint MOZ_FINAL : public DOMPointReadOnly
+class DOMPoint final : public DOMPointReadOnly
 {
-  ~DOMPoint() {}
-
 public:
   explicit DOMPoint(nsISupports* aParent, double aX = 0.0, double aY = 0.0,
                     double aZ = 0.0, double aW = 1.0)
     : DOMPointReadOnly(aParent, aX, aY, aZ, aW)
   {}
-
-  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(DOMPoint)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(DOMPoint)
 
   static already_AddRefed<DOMPoint>
   Constructor(const GlobalObject& aGlobal, const DOMPointInit& aParams,
@@ -64,7 +65,7 @@ public:
               double aZ, double aW, ErrorResult& aRV);
 
   nsISupports* GetParentObject() const { return mParent; }
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   void SetX(double aX) { mX = aX; }
   void SetY(double aY) { mY = aY; }
@@ -72,7 +73,7 @@ public:
   void SetW(double aW) { mW = aW; }
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif /*MOZILLA_DOMPOINT_H_*/

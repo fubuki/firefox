@@ -11,10 +11,10 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/gfx/Matrix.h"
 #include "nsCOMPtr.h"
-#include "nsIDOMWindow.h"
 #include "nsIWidget.h"
-#include "nsPIDOMWindow.h"
 #include "nsRect.h"
+
+class nsPIDOMWindowOuter;
 
 namespace mozilla {
 
@@ -43,12 +43,18 @@ namespace widget {
 class WidgetUtils
 {
 public:
+  /**
+   * Shutdown() is called when "xpcom-will-shutdown" is notified.  This is
+   * useful when you need to observe the notification in XP level code under
+   * widget.
+   */
+  static void Shutdown();
 
   /**
    * Starting at the docshell item for the passed in DOM window this looks up
    * the docshell tree until it finds a docshell item that has a widget.
    */
-  static already_AddRefed<nsIWidget> DOMWindowToWidget(nsIDOMWindow *aDOMWindow);
+  static already_AddRefed<nsIWidget> DOMWindowToWidget(nsPIDOMWindowOuter* aDOMWindow);
 
   /**
    * Compute our keyCode value (NS_VK_*) from an ASCII character.
@@ -75,6 +81,11 @@ public:
                                          bool aIsCapsLock,
                                          uint32_t* aUnshiftedCharCode,
                                          uint32_t* aShiftedCharCode);
+
+  /**
+  * Does device have touch support
+  */
+  static uint32_t IsTouchDeviceSupportPresent();
 };
 
 } // namespace widget

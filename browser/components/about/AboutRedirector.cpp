@@ -7,9 +7,14 @@
 
 #include "AboutRedirector.h"
 #include "nsNetUtil.h"
+#include "nsIAboutNewTabService.h"
+#include "nsIChannel.h"
+#include "nsIURI.h"
 #include "nsIScriptSecurityManager.h"
+#include "nsIProtocolHandler.h"
 #include "mozilla/ArrayUtils.h"
 #include "nsDOMString.h"
+#include "nsServiceManagerUtils.h"
 
 namespace mozilla {
 namespace browser {
@@ -29,19 +34,19 @@ struct RedirEntry {
   URI_SAFE_FOR_UNTRUSTED_CONTENT in the third argument to each map item below
   unless your about: page really needs chrome privileges. Security review is
   required before adding new map entries without
-  URI_SAFE_FOR_UNTRUSTED_CONTENT.  Also note, however, that adding
-  URI_SAFE_FOR_UNTRUSTED_CONTENT will allow random web sites to link to that
-  URI.  Perhaps we should separate the two concepts out...
- */
+  URI_SAFE_FOR_UNTRUSTED_CONTENT.
+*/
 static RedirEntry kRedirMap[] = {
 #ifdef MOZ_SAFE_BROWSING
   { "blocked", "chrome://browser/content/blockedSite.xhtml",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+    nsIAboutModule::URI_CAN_LOAD_IN_CHILD |
     nsIAboutModule::ALLOW_SCRIPT |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT },
 #endif
-  { "certerror", "chrome://browser/content/certerror/aboutCertError.xhtml",
+  { "certerror", "chrome://browser/content/aboutNetError.xhtml",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+    nsIAboutModule::URI_CAN_LOAD_IN_CHILD |
     nsIAboutModule::ALLOW_SCRIPT |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT },
   { "socialerror", "chrome://browser/content/aboutSocialError.xhtml",
@@ -59,13 +64,10 @@ static RedirEntry kRedirMap[] = {
     nsIAboutModule::ALLOW_SCRIPT |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT },
   { "privatebrowsing", "chrome://browser/content/aboutPrivateBrowsing.xhtml",
+    nsIAboutModule::URI_MUST_LOAD_IN_CHILD |
     nsIAboutModule::ALLOW_SCRIPT },
   { "rights",
-#ifdef MOZ_OFFICIAL_BRANDING
     "chrome://global/content/aboutRights.xhtml",
-#else
-    "chrome://global/content/aboutRights-unbranded.xhtml",
-#endif
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
     nsIAboutModule::ALLOW_SCRIPT },
   { "robots", "chrome://browser/content/aboutRobots.xhtml",
@@ -75,19 +77,17 @@ static RedirEntry kRedirMap[] = {
     nsIAboutModule::ALLOW_SCRIPT },
   { "welcomeback", "chrome://browser/content/aboutWelcomeBack.xhtml",
     nsIAboutModule::ALLOW_SCRIPT },
-#ifdef MOZ_SERVICES_SYNC
-  { "sync-progress", "chrome://browser/content/sync/progress.xhtml",
-    nsIAboutModule::ALLOW_SCRIPT },
   { "sync-tabs", "chrome://browser/content/sync/aboutSyncTabs.xul",
     nsIAboutModule::ALLOW_SCRIPT },
-#endif
+  // Linkable because of indexeddb use (bug 1228118)
   { "home", "chrome://browser/content/abouthome/aboutHome.xhtml",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
+    nsIAboutModule::URI_MUST_LOAD_IN_CHILD |
     nsIAboutModule::ALLOW_SCRIPT |
+    nsIAboutModule::MAKE_LINKABLE |
     nsIAboutModule::ENABLE_INDEXED_DB },
-  { "newtab", "chrome://browser/content/newtab/newTab.xul",
-    nsIAboutModule::ALLOW_SCRIPT },
-  { "permissions", "chrome://browser/content/preferences/aboutPermissions.xul",
+  // the newtab's actual URL will be determined when the channel is created
+  { "newtab", "about:blank",
     nsIAboutModule::ALLOW_SCRIPT },
   { "preferences", "chrome://browser/content/preferences/in-content/preferences.xul",
     nsIAboutModule::ALLOW_SCRIPT },
@@ -99,25 +99,26 @@ static RedirEntry kRedirMap[] = {
 #endif
   { "accounts", "chrome://browser/content/aboutaccounts/aboutaccounts.xhtml",
     nsIAboutModule::ALLOW_SCRIPT },
-  { "app-manager", "chrome://browser/content/devtools/app-manager/index.xul",
-    nsIAboutModule::ALLOW_SCRIPT },
-  { "customizing", "chrome://browser/content/customizableui/aboutCustomizing.xul",
-    nsIAboutModule::ALLOW_SCRIPT },
-  { "loopconversation", "chrome://browser/content/loop/conversation.html",
+  // Linkable because of indexeddb use (bug 1228118)
+  { "loopconversation", "chrome://loop/content/panels/conversation.html",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
     nsIAboutModule::ALLOW_SCRIPT |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT |
+    nsIAboutModule::MAKE_LINKABLE |
     nsIAboutModule::ENABLE_INDEXED_DB },
-  { "looppanel", "chrome://browser/content/loop/panel.html",
+  // Linkable because of indexeddb use (bug 1228118)
+  { "looppanel", "chrome://loop/content/panels/panel.html",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
     nsIAboutModule::ALLOW_SCRIPT |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT |
+    nsIAboutModule::MAKE_LINKABLE |
     nsIAboutModule::ENABLE_INDEXED_DB,
     // Shares an IndexedDB origin with about:loopconversation.
     "loopconversation" },
   { "reader", "chrome://global/content/reader/aboutReader.html",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |
     nsIAboutModule::ALLOW_SCRIPT |
+    nsIAboutModule::URI_MUST_LOAD_IN_CHILD |
     nsIAboutModule::HIDE_FROM_ABOUTABOUT },
 };
 static const int kRedirTotal = ArrayLength(kRedirMap);
@@ -156,23 +157,57 @@ AboutRedirector::NewChannel(nsIURI* aURI,
 
   for (int i = 0; i < kRedirTotal; i++) {
     if (!strcmp(path.get(), kRedirMap[i].id)) {
+      nsAutoCString url;
+      nsLoadFlags loadFlags = static_cast<nsLoadFlags>(nsIChannel::LOAD_NORMAL);
+
+      if (path.EqualsLiteral("newtab")) {
+        // let the aboutNewTabService decide where to redirect
+        nsCOMPtr<nsIAboutNewTabService> aboutNewTabService =
+          do_GetService("@mozilla.org/browser/aboutnewtab-service;1", &rv);
+        NS_ENSURE_SUCCESS(rv, rv);
+        rv = aboutNewTabService->GetDefaultURL(url);
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        // if about:newtab points to an external resource we have to make sure
+        // the content is signed and trusted
+        bool remoteEnabled = false;
+        rv = aboutNewTabService->GetRemoteEnabled(&remoteEnabled);
+        NS_ENSURE_SUCCESS(rv, rv);
+        if (remoteEnabled) {
+          NS_ENSURE_ARG_POINTER(aLoadInfo);
+          aLoadInfo->SetVerifySignedContent(true);
+          loadFlags = static_cast<nsLoadFlags>(nsIChannel::LOAD_REPLACE);
+        }
+      }
+      // fall back to the specified url in the map
+      if (url.IsEmpty()) {
+        url.AssignASCII(kRedirMap[i].url);
+      }
+
       nsCOMPtr<nsIChannel> tempChannel;
       nsCOMPtr<nsIURI> tempURI;
-      rv = NS_NewURI(getter_AddRefs(tempURI),
-                     nsDependentCString(kRedirMap[i].url));
+      rv = NS_NewURI(getter_AddRefs(tempURI), url);
       NS_ENSURE_SUCCESS(rv, rv);
-      // Bug 1087720 (and Bug 1099296):
-      // Once all callsites have been updated to call NewChannel2()
-      // instead of NewChannel() we should have a non-null loadInfo
-      // consistently. Until then we have to branch on the loadInfo.
-      if (aLoadInfo) {
-        rv = NS_NewChannelInternal(getter_AddRefs(tempChannel),
-                                   tempURI,
-                                   aLoadInfo);
-      }
-      else {
-        rv = ioService->NewChannelFromURI(tempURI, getter_AddRefs(tempChannel));
-      }
+
+      // If tempURI links to an external URI (i.e. something other than
+      // chrome:// or resource://) then set the LOAD_REPLACE flag on the
+      // channel which forces the channel owner to reflect the displayed
+      // URL rather then being the systemPrincipal.
+      bool isUIResource = false;
+      rv = NS_URIChainHasFlags(tempURI, nsIProtocolHandler::URI_IS_UI_RESOURCE,
+                               &isUIResource);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      loadFlags = isUIResource
+                    ? static_cast<nsLoadFlags>(nsIChannel::LOAD_NORMAL)
+                    : static_cast<nsLoadFlags>(nsIChannel::LOAD_REPLACE);
+
+      rv = NS_NewChannelInternal(getter_AddRefs(tempChannel),
+                                 tempURI,
+                                 aLoadInfo,
+                                 nullptr, // aLoadGroup
+                                 nullptr, // aCallbacks
+                                 loadFlags);
       NS_ENSURE_SUCCESS(rv, rv);
 
       tempChannel->SetOriginalURI(aURI);

@@ -13,6 +13,7 @@ Important Concepts
    Mozconfig Files <mozconfigs>
    mozbuild-files
    mozbuild-symbols
+   files-metadata
    Profile Guided Optimization <pgo>
    slow
    environment-variables
@@ -23,6 +24,8 @@ Important Concepts
    preprocessor
    jar-manifests
    defining-binaries
+   toolchains
+   locales
 
 integrated development environment (IDE)
 ========================================

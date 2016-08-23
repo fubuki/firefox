@@ -14,7 +14,7 @@ namespace dom {
 
 class AudioContext;
 
-class ChannelSplitterNode : public AudioNode
+class ChannelSplitterNode final : public AudioNode
 {
 public:
   ChannelSplitterNode(AudioContext* aContext,
@@ -22,16 +22,16 @@ public:
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual uint16_t NumberOfOutputs() const MOZ_OVERRIDE { return mOutputCount; }
+  uint16_t NumberOfOutputs() const override { return mOutputCount; }
 
-  virtual const char* NodeType() const MOZ_OVERRIDE
+  const char* NodeType() const override
   {
     return "ChannelSplitterNode";
   }
 
-  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override
   {
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
@@ -43,8 +43,8 @@ private:
   const uint16_t mOutputCount;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

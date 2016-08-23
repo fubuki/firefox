@@ -7,6 +7,8 @@
 #define MP4Decoder_h_
 
 #include "MediaDecoder.h"
+#include "MediaFormatReader.h"
+#include "mozilla/dom/Promise.h"
 
 namespace mozilla {
 
@@ -14,33 +16,38 @@ namespace mozilla {
 class MP4Decoder : public MediaDecoder
 {
 public:
+  explicit MP4Decoder(MediaDecoderOwner* aOwner);
 
-  virtual MediaDecoder* Clone() MOZ_OVERRIDE {
+  MediaDecoder* Clone(MediaDecoderOwner* aOwner) override {
     if (!IsEnabled()) {
       return nullptr;
     }
-    return new MP4Decoder();
+    return new MP4Decoder(aOwner);
   }
 
-  virtual MediaDecoderStateMachine* CreateStateMachine() MOZ_OVERRIDE;
-
-#ifdef MOZ_EME
-  virtual nsresult SetCDMProxy(CDMProxy* aProxy) MOZ_OVERRIDE;
-#endif
+  MediaDecoderStateMachine* CreateStateMachine() override;
 
   // Returns true if aMIMEType is a type that we think we can render with the
   // a MP4 platform decoder backend. If aCodecs is non emtpy, it is filled
   // with a comma-delimited list of codecs to check support for. Notes in
   // out params wether the codecs string contains AAC or H.264.
-  static bool CanHandleMediaType(const nsACString& aMIMEType,
+  static bool CanHandleMediaType(const nsACString& aMIMETypeExcludingCodecs,
                                  const nsAString& aCodecs,
-                                 bool& aOutContainsAAC,
-                                 bool& aOutContainsH264,
-                                 bool& aOutContainsMP3);
+                                 DecoderDoctorDiagnostics* aDiagnostics);
 
-  // Returns true if the MP4 backend is preffed on, and we're running on a
-  // platform that is likely to have decoders for the contained formats.
+  static bool CanHandleMediaType(const nsAString& aMIMEType,
+                                 DecoderDoctorDiagnostics* aDiagnostics);
+
+  // Returns true if the MP4 backend is preffed on.
   static bool IsEnabled();
+
+  static already_AddRefed<dom::Promise>
+  IsVideoAccelerated(layers::LayersBackend aBackend, nsIGlobalObject* aParent);
+
+  void GetMozDebugReaderData(nsAString& aString) override;
+
+private:
+  RefPtr<MediaFormatReader> mReader;
 };
 
 } // namespace mozilla

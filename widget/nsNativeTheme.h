@@ -90,7 +90,7 @@ class nsNativeTheme : public nsITimerCallback
 
   // tab:
   bool IsSelectedTab(nsIFrame* aFrame) {
-    return CheckBooleanAttr(aFrame, nsGkAtoms::selected);
+    return CheckBooleanAttr(aFrame, nsGkAtoms::visuallyselected);
   }
   
   bool IsNextToSelectedTab(nsIFrame* aFrame, int32_t aOffset);
@@ -183,5 +183,5 @@ class nsNativeTheme : public nsITimerCallback
  private:
   uint32_t mAnimatedContentTimeout;
   nsCOMPtr<nsITimer> mAnimatedContentTimer;
-  nsAutoTArray<nsCOMPtr<nsIContent>, 20> mAnimatedContentList;
+  AutoTArray<nsCOMPtr<nsIContent>, 20> mAnimatedContentList;
 };

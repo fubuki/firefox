@@ -13,7 +13,7 @@
 #include "nsRect.h"
 #include "nsString.h"
 #include "nsBoundingMetrics.h"
-#include "gfxFont.h"
+#include "gfxTextRun.h"
 
 class nsGlyphTable;
 class nsIFrame;
@@ -61,7 +61,7 @@ struct nsGlyphCode {
   bool IsGlyphID() const { return font == -1; }
 
   int32_t Length() const {
-    return (IsGlyphID() || code[1] == PRUnichar('\0') ? 1 : 2);
+    return (IsGlyphID() || code[1] == char16_t('\0') ? 1 : 2);
   }
   bool Exists() const
   {
@@ -85,6 +85,9 @@ struct nsGlyphCode {
 class nsMathMLChar
 {
 public:
+  typedef gfxTextRun::Range Range;
+  typedef mozilla::gfx::DrawTarget DrawTarget;
+
   // constructor and destructor
   nsMathMLChar() {
     MOZ_COUNT_CTOR(nsMathMLChar);
@@ -114,7 +117,7 @@ public:
   // @param aDesiredStretchSize - OUT - the size that the char wants
   nsresult
   Stretch(nsPresContext*           aPresContext,
-          nsRenderingContext&     aRenderingContext,
+          DrawTarget*              aDrawTarget,
           float                    aFontSizeInflation,
           nsStretchDirection       aStretchDirection,
           const nsBoundingMetrics& aContainerSize,
@@ -123,8 +126,7 @@ public:
           bool                     aRTL);
 
   void
-  SetData(nsPresContext* aPresContext,
-          nsString&       aData);
+  SetData(nsString& aData);
 
   void
   GetData(nsString& aData) {
@@ -163,19 +165,11 @@ public:
   //
   // @param aStretchHint can be the value that will be passed to Stretch().
   // It is used to determine whether the operator is stretchy or a largeop.
-  // @param aMaxSize is the value of the "maxsize" attribute.
-  // @param aMaxSizeIsAbsolute indicates whether the aMaxSize is an absolute
-  // value in app units (true) or a multiplier of the base size (false).
   nscoord
   GetMaxWidth(nsPresContext* aPresContext,
-              nsRenderingContext& aRenderingContext,
+              DrawTarget* aDrawTarget,
               float aFontSizeInflation,
-              uint32_t aStretchHint = NS_STRETCH_NORMAL,
-              float aMaxSize = NS_MATHML_OPERATOR_SIZE_INFINITY,
-              // Perhaps just nsOperatorFlags aFlags.
-              // But need DisplayStyle for largeOp,
-              // or remove the largeop bit from flags.
-              bool aMaxSizeIsAbsolute = false);
+              uint32_t aStretchHint = NS_STRETCH_NORMAL);
 
   // Metrics that _exactly_ enclose the char. The char *must* have *already*
   // being stretched before you can call the GetBoundingMetrics() method.
@@ -213,7 +207,7 @@ private:
   nsStyleContext*    mStyleContext;
   // mGlyphs/mBmData are arrays describing the glyphs used to draw the operator.
   // See the drawing methods below.
-  nsAutoPtr<gfxTextRun> mGlyphs[4];
+  mozilla::UniquePtr<gfxTextRun> mGlyphs[4];
   nsBoundingMetrics     mBmData[4];
   // mUnscaledAscent is the actual ascent of the char.
   nscoord            mUnscaledAscent;
@@ -243,11 +237,11 @@ private:
                 const nsGlyphCode&      aGlyphCode,
                 const mozilla::FontFamilyList& aDefaultFamily,
                 nsFont&                 aFont,
-                nsRefPtr<gfxFontGroup>* aFontGroup);
+                RefPtr<gfxFontGroup>* aFontGroup);
 
   nsresult
   StretchInternal(nsPresContext*           aPresContext,
-                  gfxContext*              aThebesContext,
+                  DrawTarget*              aDrawTarget,
                   float                    aFontSizeInflation,
                   nsStretchDirection&      aStretchDirection,
                   const nsBoundingMetrics& aContainerSize,

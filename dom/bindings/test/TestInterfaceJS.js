@@ -1,11 +1,12 @@
+/* -*- Mode: JavaScript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+"use strict";
 const Cu = Components.utils;
 const Ci = Components.interfaces;
 
-"use strict";
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
@@ -63,14 +64,103 @@ TestInterfaceJS.prototype = {
   testSequenceOverload: function(arg) {},
   testSequenceUnion: function(arg) {},
 
-  testThrowDOMError: function() {
-    throw new this._win.DOMError("NotSupportedError", "We are a DOMError");
+  testThrowError: function() {
+    throw new this._win.Error("We are an Error");
   },
 
   testThrowDOMException: function() {
     throw new this._win.DOMException("We are a DOMException",
                                      "NotSupportedError");
   },
+
+  testThrowTypeError: function() {
+    throw new this._win.TypeError("We are a TypeError");
+  },
+
+  testThrowCallbackError: function(callback) {
+    callback();
+  },
+
+  testThrowXraySelfHosted: function() {
+    this._win.Array.indexOf();
+  },
+
+  testThrowSelfHosted: function() {
+    Array.indexOf();
+  },
+
+  testPromiseWithThrowingChromePromiseInit: function() {
+    return new this._win.Promise(function() {
+      noSuchMethodExistsYo1();
+    })
+  },
+
+  testPromiseWithThrowingContentPromiseInit: function(func) {
+      return new this._win.Promise(func);
+  },
+
+  testPromiseWithDOMExceptionThrowingPromiseInit: function() {
+    return new this._win.Promise(() => {
+      throw new this._win.DOMException("We are a second DOMException",
+                                       "NotFoundError");
+    })
+  },
+
+  testPromiseWithThrowingChromeThenFunction: function() {
+    return this._win.Promise.resolve(5).then(function() {
+      noSuchMethodExistsYo2();
+    });
+  },
+
+  testPromiseWithThrowingContentThenFunction: function(func) {
+    return this._win.Promise.resolve(10).then(func);
+  },
+
+  testPromiseWithDOMExceptionThrowingThenFunction: function() {
+    return this._win.Promise.resolve(5).then(() => {
+      throw new this._win.DOMException("We are a third DOMException",
+                                       "NetworkError");
+    });
+  },
+
+  testPromiseWithThrowingChromeThenable: function() {
+    var thenable =  {
+      then: function() {
+        noSuchMethodExistsYo3()
+      }
+    };
+    return new this._win.Promise(function(resolve) {
+      resolve(thenable)
+    });
+  },
+
+  testPromiseWithThrowingContentThenable: function(thenable) {
+    // Waive Xrays on the thenable, because we're calling resolve() in the
+    // chrome compartment, so that's the compartment the "then" property get
+    // will happen in, and if we leave the Xray in place the function-valued
+    // property won't return the function.
+    return this._win.Promise.resolve(Cu.waiveXrays(thenable));
+  },
+
+  testPromiseWithDOMExceptionThrowingThenable: function() {
+    var thenable =  {
+      then: () => {
+        throw new this._win.DOMException("We are a fourth DOMException",
+                                         "TypeMismatchError");
+      }
+    };
+    return new this._win.Promise(function(resolve) {
+      resolve(thenable)
+    });
+  },
+
+  get onsomething() {
+    return this.__DOM_IMPL__.getEventHandler("onsomething");
+  },
+
+  set onsomething(val) {
+    this.__DOM_IMPL__.setEventHandler("onsomething", val);
+  }
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([TestInterfaceJS])

@@ -5,15 +5,15 @@
 Components.utils.import("resource://gre/modules/Promise.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("resource://gre/modules/Task.jsm");
+Components.utils.import("resource://testing-common/PromiseTestUtils.jsm");
 
-// Deactivate the standard xpcshell observer, as it turns uncaught
-// rejections into failures, which we don't want here.
-Promise.Debugging.clearUncaughtErrorObservers();
+// Prevent test failures due to the unhandled rejections in this test file.
+PromiseTestUtils.disableUncaughtRejectionObserverForSelfTest();
 
 ////////////////////////////////////////////////////////////////////////////////
 //// Test runner
 
-let run_promise_tests = function run_promise_tests(tests, cb) {
+var run_promise_tests = function run_promise_tests(tests, cb) {
   let loop = function loop(index) {
     if (index >= tests.length) {
       if (cb) {
@@ -36,7 +36,7 @@ let run_promise_tests = function run_promise_tests(tests, cb) {
   return loop(0);
 };
 
-let make_promise_test = function(test) {
+var make_promise_test = function(test) {
   return function runtest() {
     do_print("Test starting: " + test.name);
     try {
@@ -82,12 +82,12 @@ let make_promise_test = function(test) {
 ////////////////////////////////////////////////////////////////////////////////
 //// Tests
 
-let tests = [];
+var tests = [];
 
 // Utility function to observe an failures in a promise
 // This function is useful if the promise itself is
 // not returned.
-let observe_failures = function observe_failures(promise) {
+var observe_failures = function observe_failures(promise) {
   promise.catch(function onReject(reason) {
     test.do_throw("Observed failure in test " + test + ": " + reason);
   });
@@ -909,7 +909,7 @@ tests.push(
 //   do some work that will asynchronously signal done
 //   start an event loop waiting for the done signal
 // }
-// where the async work uses resolution of a second promise to 
+// where the async work uses resolution of a second promise to
 // trigger the "done" signal. While this would likely work in a
 // naive implementation, our constant-stack implementation needs
 // a special case to avoid deadlock. Note that this test is

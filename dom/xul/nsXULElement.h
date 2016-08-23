@@ -38,29 +38,29 @@
 
 class nsIDocument;
 class nsString;
-class nsIDocShell;
 class nsXULPrototypeDocument;
 
 class nsIObjectInputStream;
 class nsIObjectOutputStream;
 class nsIOffThreadScriptReceiver;
 class nsXULPrototypeNode;
-typedef nsTArray<nsRefPtr<nsXULPrototypeNode> > nsPrototypeArray;
+typedef nsTArray<RefPtr<nsXULPrototypeNode> > nsPrototypeArray;
 
 namespace mozilla {
 class EventChainPreVisitor;
 class EventListenerManager;
 namespace css {
 class StyleRule;
-}
+} // namespace css
 namespace dom {
 class BoxObject;
-}
-}
+class HTMLIFrameElement;
+} // namespace dom
+} // namespace mozilla
 
 namespace JS {
 class SourceBufferHolder;
-}
+} // namespace JS
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -119,16 +119,11 @@ public:
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
                                nsXULPrototypeDocument* aProtoDoc,
-                               const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) = 0;
+                               const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) = 0;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
                                  nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
-                                 const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) = 0;
-
-#ifdef NS_BUILD_REFCNT_LOGGING
-    virtual const char* ClassName() = 0;
-    virtual uint32_t ClassSize() = 0;
-#endif
+                                 const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) = 0;
 
     /**
      * The prototype document must call ReleaseSubtree when it is going
@@ -167,12 +162,7 @@ public:
         Unlink();
     }
 
-#ifdef NS_BUILD_REFCNT_LOGGING
-    virtual const char* ClassName() MOZ_OVERRIDE { return "nsXULPrototypeElement"; }
-    virtual uint32_t ClassSize() MOZ_OVERRIDE { return sizeof(*this); }
-#endif
-
-    virtual void ReleaseSubtree() MOZ_OVERRIDE
+    virtual void ReleaseSubtree() override
     {
         for (int32_t i = mChildren.Length() - 1; i >= 0; i--) {
             if (mChildren[i].get())
@@ -184,11 +174,11 @@ public:
 
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
                                nsXULPrototypeDocument* aProtoDoc,
-                               const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                               const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
                                  nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
-                                 const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                                 const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
 
     nsresult SetAttrAt(uint32_t aPos, const nsAString& aValue, nsIURI* aDocumentURI);
 
@@ -199,7 +189,7 @@ public:
 
     nsPrototypeArray         mChildren;
 
-    nsRefPtr<mozilla::dom::NodeInfo> mNodeInfo;
+    RefPtr<mozilla::dom::NodeInfo> mNodeInfo;
 
     uint32_t                 mNumAttributes:29;
     uint32_t                 mHasIdAttribute:1;
@@ -220,20 +210,15 @@ public:
     nsXULPrototypeScript(uint32_t aLineNo, uint32_t version);
     virtual ~nsXULPrototypeScript();
 
-#ifdef NS_BUILD_REFCNT_LOGGING
-    virtual const char* ClassName() MOZ_OVERRIDE { return "nsXULPrototypeScript"; }
-    virtual uint32_t ClassSize() MOZ_OVERRIDE { return sizeof(*this); }
-#endif
-
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
                                nsXULPrototypeDocument* aProtoDoc,
-                               const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                               const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
     nsresult SerializeOutOfLine(nsIObjectOutputStream* aStream,
                                 nsXULPrototypeDocument* aProtoDoc);
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
                                  nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
-                                 const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                                 const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
     nsresult DeserializeOutOfLine(nsIObjectInputStream* aInput,
                                   nsXULPrototypeDocument* aProtoDoc);
 
@@ -265,9 +250,7 @@ public:
 
     void TraceScriptObject(JSTracer* aTrc)
     {
-        if (mScriptObject) {
-            JS_CallScriptTracer(aTrc, &mScriptObject, "active window XUL prototype script");
-        }
+        JS::TraceEdge(aTrc, &mScriptObject, "active window XUL prototype script");
     }
 
     void Trace(const TraceCallbacks& aCallbacks, void* aClosure)
@@ -299,18 +282,13 @@ public:
     {
     }
 
-#ifdef NS_BUILD_REFCNT_LOGGING
-    virtual const char* ClassName() MOZ_OVERRIDE { return "nsXULPrototypeText"; }
-    virtual uint32_t ClassSize() MOZ_OVERRIDE { return sizeof(*this); }
-#endif
-
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
                                nsXULPrototypeDocument* aProtoDoc,
-                               const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                               const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
                                  nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
-                                 const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                                 const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
 
     nsString                 mValue;
 };
@@ -327,18 +305,13 @@ public:
     {
     }
 
-#ifdef NS_BUILD_REFCNT_LOGGING
-    virtual const char* ClassName() MOZ_OVERRIDE { return "nsXULPrototypePI"; }
-    virtual uint32_t ClassSize() MOZ_OVERRIDE { return sizeof(*this); }
-#endif
-
     virtual nsresult Serialize(nsIObjectOutputStream* aStream,
                                nsXULPrototypeDocument* aProtoDoc,
-                               const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                               const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
     virtual nsresult Deserialize(nsIObjectInputStream* aStream,
                                  nsXULPrototypeDocument* aProtoDoc,
                                  nsIURI* aDocumentURI,
-                                 const nsTArray<nsRefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) MOZ_OVERRIDE;
+                                 const nsTArray<RefPtr<mozilla::dom::NodeInfo>> *aNodeInfos) override;
 
     nsString                 mTarget;
     nsString                 mData;
@@ -365,10 +338,8 @@ ASSERT_NODE_FLAGS_SPACE(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 3);
 
 #undef XUL_ELEMENT_FLAG_BIT
 
-class nsScriptEventHandlerOwnerTearoff;
-
-class nsXULElement MOZ_FINAL : public nsStyledElement,
-                               public nsIDOMXULElement
+class nsXULElement final : public nsStyledElement,
+                           public nsIDOMXULElement
 {
 public:
     explicit nsXULElement(already_AddRefed<mozilla::dom::NodeInfo> aNodeInfo);
@@ -385,35 +356,35 @@ public:
 
     // nsINode
     virtual nsresult PreHandleEvent(
-                       mozilla::EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+                       mozilla::EventChainPreVisitor& aVisitor) override;
 
     // nsIContent
     virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                                 nsIContent* aBindingParent,
-                                bool aCompileEventHandlers) MOZ_OVERRIDE;
-    virtual void UnbindFromTree(bool aDeep, bool aNullParent) MOZ_OVERRIDE;
-    virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) MOZ_OVERRIDE;
-    virtual void DestroyContent() MOZ_OVERRIDE;
+                                bool aCompileEventHandlers) override;
+    virtual void UnbindFromTree(bool aDeep, bool aNullParent) override;
+    virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) override;
+    virtual void DestroyContent() override;
 
 #ifdef DEBUG
-    virtual void List(FILE* out, int32_t aIndent) const MOZ_OVERRIDE;
-    virtual void DumpContent(FILE* out, int32_t aIndent,bool aDumpAll) const MOZ_OVERRIDE
+    virtual void List(FILE* out, int32_t aIndent) const override;
+    virtual void DumpContent(FILE* out, int32_t aIndent,bool aDumpAll) const override
     {
     }
 #endif
 
-    virtual void PerformAccesskey(bool aKeyCausesActivation,
-                                  bool aIsTrustedEvent) MOZ_OVERRIDE;
-    nsresult ClickWithInputSource(uint16_t aInputSource);
+    virtual bool PerformAccesskey(bool aKeyCausesActivation,
+                                  bool aIsTrustedEvent) override;
+    nsresult ClickWithInputSource(uint16_t aInputSource, bool aIsTrustedEvent);
 
-    virtual nsIContent *GetBindingParent() const MOZ_OVERRIDE;
-    virtual bool IsNodeOfType(uint32_t aFlags) const MOZ_OVERRIDE;
-    virtual bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) MOZ_OVERRIDE;
+    virtual nsIContent *GetBindingParent() const override;
+    virtual bool IsNodeOfType(uint32_t aFlags) const override;
+    virtual bool IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) override;
 
-    NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) MOZ_OVERRIDE;
+    NS_IMETHOD WalkContentStyleRules(nsRuleWalker* aRuleWalker) override;
     virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
-                                                int32_t aModType) const MOZ_OVERRIDE;
-    NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const MOZ_OVERRIDE;
+                                                int32_t aModType) const override;
+    NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
 
     // XUL element methods
     /**
@@ -436,14 +407,14 @@ public:
     // nsIDOMXULElement
     NS_DECL_NSIDOMXULELEMENT
 
-    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
-    virtual mozilla::EventStates IntrinsicState() const MOZ_OVERRIDE;
+    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
+    virtual mozilla::EventStates IntrinsicState() const override;
 
     nsresult GetFrameLoader(nsIFrameLoader** aFrameLoader);
+    nsresult GetParentApplication(mozIApplication** aApplication);
     nsresult SetIsPrerendered();
-    nsresult SwapFrameLoaders(nsIFrameLoaderOwner* aOtherOwner);
 
-    virtual void RecompileScriptEventListeners() MOZ_OVERRIDE;
+    virtual void RecompileScriptEventListeners() override;
 
     // This function should ONLY be used by BindToTree implementations.
     // The function exists solely because XUL elements store the binding
@@ -453,9 +424,9 @@ public:
       mBindingParent = aBindingParent;
     }
 
-    virtual nsIDOMNode* AsDOMNode() MOZ_OVERRIDE { return this; }
+    virtual nsIDOMNode* AsDOMNode() override { return this; }
 
-    virtual bool IsEventAttributeName(nsIAtom* aName) MOZ_OVERRIDE;
+    virtual bool IsEventAttributeName(nsIAtom* aName) override;
 
     void SetXULAttr(nsIAtom* aName, const nsAString& aValue,
                     mozilla::ErrorResult& aError)
@@ -605,9 +576,14 @@ public:
                                mozilla::ErrorResult& rv);
     // Style() inherited from nsStyledElement
     already_AddRefed<nsFrameLoader> GetFrameLoader();
-    void SwapFrameLoaders(nsXULElement& aOtherOwner, mozilla::ErrorResult& rv);
+    void SwapFrameLoaders(mozilla::dom::HTMLIFrameElement& aOtherLoaderOwner,
+                          mozilla::ErrorResult& rv);
+    void SwapFrameLoaders(nsXULElement& aOtherLoaderOwner,
+                          mozilla::ErrorResult& rv);
+    void SwapFrameLoaders(RefPtr<nsFrameLoader>& aOtherLoader,
+                          mozilla::ErrorResult& rv);
 
-    nsINode* GetScopeChainParent() const MOZ_OVERRIDE
+    nsINode* GetScopeChainParent() const override
     {
         // For XUL, the parent is the parent element, if any
         Element* parent = GetParentElement();
@@ -641,10 +617,10 @@ protected:
 
         void Traverse(nsCycleCollectionTraversalCallback &cb);
 
-        nsRefPtr<nsFrameLoader> mFrameLoader;
+        RefPtr<nsFrameLoader> mFrameLoader;
     };
 
-    virtual nsINode::nsSlots* CreateSlots() MOZ_OVERRIDE;
+    virtual nsINode::nsSlots* CreateSlots() override;
 
     nsresult LoadSrc();
 
@@ -660,22 +636,22 @@ protected:
     nsresult MakeHeavyweight(nsXULPrototypeElement* aPrototype);
 
     virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                   const nsAttrValueOrString* aValue,
-                                   bool aNotify) MOZ_OVERRIDE;
+                                   nsAttrValueOrString* aValue,
+                                   bool aNotify) override;
     virtual nsresult AfterSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                  const nsAttrValue* aValue, bool aNotify) MOZ_OVERRIDE;
+                                  const nsAttrValue* aValue, bool aNotify) override;
 
-    virtual void UpdateEditableState(bool aNotify) MOZ_OVERRIDE;
+    virtual void UpdateEditableState(bool aNotify) override;
 
     virtual bool ParseAttribute(int32_t aNamespaceID,
                                   nsIAtom* aAttribute,
                                   const nsAString& aValue,
-                                  nsAttrValue& aResult) MOZ_OVERRIDE;
+                                  nsAttrValue& aResult) override;
 
     virtual mozilla::EventListenerManager*
       GetEventListenerManagerForAttr(nsIAtom* aAttrName,
-                                     bool* aDefer) MOZ_OVERRIDE;
-  
+                                     bool* aDefer) override;
+
     /**
      * Add a listener for the specified attribute, if appropriate.
      */
@@ -702,7 +678,7 @@ protected:
     // appropriate value.
     nsIControllers *Controllers() {
       nsDOMSlots* slots = GetExistingDOMSlots();
-      return slots ? slots->mControllers : nullptr; 
+      return slots ? slots->mControllers : nullptr;
     }
 
     void UnregisterAccessKey(const nsAString& aOldValue);
@@ -719,14 +695,11 @@ protected:
 
     bool IsReadWriteTextElement() const
     {
-        const nsIAtom* tag = Tag();
-        return
-            GetNameSpaceID() == kNameSpaceID_XUL &&
-            (tag == nsGkAtoms::textbox || tag == nsGkAtoms::textarea) &&
-            !HasAttr(kNameSpaceID_None, nsGkAtoms::readonly);
+        return IsAnyOfXULElements(nsGkAtoms::textbox, nsGkAtoms::textarea) &&
+               !HasAttr(kNameSpaceID_None, nsGkAtoms::readonly);
     }
 
-    virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
+    virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
     void MaybeUpdatePrivateLifetime();
 };

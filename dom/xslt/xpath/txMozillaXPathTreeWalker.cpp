@@ -48,7 +48,7 @@ txXPathTreeWalker::moveToRoot()
         return;
     }
 
-    nsIDocument* root = mPosition.mNode->GetCurrentDoc();
+    nsIDocument* root = mPosition.mNode->GetUncomposedDoc();
     if (root) {
         mPosition.mIndex = txXPathNode::eDocument;
         mPosition.mNode = root;
@@ -74,7 +74,7 @@ txXPathTreeWalker::moveToElementById(const nsAString& aID)
         return false;
     }
 
-    nsIDocument* doc = mPosition.mNode->GetCurrentDoc();
+    nsIDocument* doc = mPosition.mNode->GetUncomposedDoc();
 
     nsCOMPtr<nsIContent> content;
     if (doc) {
@@ -348,7 +348,8 @@ txXPathNodeUtils::getLocalName(const txXPathNode& aNode)
 
     if (aNode.isContent()) {
         if (aNode.mNode->IsElement()) {
-            nsCOMPtr<nsIAtom> localName = aNode.Content()->Tag();
+            nsCOMPtr<nsIAtom> localName =
+                aNode.Content()->NodeInfo()->NameAtom();
             return localName.forget();
         }
 
@@ -357,7 +358,7 @@ txXPathNodeUtils::getLocalName(const txXPathNode& aNode)
             nsAutoString target;
             node->GetNodeName(target);
 
-            return NS_NewAtom(target);
+            return NS_Atomize(target);
         }
 
         return nullptr;
@@ -420,7 +421,7 @@ txXPathNodeUtils::getLocalName(const txXPathNode& aNode, nsAString& aLocalName)
 
     // Check for html
     if (aNode.Content()->NodeInfo()->NamespaceEquals(kNameSpaceID_None) &&
-        aNode.Content()->IsHTML()) {
+        aNode.Content()->IsHTMLElement()) {
         nsContentUtils::ASCIIToUpper(aLocalName);
     }
 }
@@ -514,7 +515,7 @@ txXPathNodeUtils::appendNodeValue(const txXPathNode& aNode, nsAString& aResult)
         aNode.mNode->IsElement() ||
         aNode.mNode->IsNodeOfType(nsINode::eDOCUMENT_FRAGMENT)) {
         nsContentUtils::AppendNodeTextContent(aNode.mNode, true, aResult,
-                                              mozilla::fallible_t());
+                                              mozilla::fallible);
 
         return;
     }
@@ -590,8 +591,8 @@ txXPathNodeUtils::comparePosition(const txXPathNode& aNode,
     }
 
     // Get document for both nodes.
-    nsIDocument* document = aNode.mNode->GetCurrentDoc();
-    nsIDocument* otherDocument = aOtherNode.mNode->GetCurrentDoc();
+    nsIDocument* document = aNode.mNode->GetUncomposedDoc();
+    nsIDocument* otherDocument = aOtherNode.mNode->GetUncomposedDoc();
 
     // If the nodes have different current documents, compare the document
     // pointers.
@@ -603,7 +604,7 @@ txXPathNodeUtils::comparePosition(const txXPathNode& aNode,
     // same tree.
 
     // Get parents up the tree.
-    nsAutoTArray<nsINode*, 8> parents, otherParents;
+    AutoTArray<nsINode*, 8> parents, otherParents;
     nsINode* node = aNode.mNode;
     nsINode* otherNode = aOtherNode.mNode;
     nsINode* parent;

@@ -10,8 +10,8 @@ import types
 import uuid
 from collections import defaultdict
 
-from mozlog.structured import reader
-from mozlog.structured import structuredlog
+from mozlog import reader
+from mozlog import structuredlog
 
 import expected
 import manifestupdate
@@ -32,7 +32,7 @@ def load_test_manifests(serve_root, test_paths):
 
 def update_expected(test_paths, serve_root, log_file_names,
                     rev_old=None, rev_new="HEAD", ignore_existing=False,
-                    sync_root=None):
+                    sync_root=None, property_order=None, boolean_properties=None):
     """Update the metadata files for web-platform-tests based on
     the results obtained in a previous run"""
 
@@ -51,7 +51,9 @@ def update_expected(test_paths, serve_root, log_file_names,
 
     expected_map_by_manifest = update_from_logs(manifests,
                                                 *log_file_names,
-                                                ignore_existing=ignore_existing)
+                                                ignore_existing=ignore_existing,
+                                                property_order=property_order,
+                                                boolean_properties=boolean_properties)
 
     for test_manifest, expected_map in expected_map_by_manifest.iteritems():
         url_base = manifests[test_manifest]["url_base"]
@@ -65,10 +67,7 @@ def update_expected(test_paths, serve_root, log_file_names,
 
 def do_delayed_imports(serve_root):
     global manifest
-
-    sys.path.insert(0, os.path.join(serve_root))
-    sys.path.insert(0, os.path.join(serve_root, "tools", "scripts"))
-    import manifest
+    from manifest import manifest
 
 
 def files_in_repo(repo_root):
@@ -130,14 +129,19 @@ def unexpected_changes(manifests, change_data, files_changed):
 
 
 def update_from_logs(manifests, *log_filenames, **kwargs):
-    ignore_existing = kwargs.pop("ignore_existing", False)
+    ignore_existing = kwargs.get("ignore_existing", False)
+    property_order = kwargs.get("property_order")
+    boolean_properties = kwargs.get("boolean_properties")
 
     expected_map = {}
     id_test_map = {}
 
     for test_manifest, paths in manifests.iteritems():
-        expected_map_manifest, id_path_map_manifest = create_test_tree(paths["metadata_path"],
-                                                                       test_manifest)
+        expected_map_manifest, id_path_map_manifest = create_test_tree(
+            paths["metadata_path"],
+            test_manifest,
+            property_order=property_order,
+            boolean_properties=boolean_properties)
         expected_map[test_manifest] = expected_map_manifest
         id_test_map.update(id_path_map_manifest)
 
@@ -156,13 +160,34 @@ def update_from_logs(manifests, *log_filenames, **kwargs):
 
     return expected_map
 
+def directory_manifests(metadata_path):
+    rv = []
+    for dirpath, dirname, filenames in os.walk(metadata_path):
+        if "__dir__.ini" in filenames:
+            rel_path = os.path.relpath(dirpath, metadata_path)
+            rv.append(os.path.join(rel_path, "__dir__.ini"))
+    return rv
 
 def write_changes(metadata_path, expected_map):
     # First write the new manifest files to a temporary directory
     temp_path = tempfile.mkdtemp(dir=os.path.split(metadata_path)[0])
     write_new_expected(temp_path, expected_map)
-    shutil.copyfile(os.path.join(metadata_path, "MANIFEST.json"),
-                    os.path.join(temp_path, "MANIFEST.json"))
+
+    # Keep all __dir__.ini files (these are not in expected_map because they
+    # aren't associated with a specific test)
+    keep_files = directory_manifests(metadata_path)
+
+    # Copy all files in the root to the temporary location since
+    # these cannot be ini files
+    keep_files.extend(item for item in os.listdir(metadata_path) if
+                      not os.path.isdir(os.path.join(metadata_path, item)))
+
+    for item in keep_files:
+        dest_dir = os.path.dirname(os.path.join(temp_path, item))
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir)
+        shutil.copyfile(os.path.join(metadata_path, item),
+                        os.path.join(temp_path, item))
 
     # Then move the old manifest files to a new location
     temp_path_2 = metadata_path + str(uuid.uuid4())
@@ -183,7 +208,7 @@ def write_new_expected(metadata_path, expected_map):
             if not os.path.exists(dir):
                 os.makedirs(dir)
             with open(path, "w") as f:
-                f.write(manifest_str.encode("utf8"))
+                f.write(manifest_str)
 
 
 class ExpectedUpdater(object):
@@ -266,15 +291,22 @@ class ExpectedUpdater(object):
         del self.test_cache[test_id]
 
 
-def create_test_tree(metadata_path, test_manifest):
+def create_test_tree(metadata_path, test_manifest, property_order=None,
+                     boolean_properties=None):
     expected_map = {}
     id_test_map = {}
     exclude_types = frozenset(["stub", "helper", "manual"])
-    include_types = set(manifest.item_types) ^ exclude_types
+    include_types = set(manifest.item_types) - exclude_types
     for test_path, tests in test_manifest.itertypes(*include_types):
-        expected_data = load_expected(test_manifest, metadata_path, test_path, tests)
+        expected_data = load_expected(test_manifest, metadata_path, test_path, tests,
+                                      property_order=property_order,
+                                      boolean_properties=boolean_properties)
         if expected_data is None:
-            expected_data = create_expected(test_manifest, test_path, tests)
+            expected_data = create_expected(test_manifest,
+                                            test_path,
+                                            tests,
+                                            property_order=property_order,
+                                            boolean_properties=boolean_properties)
 
         for test in tests:
             id_test_map[test.id] = (test_manifest, test)
@@ -283,17 +315,23 @@ def create_test_tree(metadata_path, test_manifest):
     return expected_map, id_test_map
 
 
-def create_expected(test_manifest, test_path, tests):
-    expected = manifestupdate.ExpectedManifest(None, test_path, test_manifest.url_base)
+def create_expected(test_manifest, test_path, tests, property_order=None,
+                    boolean_properties=None):
+    expected = manifestupdate.ExpectedManifest(None, test_path, test_manifest.url_base,
+                                               property_order=property_order,
+                                               boolean_properties=boolean_properties)
     for test in tests:
         expected.append(manifestupdate.TestNode.create(test.item_type, test.id))
     return expected
 
 
-def load_expected(test_manifest, metadata_path, test_path, tests):
+def load_expected(test_manifest, metadata_path, test_path, tests, property_order=None,
+                  boolean_properties=None):
     expected_manifest = manifestupdate.get_manifest(metadata_path,
                                                     test_path,
-                                                    test_manifest.url_base)
+                                                    test_manifest.url_base,
+                                                    property_order=property_order,
+                                                    boolean_properties=boolean_properties)
     if expected_manifest is None:
         return
 

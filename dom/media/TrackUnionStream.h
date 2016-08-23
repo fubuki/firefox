@@ -18,22 +18,12 @@ class TrackUnionStream : public ProcessedMediaStream {
 public:
   explicit TrackUnionStream(DOMMediaStream* aWrapper);
 
-  virtual void RemoveInput(MediaInputPort* aPort) MOZ_OVERRIDE;
-  virtual void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) MOZ_OVERRIDE;
+  void RemoveInput(MediaInputPort* aPort) override;
+  void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) override;
 
-  // Consumers may specify a filtering callback to apply to every input track.
-  // Returns true to allow the track to act as an input; false to reject it entirely.
-  typedef bool (*TrackIDFilterCallback)(StreamBuffer::Track*);
-
-  void SetTrackIDFilter(TrackIDFilterCallback aCallback);
-
-  // Forward SetTrackEnabled(output_track_id, enabled) to the Source MediaStream,
-  // translating the output track ID into the correct ID in the source.
-  virtual void ForwardTrackEnabled(TrackID aOutputID, bool aEnabled) MOZ_OVERRIDE;
+  void SetTrackEnabledImpl(TrackID aTrackID, bool aEnabled) override;
 
 protected:
-  TrackIDFilterCallback mFilterCallback;
-
   // Only non-ended tracks are allowed to persist in this map.
   struct TrackMapEntry {
     // mEndOfConsumedInputTicks is the end of the input ticks that we've consumed.
@@ -56,8 +46,14 @@ protected:
     TrackID mInputTrackID;
     TrackID mOutputTrackID;
     nsAutoPtr<MediaSegment> mSegment;
+    // These are direct track listeners that have been added to this
+    // TrackUnionStream-track and forwarded to the input track. We will update
+    // these when this track's disabled status changes.
+    nsTArray<RefPtr<MediaStreamTrackDirectListener>> mOwnedDirectListeners;
   };
 
+  // Add the track to this stream, retaining its TrackID if it has never
+  // been previously used in this stream, allocating a new TrackID otherwise.
   uint32_t AddTrack(MediaInputPort* aPort, StreamBuffer::Track* aTrack,
                     GraphTime aFrom);
   void EndTrack(uint32_t aIndex);
@@ -65,9 +61,25 @@ protected:
                      uint32_t aMapIndex, GraphTime aFrom, GraphTime aTo,
                      bool* aOutputTrackFinished);
 
+  void AddDirectTrackListenerImpl(already_AddRefed<MediaStreamTrackDirectListener> aListener,
+                                  TrackID aTrackID) override;
+  void RemoveDirectTrackListenerImpl(MediaStreamTrackDirectListener* aListener,
+                                     TrackID aTrackID) override;
+
   nsTArray<TrackMapEntry> mTrackMap;
+
+  // The next available TrackID, starting at 1 and progressing upwards.
+  // All TrackIDs in [1, mNextAvailableTrackID) have implicitly been used.
+  TrackID mNextAvailableTrackID;
+
+  // Sorted array of used TrackIDs that require manual tracking.
+  nsTArray<TrackID> mUsedTracks;
+
+  // Direct track listeners that have not been forwarded to their input stream
+  // yet. We'll forward these as their inputs become available.
+  nsTArray<TrackBound<MediaStreamTrackDirectListener>> mPendingDirectTrackListeners;
 };
 
-}
+} // namespace mozilla
 
 #endif /* MOZILLA_MEDIASTREAMGRAPH_H_ */

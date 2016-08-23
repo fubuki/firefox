@@ -32,7 +32,7 @@
 const { Buffer, TextEncoder, TextDecoder } = require('sdk/io/buffer');
 const { safeMerge } = require('sdk/util/object');
 
-const ENCODINGS = ['utf-8', 'utf-16le', 'utf-16be'];
+const ENCODINGS = ['utf-8'];
 
 exports.testBufferMain = function (assert) {
   let b = Buffer('abcdef');
@@ -60,7 +60,7 @@ exports.testBufferMain = function (assert) {
   // invalid encoding for Buffer.toString
   assert.throws(() => {
     b.toString('invalid');
-  }, TypeError, 'invalid encoding for Buffer.toString');
+  }, RangeError, 'invalid encoding for Buffer.toString');
 
   // try to toString() a 0-length slice of a buffer, both within and without the
   // valid buffer range
@@ -246,9 +246,6 @@ exports.testBufferWrite = function (assert) {
   let b = Buffer(1024);
   b.fill(0);
 
-  assert.throws(() => {
-    b.write('test string', 0, 5, 'invalid');
-  }, TypeError, 'invalid encoding with buffer write throws');
   // try to write a 0-length string beyond the end of b
   assert.throws(function() {
     b.write('', 2048);

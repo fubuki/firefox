@@ -14,7 +14,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
                                   "resource://gre/modules/Preferences.jsm");
 
 // Rules are defined at the bottom of this file.
-let PrefetcherRules = {};
+var PrefetcherRules = {};
 
 /*
  * When events that trigger in the content process are forwarded to
@@ -84,29 +84,39 @@ let PrefetcherRules = {};
 
 const PREF_PREFETCHING_ENABLED = "extensions.interposition.prefetching";
 
+function isPrimitive(v) {
+  if (!v)
+    return true;
+  let type = typeof(v);
+  return type !== "object" && type !== "function";
+}
+
 function objAddr(obj)
 {
-  if (obj && typeof(obj) == "object") {
+/*
+  if (!isPrimitive(obj)) {
     return String(obj) + "[" + Cu.getJSTestingFunctions().objectAddress(obj) + "]";
   }
   return String(obj);
+*/
 }
 
-function log(...args)
+function log(/*...args*/)
 {
-  return;
-
+/*
   for (let arg of args) {
     dump(arg);
     dump(" ");
   }
   dump("\n");
+*/
 }
 
-function logPrefetch(kind, value1, component, value2)
+function logPrefetch(/*kind, value1, component, value2*/)
 {
-  return;
+/*
   log("prefetching", kind, objAddr(value1) + "." + component, "=", objAddr(value2));
+*/
 }
 
 /*
@@ -146,7 +156,7 @@ PropertyOp.prototype.addObject = function(database, obj)
 
   logPrefetch("prop", obj, this.prop, propValue);
   database.cache(this.index, obj, has, propValue);
-  if (has && typeof(propValue) == "object" && propValue && this.outputTable) {
+  if (has && !isPrimitive(propValue) && this.outputTable) {
     database.add(this.outputTable, propValue);
   }
 }
@@ -184,7 +194,7 @@ MethodOp.prototype.addObject = function(database, obj)
 
   logPrefetch("method", obj, this.method + "(" + this.args + ")", result);
   database.cache(this.index, obj, result);
-  if (result && typeof(result) == "object" && this.outputTable) {
+  if (!isPrimitive(result) && this.outputTable) {
     database.add(this.outputTable, result);
   }
 }
@@ -239,7 +249,7 @@ CollectionOp.prototype.addObject = function(database, obj)
 
   database.cache(this.index, obj, ...elements);
   for (let i = 0; i < elements.length; i++) {
-    if (elements[i] && typeof(elements[i]) == "object" && this.outputTable) {
+    if (!isPrimitive(elements[i]) && this.outputTable) {
       database.add(this.outputTable, elements[i]);
     }
   }
@@ -338,7 +348,7 @@ Database.prototype = {
   },
 };
 
-let Prefetcher = {
+var Prefetcher = {
   init: function() {
     // Give an index to each rule and store it in this.ruleMap based
     // on the index. The index is used to serialize and deserialize
@@ -395,7 +405,7 @@ let Prefetcher = {
     let cpows = [];
     for (let item of db.cached) {
       item = item.map((elt) => {
-        if (elt && typeof(elt) == "object") {
+        if (!isPrimitive(elt)) {
           if (!cpowIndexes.has(elt)) {
             let index = cpows.length;
             cpows.push(elt);
@@ -423,7 +433,7 @@ let Prefetcher = {
       // Replace anything of the form {cpow: <index>} with the actual
       // object in |cpows|.
       item = item.map((elt) => {
-        if (elt && typeof(elt) == "object") {
+        if (!isPrimitive(elt)) {
           return cpows[elt.cpow];
         }
         return elt;
@@ -472,8 +482,8 @@ let Prefetcher = {
   },
 };
 
-let AdblockId = "{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d}";
-let AdblockRules = {
+var AdblockId = "{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d}";
+var AdblockRules = {
   "ContentPolicy.shouldLoad": [
     new MethodOp("Node", "InitNode", "QueryInterface", Ci.nsISupports),
     new PropertyOp("Document", "Node", "ownerDocument"),
@@ -491,8 +501,8 @@ let AdblockRules = {
 };
 PrefetcherRules[AdblockId] = AdblockRules;
 
-let LastpassId = "support@lastpass.com";
-let LastpassRules = {
+var LastpassId = "support@lastpass.com";
+var LastpassRules = {
   "EventTarget.handleEvent": [
     new PropertyOp("EventTarget", "Event", "target"),
     new PropertyOp("EventOriginalTarget", "Event", "originalTarget"),

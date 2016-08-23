@@ -8,12 +8,13 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "nsMenuBaseX.h"
 #include "nsMenuBarX.h"
 #include "nsMenuGroupOwnerX.h"
 #include "nsCOMPtr.h"
 #include "nsChangeObserver.h"
-#include "nsAutoPtr.h"
 
 class nsMenuX;
 class nsMenuItemIconX;
@@ -50,9 +51,9 @@ public:
   NS_DECL_CHANGEOBSERVER
 
   // nsMenuObjectX
-  void*             NativeData() MOZ_OVERRIDE {return (void*)mNativeMenu;}
-  nsMenuObjectTypeX MenuObjectType() MOZ_OVERRIDE {return eSubmenuObjectType;}
-  void              IconUpdated() MOZ_OVERRIDE { mParent->IconUpdated(); }
+  void*             NativeData() override {return (void*)mNativeMenu;}
+  nsMenuObjectTypeX MenuObjectType() override {return eSubmenuObjectType;}
+  void              IconUpdated() override { mParent->IconUpdated(); }
 
   // nsMenuX
   nsresult       Create(nsMenuObjectX* aParent, nsMenuGroupOwnerX* aMenuGroupOwner, nsIContent* aNode);
@@ -77,18 +78,18 @@ protected:
   bool           OnOpen();
   bool           OnClose();
   nsresult       AddMenuItem(nsMenuItemX* aMenuItem);
-  nsresult       AddMenu(nsMenuX* aMenu);
+  nsMenuX*       AddMenu(mozilla::UniquePtr<nsMenuX> aMenu);
   void           LoadMenuItem(nsIContent* inMenuItemContent);  
   void           LoadSubMenu(nsIContent* inMenuContent);
   GeckoNSMenu*   CreateMenuWithGeckoString(nsString& menuTitle);
 
-  nsTArray< nsAutoPtr<nsMenuObjectX> > mMenuObjectsArray;
+  nsTArray<mozilla::UniquePtr<nsMenuObjectX>> mMenuObjectsArray;
   nsString                  mLabel;
   uint32_t                  mVisibleItemsCount; // cache
   nsMenuObjectX*            mParent; // [weak]
   nsMenuGroupOwnerX*        mMenuGroupOwner; // [weak]
   // The icon object should never outlive its creating nsMenuX object.
-  nsRefPtr<nsMenuItemIconX> mIcon;
+  RefPtr<nsMenuItemIconX> mIcon;
   GeckoNSMenu*              mNativeMenu; // [strong]
   MenuDelegate*             mMenuDelegate; // [strong]
   // nsMenuX objects should always have a valid native menu item.

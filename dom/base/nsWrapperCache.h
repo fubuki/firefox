@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +9,6 @@
 
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Assertions.h"
-#include "js/Class.h"
 #include "js/Id.h"          // must come before js/RootingAPI.h
 #include "js/Value.h"       // must come before js/RootingAPI.h
 #include "js/RootingAPI.h"
@@ -17,12 +17,12 @@
 namespace mozilla {
 namespace dom {
 class TabChildGlobal;
+class ProcessGlobal;
 } // namespace dom
 } // namespace mozilla
 class SandboxPrivate;
 class nsInProcessTabChildGlobal;
 class nsWindowRoot;
-class XPCWrappedNativeScope;
 
 #define NS_WRAPPERCACHE_IID \
 { 0x6f3179a1, 0x36f7, 0x4a5c, \
@@ -65,6 +65,7 @@ class XPCWrappedNativeScope;
  * have to include some JS headers that don't play nicely with the rest of the
  * codebase. Include nsWrapperCacheInlines.h if you need to call those methods.
  */
+
 class nsWrapperCache
 {
 public:
@@ -102,11 +103,18 @@ public:
     return GetWrapperJSObject();
   }
 
+#ifdef DEBUG
+private:
+  static bool HasJSObjectMovedOp(JSObject* aWrapper);
+
+public:
+#endif
+
   void SetWrapper(JSObject* aWrapper)
   {
     MOZ_ASSERT(!PreservingWrapper(), "Clearing a preserved wrapper!");
     MOZ_ASSERT(aWrapper, "Use ClearWrapper!");
-    MOZ_ASSERT(js::HasObjectMovedOp(aWrapper),
+    MOZ_ASSERT(HasJSObjectMovedOp(aWrapper),
                "Object has not provided the hook to update the wrapper if it is moved");
 
     SetWrapperJSObject(aWrapper);
@@ -151,7 +159,7 @@ public:
    * Wrap the object corresponding to this wrapper cache. If non-null is
    * returned, the object has already been stored in the wrapper cache.
    */
-  virtual JSObject* WrapObject(JSContext* cx) = 0;
+  virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto) = 0;
 
   /**
    * Returns true if the object has a non-gray wrapper.
@@ -250,19 +258,21 @@ protected:
   void TraceWrapper(JSTracer* aTrc, const char* name)
   {
     if (mWrapper) {
-      JS_CallObjectTracer(aTrc, &mWrapper, name);
+      js::UnsafeTraceManuallyBarrieredEdge(aTrc, &mWrapper, name);
     }
   }
 
   void PoisonWrapper()
   {
     if (mWrapper) {
-      mWrapper.setToCrashOnTouch();
+      // See setToCrashOnTouch() in RootingAPI.h
+      mWrapper = reinterpret_cast<JSObject*>(1);
     }
   }
 
 private:
   friend class mozilla::dom::TabChildGlobal;
+  friend class mozilla::dom::ProcessGlobal;
   friend class SandboxPrivate;
   friend class nsInProcessTabChildGlobal;
   friend class nsWindowRoot;
@@ -278,13 +288,7 @@ private:
     return mWrapper;
   }
 
-  void SetWrapperJSObject(JSObject* aWrapper)
-  {
-    mWrapper = aWrapper;
-    UnsetWrapperFlags(kWrapperFlagsMask & ~WRAPPER_IS_NOT_DOM_BINDING);
-  }
-
-  void TraceWrapperJSObject(JSTracer* aTrc, const char* aName);
+  void SetWrapperJSObject(JSObject* aWrapper);
 
   FlagsType GetWrapperFlags() const
   {
@@ -309,12 +313,14 @@ private:
     mFlags &= ~aFlagsToUnset;
   }
 
-  static void HoldJSObjects(void* aScriptObjectHolder,
-                            nsScriptObjectTracer* aTracer);
+  void HoldJSObjects(void* aScriptObjectHolder,
+                     nsScriptObjectTracer* aTracer);
 
 #ifdef DEBUG
+public:
   void CheckCCWrapperTraversal(void* aScriptObjectHolder,
                                nsScriptObjectTracer* aTracer);
+private:
 #endif // DEBUG
 
   /**
@@ -338,8 +344,8 @@ private:
 
   enum { kWrapperFlagsMask = (WRAPPER_BIT_PRESERVED | WRAPPER_IS_NOT_DOM_BINDING) };
 
-  JS::Heap<JSObject*> mWrapper;
-  FlagsType           mFlags;
+  JSObject* mWrapper;
+  FlagsType mFlags;
 };
 
 enum { WRAPPER_CACHE_FLAGS_BITS_USED = 2 };

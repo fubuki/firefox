@@ -22,14 +22,13 @@ class JSObject;
 
 namespace mozilla {
 
-class ErrorResult;
 template <typename T> class AsyncEventRunner;
 
 namespace dom {
 
 class MediaSource;
 
-class SourceBufferList MOZ_FINAL : public DOMEventTargetHelper
+class SourceBufferList final : public DOMEventTargetHelper
 {
 public:
   /** WebIDL Methods. */
@@ -46,7 +45,7 @@ public:
 
   MediaSource* GetParentObject() const;
 
-  JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // Append a SourceBuffer and fire "addsourcebuffer" at the list.
   void Append(SourceBuffer* aSourceBuffer);
@@ -72,15 +71,15 @@ public:
   // Mark all SourceBuffers input buffers as ended.
   void Ended();
 
-  // Evicts data for the given time range from each SourceBuffer in the list.
-  void Evict(double aStart, double aEnd);
-
   // Returns the highest end time of any of the Sourcebuffers.
   double GetHighestBufferedEndTime();
 
-#if defined(DEBUG)
-  void Dump(const char* aPath);
-#endif
+  // Append a SourceBuffer to the list. No event is fired.
+  void AppendSimple(SourceBuffer* aSourceBuffer);
+
+  // Remove all SourceBuffers from mSourceBuffers.
+  //  No event is fired and no action is performed on the sourcebuffers.
+  void ClearSimple();
 
 private:
   ~SourceBufferList();
@@ -89,11 +88,12 @@ private:
   void DispatchSimpleEvent(const char* aName);
   void QueueAsyncSimpleEvent(const char* aName);
 
-  nsRefPtr<MediaSource> mMediaSource;
-  nsTArray<nsRefPtr<SourceBuffer> > mSourceBuffers;
+  RefPtr<MediaSource> mMediaSource;
+  nsTArray<RefPtr<SourceBuffer> > mSourceBuffers;
 };
 
 } // namespace dom
 
 } // namespace mozilla
+
 #endif /* mozilla_dom_SourceBufferList_h_ */

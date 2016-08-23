@@ -36,7 +36,7 @@ namespace downloads {
 nsresult
 GenerateGUIDFunction::create(mozIStorageConnection *aDBConn)
 {
-  nsRefPtr<GenerateGUIDFunction> function = new GenerateGUIDFunction();
+  RefPtr<GenerateGUIDFunction> function = new GenerateGUIDFunction();
   nsresult rv = aDBConn->CreateFunction(
     NS_LITERAL_CSTRING("generate_guid"), 0, function
   );
@@ -61,7 +61,7 @@ Base64urlEncode(const uint8_t* aBytes,
   // result, we set the capacity to be one greater than what we need, and the
   // length to our desired length.
   uint32_t length = (aNumBytes + 2) / 3 * 4; // +2 due to integer math.
-  NS_ENSURE_TRUE(_result.SetCapacity(length + 1, mozilla::fallible_t()),
+  NS_ENSURE_TRUE(_result.SetCapacity(length + 1, mozilla::fallible),
                  NS_ERROR_OUT_OF_MEMORY);
   _result.SetLength(length);
   (void)PL_Base64Encode(reinterpret_cast<const char*>(aBytes), aNumBytes,
@@ -142,5 +142,5 @@ GenerateGUIDFunction::OnFunctionCall(mozIStorageValueArray *aArguments,
   return NS_OK;
 }
 
-} // namespace mozilla
 } // namespace downloads
+} // namespace mozilla

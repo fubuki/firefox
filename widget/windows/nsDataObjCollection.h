@@ -8,13 +8,11 @@
 
 #include <oleidl.h>
 
+#include "mozilla/RefPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
-#include "nsAutoPtr.h"
 #include "nsDataObj.h"
 #include "mozilla/Attributes.h"
-
-class CEnumFormatEtc;
 
 #define MULTI_MIME "Mozilla/IDataObjectCollectionFormat"
 
@@ -33,7 +31,7 @@ public:
  * associated with instances via SetDragDrop().
  */
  
-class nsDataObjCollection MOZ_FINAL : public nsIDataObjCollection, public nsDataObj
+class nsDataObjCollection final : public nsIDataObjCollection, public nsDataObj
 {
   public:
     nsDataObjCollection();
@@ -51,6 +49,10 @@ class nsDataObjCollection MOZ_FINAL : public nsIDataObjCollection, public nsData
     virtual HRESULT GetFileContents(LPFORMATETC pFE, LPSTGMEDIUM pSTM);
     virtual HRESULT GetFirstSupporting(LPFORMATETC pFE, LPSTGMEDIUM pSTM);
 
+    using nsDataObj::GetFile;
+    using nsDataObj::GetFileContents;
+    using nsDataObj::GetText;
+
     // support for clipboard
     void AddDataFlavor(const char * aDataFlavor, LPFORMATETC aFE);
 
@@ -58,7 +60,7 @@ class nsDataObjCollection MOZ_FINAL : public nsIDataObjCollection, public nsData
     void AddDataObject(IDataObject * aDataObj);
     int32_t GetNumDataObjects() { return mDataObjects.Length(); }
     nsDataObj* GetDataObjectAt(uint32_t aItem)
-            { return mDataObjects.SafeElementAt(aItem, nsRefPtr<nsDataObj>()); }
+            { return mDataObjects.SafeElementAt(aItem, RefPtr<nsDataObj>()); }
 
     // Return the registered OLE class ID of this object's CfDataObj.
     CLSID GetClassID() const;
@@ -87,7 +89,7 @@ class nsDataObjCollection MOZ_FINAL : public nsIDataObjCollection, public nsData
   protected:
     ULONG m_cRef;              // the reference count
 
-    nsTArray<nsRefPtr<nsDataObj> > mDataObjects;
+    nsTArray<RefPtr<nsDataObj> > mDataObjects;
 };
 
 #endif  //

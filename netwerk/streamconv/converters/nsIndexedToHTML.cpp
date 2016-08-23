@@ -8,10 +8,10 @@
 #include "nsNetUtil.h"
 #include "netCore.h"
 #include "nsStringStream.h"
+#include "nsIFile.h"
 #include "nsIFileURL.h"
 #include "nsEscape.h"
 #include "nsIDirIndex.h"
-#include "nsDateTimeFormatCID.h"
 #include "nsURLHelper.h"
 #include "nsIPlatformCharset.h"
 #include "nsIPrefService.h"
@@ -23,6 +23,7 @@
 #include "nsITextToSubURI.h"
 #include "nsXPIDLString.h"
 #include <algorithm>
+#include "nsIChannel.h"
 
 NS_IMPL_ISUPPORTS(nsIndexedToHTML,
                   nsIDirIndexListener,
@@ -68,9 +69,9 @@ nsIndexedToHTML::Init(nsIStreamListener* aListener) {
 
     mListener = aListener;
 
-    mDateTime = do_CreateInstance(NS_DATETIMEFORMAT_CONTRACTID, &rv);
-    if (NS_FAILED(rv))
-      return rv;
+    mDateTime = nsIDateTimeFormat::Create();
+    if (!mDateTime)
+      return NS_ERROR_FAILURE;
 
     nsCOMPtr<nsIStringBundleService> sbs =
         do_GetService(NS_STRINGBUNDLE_CONTRACTID, &rv);
@@ -541,15 +542,23 @@ nsIndexedToHTML::DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
     // trying to play nice and escaping the quotes.  See bug
     // 358128.
 
-    if (baseUri.FindChar('"') == kNotFound)
+    if (!baseUri.Contains('"'))
     {
         // Great, the baseUri does not contain a char that
         // will prematurely close the string.  Go ahead an
-        // add a base href.
-        buffer.AppendLiteral("<base href=\"");
-        nsAdoptingCString htmlEscapedUri(nsEscapeHTML(baseUri.get()));
-        buffer.Append(htmlEscapedUri);
-        buffer.AppendLiteral("\" />\n");
+        // add a base href, but only do so if we're not
+        // dealing with a resource URI.
+        nsCOMPtr<nsIURI> originalUri;
+        rv = channel->GetOriginalURI(getter_AddRefs(originalUri));
+        bool wasResource = false;
+        if (NS_FAILED(rv) ||
+            NS_FAILED(originalUri->SchemeIs("resource", &wasResource)) ||
+            !wasResource) {
+            buffer.AppendLiteral("<base href=\"");
+            nsAdoptingCString htmlEscapedUri(nsEscapeHTML(baseUri.get()));
+            buffer.Append(htmlEscapedUri);
+            buffer.AppendLiteral("\" />\n");
+        }
     }
     else
     {
@@ -698,7 +707,7 @@ nsIndexedToHTML::OnIndexAvailable(nsIRequest *aRequest,
 
     // Adjust the length in case unescaping shortened the string.
     loc.Truncate(nsUnescapeCount(loc.BeginWriting()));
-    if (loc.First() == PRUnichar('.'))
+    if (loc.First() == char16_t('.'))
         pushBuffer.AppendLiteral(" class=\"hidden-object\"");
 
     pushBuffer.AppendLiteral(">\n <td sortable-data=\"");
@@ -750,8 +759,10 @@ nsIndexedToHTML::OnIndexAvailable(nsIRequest *aRequest,
     // for some protocols, we expect the location to be absolute.
     // if so, and if the location indeed appears to be a valid URI, then go
     // ahead and treat it like one.
+
+    nsAutoCString scheme;
     if (mExpectAbsLoc &&
-        NS_SUCCEEDED(net_ExtractURLScheme(loc, nullptr, nullptr, nullptr))) {
+        NS_SUCCEEDED(net_ExtractURLScheme(loc, scheme))) {
         // escape as absolute 
         escFlags = esc_Forced | esc_AlwaysCopy | esc_Minimal;
     }
@@ -817,7 +828,7 @@ nsIndexedToHTML::OnIndexAvailable(nsIRequest *aRequest,
     PRTime t;
     aIndex->GetLastModified(&t);
 
-    if (t == -1) {
+    if (t == -1LL) {
         pushBuffer.AppendLiteral("></td>\n <td>");
     } else {
         pushBuffer.AppendLiteral(" sortable-data=\"");

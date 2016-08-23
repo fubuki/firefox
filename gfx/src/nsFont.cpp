@@ -18,38 +18,29 @@
 
 using namespace mozilla;
 
-nsFont::nsFont(const FontFamilyList& aFontlist, uint8_t aStyle,
-               uint16_t aWeight, int16_t aStretch,
-               uint8_t aDecoration, nscoord aSize)
+nsFont::nsFont(const FontFamilyList& aFontlist, nscoord aSize)
   : fontlist(aFontlist)
 {
   Init();
-  style = aStyle;
-  weight = aWeight;
-  stretch = aStretch;
-  decorations = aDecoration;
   size = aSize;
 }
 
-nsFont::nsFont(FontFamilyType aGenericType, uint8_t aStyle,
-               uint16_t aWeight, int16_t aStretch, uint8_t aDecoration,
-               nscoord aSize)
+nsFont::nsFont(FontFamilyType aGenericType, nscoord aSize)
   : fontlist(aGenericType)
 {
   Init();
-  style = aStyle;
-  weight = aWeight;
-  stretch = aStretch;
-  decorations = aDecoration;
   size = aSize;
 }
 
 void
 nsFont::Init()
 {
+  style = NS_FONT_STYLE_NORMAL;
+  weight = NS_FONT_WEIGHT_NORMAL;
+  stretch = NS_FONT_STRETCH_NORMAL;
   systemFont = false;
   smoothing = NS_FONT_SMOOTHING_AUTO;
-  sizeAdjust = 0.0;
+  sizeAdjust = -1.0f;
   kerning = NS_FONT_KERNING_AUTO;
   synthesis = NS_FONT_SYNTHESIS_WEIGHT | NS_FONT_SYNTHESIS_STYLE;
 
@@ -59,32 +50,10 @@ nsFont::Init()
   variantLigatures = 0;
   variantNumeric = 0;
   variantPosition = NS_FONT_VARIANT_POSITION_NORMAL;
+  variantWidth = NS_FONT_VARIANT_WIDTH_NORMAL;
 }
 
-nsFont::nsFont(const nsFont& aOther)
-  : fontlist(aOther.fontlist)
-{
-  style = aOther.style;
-  systemFont = aOther.systemFont;
-  weight = aOther.weight;
-  stretch = aOther.stretch;
-  decorations = aOther.decorations;
-  smoothing = aOther.smoothing;
-  size = aOther.size;
-  sizeAdjust = aOther.sizeAdjust;
-  kerning = aOther.kerning;
-  synthesis = aOther.synthesis;
-  fontFeatureSettings = aOther.fontFeatureSettings;
-  languageOverride = aOther.languageOverride;
-  variantAlternates = aOther.variantAlternates;
-  variantCaps = aOther.variantCaps;
-  variantEastAsian = aOther.variantEastAsian;
-  variantLigatures = aOther.variantLigatures;
-  variantNumeric = aOther.variantNumeric;
-  variantPosition = aOther.variantPosition;
-  alternateValues = aOther.alternateValues;
-  featureValueLookup = aOther.featureValueLookup;
-}
+nsFont::nsFont(const nsFont& aOther) = default;
 
 nsFont::nsFont()
 {
@@ -94,7 +63,7 @@ nsFont::~nsFont()
 {
 }
 
-bool nsFont::BaseEquals(const nsFont& aOther) const
+bool nsFont::Equals(const nsFont& aOther) const
 {
   if ((style == aOther.style) &&
       (systemFont == aOther.systemFont) &&
@@ -113,6 +82,7 @@ bool nsFont::BaseEquals(const nsFont& aOther) const
       (variantLigatures == aOther.variantLigatures) &&
       (variantNumeric == aOther.variantNumeric) &&
       (variantPosition == aOther.variantPosition) &&
+      (variantWidth == aOther.variantWidth) &&
       (alternateValues == aOther.alternateValues) &&
       (featureValueLookup == aOther.featureValueLookup) &&
       (smoothing == aOther.smoothing)) {
@@ -121,40 +91,7 @@ bool nsFont::BaseEquals(const nsFont& aOther) const
   return false;
 }
 
-bool nsFont::Equals(const nsFont& aOther) const
-{
-  if (BaseEquals(aOther) &&
-      (decorations == aOther.decorations)) {
-    return true;
-  }
-  return false;
-}
-
-nsFont& nsFont::operator=(const nsFont& aOther)
-{
-  fontlist = aOther.fontlist;
-  style = aOther.style;
-  systemFont = aOther.systemFont;
-  weight = aOther.weight;
-  stretch = aOther.stretch;
-  decorations = aOther.decorations;
-  smoothing = aOther.smoothing;
-  size = aOther.size;
-  sizeAdjust = aOther.sizeAdjust;
-  kerning = aOther.kerning;
-  synthesis = aOther.synthesis;
-  fontFeatureSettings = aOther.fontFeatureSettings;
-  languageOverride = aOther.languageOverride;
-  variantAlternates = aOther.variantAlternates;
-  variantCaps = aOther.variantCaps;
-  variantEastAsian = aOther.variantEastAsian;
-  variantLigatures = aOther.variantLigatures;
-  variantNumeric = aOther.variantNumeric;
-  variantPosition = aOther.variantPosition;
-  alternateValues = aOther.alternateValues;
-  featureValueLookup = aOther.featureValueLookup;
-  return *this;
-}
+nsFont& nsFont::operator=(const nsFont& aOther) = default;
 
 void
 nsFont::CopyAlternates(const nsFont& aOther)
@@ -232,6 +169,23 @@ AddFontFeaturesBitmask(uint32_t aValue, uint32_t aMin, uint32_t aMax,
       const gfxFontFeature& feature = aFeatureDefaults[i];
       aFeaturesOut.AppendElement(feature);
     }
+  }
+}
+
+static uint32_t
+FontFeatureTagForVariantWidth(uint32_t aVariantWidth)
+{
+  switch (aVariantWidth) {
+    case NS_FONT_VARIANT_WIDTH_FULL:
+      return TRUETYPE_TAG('f','w','i','d');
+    case NS_FONT_VARIANT_WIDTH_HALF:
+      return TRUETYPE_TAG('h','w','i','d');
+    case NS_FONT_VARIANT_WIDTH_THIRD:
+      return TRUETYPE_TAG('t','w','i','d');
+    case NS_FONT_VARIANT_WIDTH_QUARTER:
+      return TRUETYPE_TAG('q','w','i','d');
+    default:
+      return 0;
   }
 }
 
@@ -320,6 +274,13 @@ void nsFont::AddFontFeaturesToStyle(gfxFontStyle *aStyle) const
 
   // -- position
   aStyle->variantSubSuper = variantPosition;
+
+  // -- width
+  setting.mTag = FontFeatureTagForVariantWidth(variantWidth);
+  if (setting.mTag) {
+    setting.mValue = 1;
+    aStyle->featureSettings.AppendElement(setting);
+  }
 
   // indicate common-path case when neither variantCaps or variantSubSuper are set
   aStyle->noFallbackVariantFeatures =

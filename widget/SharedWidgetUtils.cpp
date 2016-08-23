@@ -12,17 +12,25 @@
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocShell.h"
 #include "nsIInterfaceRequestorUtils.h"
+#include "nsPIDOMWindow.h"
 
 namespace mozilla {
 namespace widget {
 
-//static
+// static
+void
+WidgetUtils::Shutdown()
+{
+  WidgetKeyboardEvent::Shutdown();
+}
+
+// static
 already_AddRefed<nsIWidget>
-WidgetUtils::DOMWindowToWidget(nsIDOMWindow *aDOMWindow)
+WidgetUtils::DOMWindowToWidget(nsPIDOMWindowOuter* aDOMWindow)
 {
   nsCOMPtr<nsIWidget> widget;
+  nsCOMPtr<nsPIDOMWindowOuter> window = aDOMWindow;
 
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aDOMWindow);
   if (window) {
     nsCOMPtr<nsIBaseWindow> baseWin(do_QueryInterface(window->GetDocShell()));
 

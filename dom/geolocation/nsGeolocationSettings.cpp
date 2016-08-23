@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,7 +37,7 @@
 #define GEO_ALA_TYPE_VALUE_FIXED   "user-defined"
 #define GEO_ALA_TYPE_VALUE_NONE    "no-location"
 
-using mozilla::unused;
+using mozilla::Unused;
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -48,11 +49,11 @@ already_AddRefed<nsGeolocationSettings>
 nsGeolocationSettings::GetGeolocationSettings()
 {
   // this singleton is only needed in the parent process...
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     return nullptr;
   }
 
-  nsRefPtr<nsGeolocationSettings> result;
+  RefPtr<nsGeolocationSettings> result;
   if (nsGeolocationSettings::sSettings) {
     result = nsGeolocationSettings::sSettings;
     return result.forget();
@@ -224,6 +225,8 @@ nsGeolocationSettings::HandleGeolocationAlaEnabledChange(const JS::Value& aVal)
 void
 nsGeolocationSettings::HandleGeolocationPerOriginSettingsChange(const JS::Value& aVal)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (!aVal.isObject()) {
     return;
   }
@@ -231,43 +234,44 @@ nsGeolocationSettings::HandleGeolocationPerOriginSettingsChange(const JS::Value&
   // clear the hash table
   mPerOriginSettings.Clear();
 
-  // enumerate the array
-  AutoJSAPI jsapi;
-  jsapi.Init();
-  JSContext* cx = jsapi.cx();
-  JS::Rooted<JSObject*> obj(cx, &aVal.toObject());
-  JS::AutoIdArray ids(cx, JS_Enumerate(cx, obj));
+  // root the object and get the global
+  JS::Rooted<JSObject*> obj(nsContentUtils::RootingCx(), &aVal.toObject());
+  MOZ_ASSERT(obj);
+  nsIGlobalObject* global = xpc::NativeGlobal(obj);
+  NS_ENSURE_TRUE_VOID(global && global->GetGlobalJSObject());
+
+  // because the spec requires calling getters when enumerating the key of a
+  // dictionary
+  AutoEntryScript aes(global, "geolocation.app_settings enumeration");
+  JSContext *cx = aes.cx();
+  JS::Rooted<JS::IdVector> ids(cx, JS::IdVector(cx));
 
   // if we get no ids then the exception list is empty and we can return here.
-  if (!ids)
+  if (!JS_Enumerate(cx, obj, &ids)) {
       return;
+  }
 
   // go through all of the objects in the exceptions dictionary
   for (size_t i = 0; i < ids.length(); i++) {
     JS::RootedId id(cx);
     id = ids[i];
 
-    JS::RootedValue v(cx);
-    if (!JS_IdToValue(cx, id, &v) || !v.isString())
-      continue;
-
-    JS::RootedString str(cx, v.toString());
-    if (!str)
-      continue;
-
-    // get the origin for the app
-    nsString origin;
-    if (!AssignJSString(cx, origin, str))
-      continue;
-
     // if it is an app that is always precise, skip it
-    if (mAlwaysPreciseApps.Contains(origin))
+    nsAutoJSString origin;
+    if (!origin.init(cx, id)) {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
       continue;
+    }
+    if (mAlwaysPreciseApps.Contains(origin)) {
+      continue;
+    }
 
     // get the app setting object
     JS::RootedValue propertyValue(cx);
-    if (!JS_GetPropertyById(cx, obj, id, &propertyValue) || !propertyValue.isObject())
+    if (!JS_GetPropertyById(cx, obj, id, &propertyValue)) {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
       continue;
+    }
     JS::RootedObject settingObj(cx, &propertyValue.toObject());
 
     GeolocationSetting *settings = new GeolocationSetting(origin);
@@ -277,6 +281,8 @@ nsGeolocationSettings::HandleGeolocationPerOriginSettingsChange(const JS::Value&
     JS::RootedValue fm(cx);
     if (JS_GetProperty(cx, settingObj, "type", &fm)) {
       settings->HandleTypeChange(fm);
+    } else {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
     }
 
 #ifdef MOZ_APPROX_LOCATION
@@ -284,6 +290,8 @@ nsGeolocationSettings::HandleGeolocationPerOriginSettingsChange(const JS::Value&
     JS::RootedValue distance(cx);
     if (JS_GetProperty(cx, settingObj, "distance", &distance)) {
       settings->HandleApproxDistanceChange(distance);
+    } else {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
     }
 #endif
 
@@ -291,6 +299,8 @@ nsGeolocationSettings::HandleGeolocationPerOriginSettingsChange(const JS::Value&
     JS::RootedValue coords(cx);
     if (JS_GetProperty(cx, settingObj, "coords", &coords)) {
       settings->HandleFixedCoordsChange(coords);
+    } else {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
     }
 
     // add the per-app setting object to the hashtable
@@ -308,11 +318,18 @@ nsGeolocationSettings::HandleGeolocationAlwaysPreciseChange(const JS::Value& aVa
   // clear the list of apps that are always precise
   mAlwaysPreciseApps.Clear();
 
-  AutoJSAPI jsapi;
-  jsapi.Init();
-  JSContext* cx = jsapi.cx();
-  JS::Rooted<JSObject*> obj(cx, &aVal.toObject());
-  if (!JS_IsArrayObject(cx, obj)) {
+  // root the object and get the global
+  JS::Rooted<JSObject*> obj(nsContentUtils::RootingCx(), &aVal.toObject());
+  MOZ_ASSERT(obj);
+  nsIGlobalObject* global = xpc::NativeGlobal(obj);
+  NS_ENSURE_TRUE_VOID(global && global->GetGlobalJSObject());
+
+  // the spec requires calling getters when accessing array by index
+  AutoEntryScript aes(global, "geolocation.always_precise indexing");
+  JSContext *cx = aes.cx();
+
+  bool isArray;
+  if (!JS_IsArrayObject(cx, obj, &isArray) || !isArray) {
     return;
   }
 
@@ -326,11 +343,13 @@ nsGeolocationSettings::HandleGeolocationAlwaysPreciseChange(const JS::Value& aVa
     JS::RootedValue value(cx);
 
     if (!JS_GetElement(cx, obj, i, &value) || !value.isString()) {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
       continue;
     }
 
-    nsString origin;
-    if (!AssignJSString(cx, origin, value.toString())) {
+    nsAutoJSString origin;
+    if (!origin.init(cx, value)) {
+      JS_ClearPendingException(cx); // catch and ignore any exceptions
       continue;
     }
 
@@ -343,15 +362,11 @@ nsGeolocationSettings::HandleGeolocationAlwaysPreciseChange(const JS::Value& aVa
 }
 
 
-
 void
 GeolocationSetting::HandleTypeChange(const JS::Value& aVal)
 {
-  AutoJSAPI jsapi;
-  jsapi.Init();
-  JSContext* cx = jsapi.cx();
-  nsString str;
-  if (!aVal.isString() || !AssignJSString(cx, str, aVal.toString())) {
+  nsAutoJSString str;
+  if (!str.init(aVal)) {
     return;
   }
 
@@ -425,28 +440,29 @@ GeolocationSetting::HandleApproxDistanceChange(const JS::Value& aVal)
 void
 GeolocationSetting::HandleFixedCoordsChange(const JS::Value& aVal)
 {
-  AutoJSAPI jsapi;
-  jsapi.Init();
-  JSContext* cx = jsapi.cx();
-  nsString str;
-  if (!aVal.isString() || !AssignJSString(cx, str, aVal.toString()) || str.IsEmpty()) {
-    return;
+  nsAutoJSString str;
+  if (!str.init(aVal)) {
+      return;
   }
 
   // parse the string and store the global lat/lon
-  // the @ character is present in the GPS coord strings we receive
+  // the string is in the form of @1.2345,6.7890
+  // check for leading '@' and a comma in the middle
   int32_t const comma = str.Find(",");
   if ( (str.CharAt(0) != '@') || (comma == -1) ) {
     return;
   }
 
+  // pull the lat and lon out of the string and convert to doubles
   nsresult rv;
-  nsString slat(Substring(str, 1, comma));
+  nsString slat(Substring(str, 1, comma - 1));
   nsString slon(Substring(str, comma + 1));
   double lat = slat.ToDouble(&rv);
   NS_ENSURE_SUCCESS(rv,);
   double lon = slon.ToDouble(&rv);
   NS_ENSURE_SUCCESS(rv,);
+
+  // store the values
   mLatitude = lat;
   mLongitude = lon;
 

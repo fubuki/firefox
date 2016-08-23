@@ -32,12 +32,8 @@ public:
   virtual bool NativelyUnavailable() const;
 
 protected:
-
-  // Accessible
-  virtual void CacheChildren();
-
   void* mHwnd;
-  nsRefPtr<Accessible> mNativeAccessible;
+  RefPtr<Accessible> mNativeAccessible;
 };
 
 /**
@@ -55,7 +51,7 @@ public:
   HTMLWin32ObjectAccessible(void* aHwnd, DocAccessible* aDoc);
   virtual ~HTMLWin32ObjectAccessible() {}
 
-  virtual void GetNativeInterface(void** aNativeAccessible) MOZ_OVERRIDE;
+  virtual void GetNativeInterface(void** aNativeAccessible) override;
 
 protected:
   void* mHwnd;

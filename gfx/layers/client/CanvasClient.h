@@ -7,29 +7,30 @@
 #define MOZILLA_GFX_CANVASCLIENT_H
 
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
-#include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
-#include "mozilla/RefPtr.h"             // for RefPtr, TemporaryRef
+#include "mozilla/Attributes.h"         // for override
+#include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed
 #include "mozilla/layers/CompositableClient.h"  // for CompositableClient
 #include "mozilla/layers/CompositorTypes.h"  // for TextureInfo, etc
 #include "mozilla/layers/LayersSurfaces.h"  // for SurfaceDescriptor
 #include "mozilla/layers/TextureClient.h"  // for TextureClient, etc
+
+// Fix X11 header brain damage that conflicts with MaybeOneOf::None
+#undef None
+#include "mozilla/MaybeOneOf.h"
+
 #include "mozilla/mozalloc.h"           // for operator delete
 
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat
 
 namespace mozilla {
-namespace gl {
-class SharedSurface;
-class ShSurfHandle;
-}
-}
-
-namespace mozilla {
 namespace layers {
 
+class AsyncCanvasRenderer;
 class ClientCanvasLayer;
 class CompositableForwarder;
+class ShadowableLayer;
+class SharedSurfaceTextureClient;
 
 /**
  * Compositable client for 2d and webgl canvas.
@@ -37,6 +38,8 @@ class CompositableForwarder;
 class CanvasClient : public CompositableClient
 {
 public:
+  typedef MaybeOneOf<ClientCanvasLayer*, AsyncCanvasRenderer*> Renderer;
+
   /**
    * Creates, configures, and returns a new canvas client. If necessary, a
    * message will be sent to the compositor to create a corresponding image
@@ -46,13 +49,15 @@ public:
     CanvasClientSurface,
     CanvasClientGLContext,
     CanvasClientTypeShSurf,
+    CanvasClientAsync, // webgl on workers
   };
-  static TemporaryRef<CanvasClient> CreateCanvasClient(CanvasClientType aType,
+  static already_AddRefed<CanvasClient> CreateCanvasClient(CanvasClientType aType,
                                                        CompositableForwarder* aFwd,
                                                        TextureFlags aFlags);
 
   CanvasClient(CompositableForwarder* aFwd, TextureFlags aFlags)
     : CompositableClient(aFwd, aFlags)
+    , mFrameID(0)
   {
     mTextureFlags = aFlags;
   }
@@ -63,7 +68,18 @@ public:
 
   virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) = 0;
 
+  virtual bool AddTextureClient(TextureClient* aTexture) override
+  {
+    ++mFrameID;
+    return CompositableClient::AddTextureClient(aTexture);
+  }
+
+  virtual void UpdateAsync(AsyncCanvasRenderer* aRenderer) {}
+
   virtual void Updated() { }
+
+protected:
+  int32_t mFrameID;
 };
 
 // Used for 2D canvases and WebGL canvas on non-GL systems where readback is requried.
@@ -76,37 +92,38 @@ public:
   {
   }
 
-  TextureInfo GetTextureInfo() const MOZ_OVERRIDE
+  TextureInfo GetTextureInfo() const override
   {
     return TextureInfo(CompositableType::IMAGE, mTextureFlags);
   }
 
-  virtual void Clear() MOZ_OVERRIDE
+  virtual void Clear() override
   {
-    mBuffer = nullptr;
+    mBackBuffer = mFrontBuffer = nullptr;
   }
 
-  virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) MOZ_OVERRIDE;
+  virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) override;
 
-  virtual bool AddTextureClient(TextureClient* aTexture) MOZ_OVERRIDE
+  virtual bool AddTextureClient(TextureClient* aTexture) override
   {
     MOZ_ASSERT((mTextureFlags & aTexture->GetFlags()) == mTextureFlags);
-    return CompositableClient::AddTextureClient(aTexture);
+    return CanvasClient::AddTextureClient(aTexture);
   }
 
-  virtual void OnDetach() MOZ_OVERRIDE
+  virtual void OnDetach() override
   {
-    mBuffer = nullptr;
+    mBackBuffer = mFrontBuffer = nullptr;
   }
 
 private:
-  TemporaryRef<TextureClient>
+  already_AddRefed<TextureClient>
     CreateTextureClientForCanvas(gfx::SurfaceFormat aFormat,
                                  gfx::IntSize aSize,
                                  TextureFlags aFlags,
                                  ClientCanvasLayer* aLayer);
 
-  RefPtr<TextureClient> mBuffer;
+  RefPtr<TextureClient> mBackBuffer;
+  RefPtr<TextureClient> mFrontBuffer;
 };
 
 // Used for GL canvases where we don't need to do any readback, i.e., with a
@@ -114,10 +131,10 @@ private:
 class CanvasClientSharedSurface : public CanvasClient
 {
 private:
-  RefPtr<gl::ShSurfHandle> mFront;
-  RefPtr<gl::ShSurfHandle> mPrevFront;
-
-  RefPtr<TextureClient> mFrontTex;
+  RefPtr<SharedSurfaceTextureClient> mShSurfClient;
+  RefPtr<TextureClient> mReadbackClient;
+  RefPtr<TextureClient> mFront;
+  RefPtr<TextureClient> mNewFront;
 
   void ClearSurfaces();
 
@@ -125,28 +142,67 @@ public:
   CanvasClientSharedSurface(CompositableForwarder* aLayerForwarder,
                             TextureFlags aFlags);
 
-  ~CanvasClientSharedSurface()
-  {
-    ClearSurfaces();
-  }
+  ~CanvasClientSharedSurface();
 
-  virtual TextureInfo GetTextureInfo() const MOZ_OVERRIDE {
+  virtual TextureInfo GetTextureInfo() const override {
     return TextureInfo(CompositableType::IMAGE);
   }
 
-  virtual void Clear() MOZ_OVERRIDE {
+  virtual void Clear() override {
     ClearSurfaces();
   }
 
   virtual void Update(gfx::IntSize aSize,
-                      ClientCanvasLayer* aLayer) MOZ_OVERRIDE;
+                      ClientCanvasLayer* aLayer) override;
+  void UpdateRenderer(gfx::IntSize aSize, Renderer& aRenderer);
 
-  virtual void OnDetach() MOZ_OVERRIDE {
+  virtual void UpdateAsync(AsyncCanvasRenderer* aRenderer) override;
+
+  virtual void Updated() override;
+
+  virtual void OnDetach() override {
     ClearSurfaces();
   }
 };
 
-}
-}
+/**
+ * Used for OMT<canvas> uploads using the image bridge protocol.
+ * Actual CanvasClient is on the ImageBridgeChild thread, so we
+ * only forward its AsyncID here
+ */
+class CanvasClientBridge final : public CanvasClient
+{
+public:
+  CanvasClientBridge(CompositableForwarder* aLayerForwarder,
+                     TextureFlags aFlags)
+    : CanvasClient(aLayerForwarder, aFlags)
+    , mAsyncID(0)
+    , mLayer(nullptr)
+  {
+  }
+
+  TextureInfo GetTextureInfo() const override
+  {
+    return TextureInfo(CompositableType::IMAGE);
+  }
+
+  virtual void Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer) override
+  {
+  }
+
+  virtual void UpdateAsync(AsyncCanvasRenderer* aRenderer) override;
+
+  void SetLayer(ShadowableLayer* aLayer)
+  {
+    mLayer = aLayer;
+  }
+
+protected:
+  uint64_t mAsyncID;
+  ShadowableLayer* mLayer;
+};
+
+} // namespace layers
+} // namespace mozilla
 
 #endif

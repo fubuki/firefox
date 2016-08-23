@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=8 et :
- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,9 +12,9 @@
 #include "mozilla/hal_sandbox/PHalParent.h"
 #include "nsIAppsService.h"
 #include "nsIPrincipal.h"
-#include "nsIScriptSecurityManager.h"
 #include "nsPrintfCString.h"
 #include "nsIURI.h"
+#include "nsContentUtils.h"
 #include "nsNetUtil.h"
 #include "nsServiceManagerUtils.h"
 #include "TabParent.h"
@@ -29,13 +28,19 @@ using namespace mozilla::services;
 namespace mozilla {
 namespace dom {
 class PContentParent;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 class nsIPrincipal;
 #endif
 
 namespace mozilla {
+
+#if DEBUG
+  #define LOG(...) printf_stderr(__VA_ARGS__)
+#else
+  #define LOG(...)
+#endif
 
 #ifdef MOZ_CHILD_PERMISSIONS
 
@@ -83,10 +88,10 @@ AssertAppProcess(PBrowserParent* aActor,
     return false;
   }
 
-  TabParent* tab = static_cast<TabParent*>(aActor);
+  TabParent* tab = TabParent::GetFrom(aActor);
   nsCOMPtr<mozIApplication> app = tab->GetOwnOrContainingApp();
 
-  return CheckAppTypeHelper(app, aType, aCapability, tab->IsBrowserElement());
+  return CheckAppTypeHelper(app, aType, aCapability, tab->IsMozBrowserElement());
 }
 
 static bool
@@ -114,10 +119,35 @@ AssertAppStatus(PBrowserParent* aActor,
     return false;
   }
 
-  TabParent* tab = static_cast<TabParent*>(aActor);
+  TabParent* tab = TabParent::GetFrom(aActor);
   nsCOMPtr<mozIApplication> app = tab->GetOwnOrContainingApp();
 
   return CheckAppStatusHelper(app, aStatus);
+}
+
+// A general purpose helper function to check permission against the origin
+// rather than mozIApplication.
+static bool
+CheckOriginPermission(const nsACString& aOrigin, const char* aPermission)
+{
+  LOG("CheckOriginPermission: %s, %s\n", nsCString(aOrigin).get(), aPermission);
+
+  nsIScriptSecurityManager *securityManager =
+    nsContentUtils::GetSecurityManager();
+
+  nsCOMPtr<nsIPrincipal> principal;
+  securityManager->CreateCodebasePrincipalFromOrigin(aOrigin,
+                                                     getter_AddRefs(principal));
+
+  nsCOMPtr<nsIPermissionManager> permMgr = services::GetPermissionManager();
+  NS_ENSURE_TRUE(permMgr, false);
+
+  uint32_t perm;
+  nsresult rv = permMgr->TestExactPermissionFromPrincipal(principal, aPermission, &perm);
+  NS_ENSURE_SUCCESS(rv, false);
+
+  LOG("Permission %s for %s: %d\n", aPermission, nsCString(aOrigin).get(), perm);
+  return nsIPermissionManager::ALLOW_ACTION == perm;
 }
 
 bool
@@ -125,9 +155,25 @@ AssertAppProcess(TabContext& aContext,
                  AssertAppProcessType aType,
                  const char* aCapability)
 {
+  const mozilla::DocShellOriginAttributes& attr = aContext.OriginAttributesRef();
+  nsCString suffix;
+  attr.CreateSuffix(suffix);
+
+  if (!aContext.SignedPkgOriginNoSuffix().IsEmpty()) {
+    LOG("TabContext owning signed package origin: %s, originAttr; %s\n",
+        nsCString(aContext.SignedPkgOriginNoSuffix()).get(),
+        suffix.get());
+  }
+
+  // Do a origin-based permission check if the TabContext owns a signed package.
+  if (!aContext.SignedPkgOriginNoSuffix().IsEmpty() &&
+      (ASSERT_APP_HAS_PERMISSION == aType || ASSERT_APP_PROCESS_PERMISSION == aType)) {
+    nsCString origin = aContext.SignedPkgOriginNoSuffix() + suffix;
+    return CheckOriginPermission(origin, aCapability);
+  }
 
   nsCOMPtr<mozIApplication> app = aContext.GetOwnOrContainingApp();
-  return CheckAppTypeHelper(app, aType, aCapability, aContext.IsBrowserElement());
+  return CheckAppTypeHelper(app, aType, aCapability, aContext.IsMozBrowserElement());
 }
 
 bool
@@ -157,7 +203,7 @@ AssertAppProcess(PContentParent* aActor,
       "Security problem: Content process does not have `%s'.  It will be killed.\n",
       aCapability).get());
 
-  static_cast<ContentParent*>(aActor)->KillHard();
+  static_cast<ContentParent*>(aActor)->KillHard("AssertAppProcess");
 
   return false;
 }
@@ -179,7 +225,7 @@ AssertAppStatus(PContentParent* aActor,
       "Security problem: Content process does not have `%d' status.  It will be killed.",
       aStatus).get());
 
-  static_cast<ContentParent*>(aActor)->KillHard();
+  static_cast<ContentParent*>(aActor)->KillHard("AssertAppStatus");
 
   return false;
 }
@@ -198,21 +244,21 @@ AssertAppPrincipal(PContentParent* aActor,
 {
   if (!aPrincipal) {
     NS_WARNING("Principal is invalid, killing app process");
-    static_cast<ContentParent*>(aActor)->KillHard();
+    static_cast<ContentParent*>(aActor)->KillHard("AssertAppPrincipal");
     return false;
   }
 
   uint32_t principalAppId = aPrincipal->GetAppId();
-  bool inBrowserElement = aPrincipal->GetIsInBrowserElement();
+  bool inIsolatedBrowser = aPrincipal->GetIsInIsolatedMozBrowserElement();
 
   // Check if the permission's appId matches a child we manage.
   nsTArray<TabContext> contextArray =
     static_cast<ContentParent*>(aActor)->GetManagedTabContext();
   for (uint32_t i = 0; i < contextArray.Length(); ++i) {
     if (contextArray[i].OwnOrContainingAppId() == principalAppId) {
-      // If the child only runs inBrowserElement content and the principal claims
-      // it's not in a browser element, it's lying.
-      if (!contextArray[i].IsBrowserElement() || inBrowserElement) {
+      // If the child only runs isolated browser content and the principal
+      // claims it's not in an isolated browser element, it's lying.
+      if (!contextArray[i].IsIsolatedMozBrowserElement() || inIsolatedBrowser) {
         return true;
       }
       break;
@@ -220,7 +266,7 @@ AssertAppPrincipal(PContentParent* aActor,
   }
 
   NS_WARNING("Principal is invalid, killing app process");
-  static_cast<ContentParent*>(aActor)->KillHard();
+  static_cast<ContentParent*>(aActor)->KillHard("AssertAppPrincipal");
   return false;
 }
 
@@ -233,21 +279,10 @@ GetAppPrincipal(uint32_t aAppId)
   nsresult rv = appsService->GetAppByLocalId(aAppId, getter_AddRefs(app));
   NS_ENSURE_SUCCESS(rv, nullptr);
 
-  nsString origin;
-  rv = app->GetOrigin(origin);
-  NS_ENSURE_SUCCESS(rv, nullptr);
+  nsCOMPtr<nsIPrincipal> principal;
+  app->GetPrincipal(getter_AddRefs(principal));
 
-  nsCOMPtr<nsIURI> uri;
-  NS_NewURI(getter_AddRefs(uri), origin);
-
-  nsCOMPtr<nsIScriptSecurityManager> secMan =
-    do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID);
-
-  nsCOMPtr<nsIPrincipal> appPrincipal;
-  rv = secMan->GetAppCodebasePrincipal(uri, aAppId, false,
-                                       getter_AddRefs(appPrincipal));
-  NS_ENSURE_SUCCESS(rv, nullptr);
-  return appPrincipal.forget();
+  return principal.forget();
 }
 
 uint32_t
@@ -284,8 +319,17 @@ CheckPermission(PContentParent* aActor,
 
   // For browser content (and if the app hasn't explicitly denied this),
   // consider the requesting origin, not the app.
+  // After bug 1238160, the principal no longer knows how to answer "is this a
+  // browser element", which is really what this code path wants. Currently,
+  // desktop is the only platform where we intend to disable isolation on a
+  // browser frame, so non-desktop should be able to assume that
+  // inIsolatedMozBrowser is true for all mozbrowser frames.  This code path is
+  // currently unused on desktop, since MOZ_CHILD_PERMISSIONS is only set for
+  // MOZ_B2G.  We use a release assertion in
+  // nsFrameLoader::OwnerIsIsolatedMozBrowserFrame so that platforms with apps
+  // can assume inIsolatedMozBrowser is true for all mozbrowser frames.
   if (appPerm == nsIPermissionManager::PROMPT_ACTION &&
-      aPrincipal->GetIsInBrowserElement()) {
+      aPrincipal->GetIsInIsolatedMozBrowserElement()) {
     return permission;
   }
 

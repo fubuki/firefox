@@ -25,10 +25,13 @@ assertIteratorResult(it.next.call(g.it4), 5, false)
 // StarGenerator.throw
 assertThrowsValue(() => it.throw.call(g.it4, 8), 8);
 
+// StarGenerator.return
+assertIteratorResult(it.return.call(g.it4, 8), 8, true);
+
 // Other objects should throw.
 try {
     it.next.call([]);
     assertEq(0, 1);
 } catch (e) {
-    assertEq(e.toString().contains("called on incompatible Array"), true);
+    assertEq(e.toString().includes("called on incompatible Array"), true);
 }

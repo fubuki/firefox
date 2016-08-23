@@ -7,18 +7,28 @@
 
 "use strict";
 
+var global = this;
+
 var Ci = Components.interfaces;
 var Cc = Components.classes;
 var Cu = Components.utils;
 
-Cu.import("resource://specialpowers/MockFilePicker.jsm");
-Cu.import("resource://specialpowers/MockColorPicker.jsm");
-Cu.import("resource://specialpowers/MockPermissionPrompt.jsm");
+Cu.import("chrome://specialpowers/content/MockFilePicker.jsm");
+Cu.import("chrome://specialpowers/content/MockColorPicker.jsm");
+Cu.import("chrome://specialpowers/content/MockPermissionPrompt.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");
 
-Cu.importGlobalProperties(["File"]);
+// We're loaded with "this" not set to the global in some cases, so we
+// have to play some games to get at the global object here.  Normally
+// we'd try "this" from a function called with undefined this value,
+// but this whole file is in strict mode.  So instead fall back on
+// returning "this" from indirect eval, which returns the global.
+if (!(function() { var e = eval; return e("this"); })().File) {
+    Cu.importGlobalProperties(["File"]);
+}
 
 // Allow stuff from this scope to be accessed from non-privileged scopes. This
 // would crash if used outside of automation.
@@ -36,9 +46,9 @@ function SpecialPowersAPI() {
   this._permissionsUndoStack = [];
   this._pendingPermissions = [];
   this._applyingPermissions = false;
+  this._observingPermissions = false;
   this._fm = null;
   this._cb = null;
-  this._quotaManagerCallbackInfos = null;
 }
 
 function bindDOMWindowUtils(aWindow) {
@@ -118,23 +128,6 @@ function waiveXraysIfAppropriate(obj, propName) {
   return obj;
 }
 
-function callGetOwnPropertyDescriptor(obj, name) {
-  obj = waiveXraysIfAppropriate(obj, name);
-
-  // Quickstubbed getters and setters are propertyOps, and don't get reified
-  // until someone calls __lookupGetter__ or __lookupSetter__ on them (note
-  // that there are special version of those functions for quickstubs, so
-  // apply()ing Object.prototype.__lookupGetter__ isn't good enough). Try to
-  // trigger reification before calling Object.getOwnPropertyDescriptor.
-  //
-  // See bug 764315.
-  try {
-    obj.__lookupGetter__(name);
-    obj.__lookupSetter__(name);
-  } catch(e) { }
-  return Object.getOwnPropertyDescriptor(obj, name);
-}
-
 // We can't call apply() directy on Xray-wrapped functions, so we have to be
 // clever.
 function doApply(fun, invocant, args) {
@@ -150,7 +143,7 @@ function doApply(fun, invocant, args) {
   // like {l : xoWin.location} won't work. Hopefully the rabbit hole doesn't
   // go that deep.
   args = args.map(x => isObjectOrArray(x) ? Cu.waiveXrays(x) : x);
-  return Function.prototype.apply.call(fun, invocant, args);
+  return Reflect.apply(fun, invocant, args);
 }
 
 function wrapPrivileged(obj) {
@@ -163,41 +156,13 @@ function wrapPrivileged(obj) {
   if (isWrapper(obj))
     throw "Trying to double-wrap object!";
 
-  // Make our core wrapper object.
-  var handler = new SpecialPowersHandler(obj);
+  let dummy;
+  if (typeof obj === "function")
+    dummy = function() {};
+  else
+    dummy = Object.create(null);
 
-  // If the object is callable, make a function proxy.
-  if (typeof obj === "function") {
-    var callTrap = function() {
-      // The invocant and arguments may or may not be wrappers. Unwrap them if necessary.
-      var invocant = unwrapIfWrapped(this);
-      var unwrappedArgs = Array.prototype.slice.call(arguments).map(unwrapIfWrapped);
-
-      try {
-        return wrapPrivileged(doApply(obj, invocant, unwrappedArgs));
-      } catch (e) {
-        // Wrap exceptions and re-throw them.
-        throw wrapIfUnwrapped(e);
-      }
-    };
-    var constructTrap = function() {
-      // The arguments may or may not be wrappers. Unwrap them if necessary.
-      var unwrappedArgs = Array.prototype.slice.call(arguments).map(unwrapIfWrapped);
-
-      // We want to invoke "obj" as a constructor, but using unwrappedArgs as
-      // the arguments.  Make sure to wrap and re-throw exceptions!
-      try {
-        return wrapPrivileged(new obj(...unwrappedArgs));
-      } catch (e) {
-        throw wrapIfUnwrapped(e);
-      }
-    };
-
-    return Proxy.createFunction(handler, callTrap, constructTrap);
-  }
-
-  // Otherwise, just make a regular object proxy.
-  return Proxy.create(handler);
+  return new Proxy(dummy, new SpecialPowersHandler(obj));
 };
 
 function unwrapPrivileged(x) {
@@ -213,182 +178,128 @@ function unwrapPrivileged(x) {
   if (!isWrapper(x))
     throw "Trying to unwrap a non-wrapped object!";
 
-  // Unwrap.
-  return x.SpecialPowers_wrappedObject;
+  var obj = x.SpecialPowers_wrappedObject;
+  // unwrapped.
+  return obj;
 };
 
-function crawlProtoChain(obj, fn) {
-  var rv = fn(obj);
-  if (rv !== undefined)
-    return rv;
-  // Follow the prototype chain of the underlying object in cases where it differs
-  // from the Xray prototype chain. This is important for things like Opaque Xray
-  // Wrappers, which always get Object.prototype as their proto.
-  let proto = Cu.unwaiveXrays(Object.getPrototypeOf(Cu.waiveXrays(obj)));
-  if (proto)
-    return crawlProtoChain(proto, fn);
-  return undefined;
-};
-
-function SpecialPowersHandler(obj) {
-  this.wrappedObject = obj;
-};
-
-// Allow us to transitively maintain the membrane by wrapping descriptors
-// we return.
-SpecialPowersHandler.prototype.doGetPropertyDescriptor = function(name, own) {
-
-  // Handle our special API.
-  if (name == "SpecialPowers_wrappedObject")
-    return { value: this.wrappedObject, writeable: false, configurable: false, enumerable: false };
-
-  //
-  // Call through to the wrapped object.
-  //
-  // Note that we have several cases here, each of which requires special handling.
-  //
-  var desc;
-  var obj = this.wrappedObject;
-  function isWrappedNativeXray(o) {
-    if (!Cu.isXrayWrapper(o))
-      return false;
-    var proto = Object.getPrototypeOf(o);
-    return /XPC_WN/.test(Cu.getClassName(o, /* unwrap = */ true)) ||
-           (proto && /XPC_WN/.test(Cu.getClassName(proto, /* unwrap = */ true)));
-  }
-
-  // Case 1: Own Properties.
-  //
-  // This one is easy, thanks to Object.getOwnPropertyDescriptor().
-  if (own)
-    desc = callGetOwnPropertyDescriptor(obj, name);
-
-  // Case 2: Not own, meaningful prototype.
-  //
-  // Here, we can just crawl the prototype chain, calling
-  // Object.getOwnPropertyDescriptor until we find what we want.
-  //
-  // NB: Make sure to check this.wrappedObject here, rather than obj, because
-  // we may have waived Xray on obj above.
-  else if (!isWrappedNativeXray(this.wrappedObject))
-    desc = crawlProtoChain(obj, function(o) {return callGetOwnPropertyDescriptor(o, name);});
-
-  // Case 3: Not own, no meaningful prototype. This corresponds to old-style
-  // XPCWrappedNative XrayWrappers.
-  //
-  // This one is harder, because we these XrayWrappers are flattened and don't have
-  // a prototype.
-  //
-  // So we first try with a call to getOwnPropertyDescriptor(). If that fails,
-  // we make up a descriptor, using some assumptions about what kinds of things
-  // tend to live on the prototypes of Xray-wrapped objects.
-  else {
-    obj = waiveXraysIfAppropriate(obj, name);
-    desc = Object.getOwnPropertyDescriptor(obj, name);
-    if (!desc) {
-      var getter = Object.prototype.__lookupGetter__.call(obj, name);
-      var setter = Object.prototype.__lookupSetter__.call(obj, name);
-      if (getter || setter)
-        desc = {get: getter, set: setter, configurable: true, enumerable: true};
-      else if (name in obj)
-        desc = {value: obj[name], writable: false, configurable: true, enumerable: true};
-    }
-  }
-
-  // Bail if we've got nothing.
-  if (typeof desc === 'undefined')
-    return undefined;
-
-  // When accessors are implemented as JSPropertyOps rather than JSNatives (ie,
-  // QuickStubs), the js engine does the wrong thing and treats it as a value
-  // descriptor rather than an accessor descriptor. Jorendorff suggested this
-  // little hack to work around it. See bug 520882.
-  if (desc && 'value' in desc && desc.value === undefined)
-    desc.value = obj[name];
-
-  // A trapping proxy's properties must always be configurable, but sometimes
-  // this we get non-configurable properties from Object.getOwnPropertyDescriptor().
-  // Tell a white lie.
-  desc.configurable = true;
-
-  // Transitively maintain the wrapper membrane.
-  function wrapIfExists(key) { if (key in desc) desc[key] = wrapPrivileged(desc[key]); };
-  wrapIfExists('value');
-  wrapIfExists('get');
-  wrapIfExists('set');
-
-  return desc;
-};
-
-SpecialPowersHandler.prototype.getOwnPropertyDescriptor = function(name) {
-  return this.doGetPropertyDescriptor(name, true);
-};
-
-SpecialPowersHandler.prototype.getPropertyDescriptor = function(name) {
-  return this.doGetPropertyDescriptor(name, false);
-};
-
-function doGetOwnPropertyNames(obj, props) {
-
-  // Insert our special API. It's not enumerable, but getPropertyNames()
-  // includes non-enumerable properties.
-  var specialAPI = 'SpecialPowers_wrappedObject';
-  if (props.indexOf(specialAPI) == -1)
-    props.push(specialAPI);
-
-  // Do the normal thing.
-  var flt = function(a) { return props.indexOf(a) == -1; };
-  props = props.concat(Object.getOwnPropertyNames(obj).filter(flt));
-
-  // If we've got an Xray wrapper, include the expandos as well.
-  if ('wrappedJSObject' in obj)
-    props = props.concat(Object.getOwnPropertyNames(obj.wrappedJSObject)
-                         .filter(flt));
-
-  return props;
+function SpecialPowersHandler(wrappedObject) {
+  this.wrappedObject = wrappedObject;
 }
 
-SpecialPowersHandler.prototype.getOwnPropertyNames = function() {
-  return doGetOwnPropertyNames(this.wrappedObject, []);
-};
+SpecialPowersHandler.prototype = {
+  construct(target, args) {
+    // The arguments may or may not be wrappers. Unwrap them if necessary.
+    var unwrappedArgs = Array.prototype.slice.call(args).map(unwrapIfWrapped);
 
-SpecialPowersHandler.prototype.getPropertyNames = function() {
+    // We want to invoke "obj" as a constructor, but using unwrappedArgs as
+    // the arguments.  Make sure to wrap and re-throw exceptions!
+    try {
+      return wrapIfUnwrapped(Reflect.construct(this.wrappedObject, unwrappedArgs));
+    } catch (e) {
+      throw wrapIfUnwrapped(e);
+    }
+  },
 
-  // Manually walk the prototype chain, making sure to add only property names
-  // that haven't been overridden.
-  //
-  // There's some trickiness here with Xray wrappers. Xray wrappers don't have
-  // a prototype, so we need to unwrap them if we want to get all of the names
-  // with Object.getOwnPropertyNames(). But we don't really want to unwrap the
-  // base object, because that will include expandos that are inaccessible via
-  // our implementation of get{,Own}PropertyDescriptor(). So we unwrap just
-  // before accessing the prototype. This ensures that we get Xray vision on
-  // the base object, and no Xray vision for the rest of the way up.
-  var obj = this.wrappedObject;
-  var props = [];
-  while (obj) {
-    props = doGetOwnPropertyNames(obj, props);
-    obj = Object.getPrototypeOf(XPCNativeWrapper.unwrap(obj));
+  apply(target, thisValue, args) {
+    // The invocant and arguments may or may not be wrappers. Unwrap
+    // them if necessary.
+    var invocant = unwrapIfWrapped(thisValue);
+    var unwrappedArgs = Array.prototype.slice.call(args).map(unwrapIfWrapped);
+
+    try {
+      return wrapIfUnwrapped(doApply(this.wrappedObject, invocant, unwrappedArgs));
+    } catch (e) {
+      // Wrap exceptions and re-throw them.
+      throw wrapIfUnwrapped(e);
+    }
+  },
+
+  has(target, prop) {
+    if (prop === "SpecialPowers_wrappedObject")
+      return true;
+
+    return Reflect.has(this.wrappedObject, prop);
+  },
+
+  get(target, prop, receiver) {
+    if (prop === "SpecialPowers_wrappedObject")
+      return this.wrappedObject;
+
+    let obj = waiveXraysIfAppropriate(this.wrappedObject, prop);
+    return wrapIfUnwrapped(Reflect.get(obj, prop));
+  },
+
+  set(target, prop, val, receiver) {
+    if (prop === "SpecialPowers_wrappedObject")
+      return false;
+
+    let obj = waiveXraysIfAppropriate(this.wrappedObject, prop);
+    return Reflect.set(obj, prop, unwrapIfWrapped(val));
+  },
+
+  delete(target, prop) {
+    if (prop === "SpecialPowers_wrappedObject")
+      return false;
+
+    return Reflect.deleteProperty(this.wrappedObject, prop);
+  },
+
+  defineProperty(target, prop, descriptor) {
+    throw "Can't call defineProperty on SpecialPowers wrapped object";
+  },
+
+  getOwnPropertyDescriptor(target, prop) {
+    // Handle our special API.
+    if (prop === "SpecialPowers_wrappedObject") {
+      return { value: this.wrappedObject, writeable: true,
+               configurable: true, enumerable: false };
+    }
+
+    let obj = waiveXraysIfAppropriate(this.wrappedObject, prop);
+    let desc = Reflect.getOwnPropertyDescriptor(obj, prop);
+
+    if (desc === undefined)
+      return undefined;
+
+    // Transitively maintain the wrapper membrane.
+    function wrapIfExists(key) {
+      if (key in desc)
+        desc[key] = wrapIfUnwrapped(desc[key]);
+    };
+
+    wrapIfExists('value');
+    wrapIfExists('get');
+    wrapIfExists('set');
+
+    // A trapping proxy's properties must always be configurable, but sometimes
+    // we come across non-configurable properties. Tell a white lie.
+    desc.configurable = true;
+
+    return desc;
+  },
+
+  ownKeys(target) {
+    // Insert our special API. It's not enumerable, but ownKeys()
+    // includes non-enumerable properties.
+    let props = ['SpecialPowers_wrappedObject'];
+
+    // Do the normal thing.
+    let flt = (a) => !props.includes(a);
+    props = props.concat(Reflect.ownKeys(this.wrappedObject).filter(flt));
+
+    // If we've got an Xray wrapper, include the expandos as well.
+    if ('wrappedJSObject' in this.wrappedObject) {
+      props = props.concat(Reflect.ownKeys(this.wrappedObject.wrappedJSObject)
+                           .filter(flt));
+    }
+
+    return props;
+  },
+
+  preventExtensions(target) {
+    throw "Can't call preventExtensions on SpecialPowers wrapped object";
   }
-  return props;
-};
-
-SpecialPowersHandler.prototype.defineProperty = function(name, desc) {
-  return Object.defineProperty(this.wrappedObject, name, desc);
-};
-
-SpecialPowersHandler.prototype.delete = function(name) {
-  return delete this.wrappedObject[name];
-};
-
-SpecialPowersHandler.prototype.fix = function() { return undefined; /* Throws a TypeError. */ };
-
-// Per the ES5 spec this is a derived trap, but it's fundamental in spidermonkey
-// for some reason. See bug 665198.
-SpecialPowersHandler.prototype.enumerate = function() {
-  var t = this;
-  var filt = function(name) { return t.getPropertyDescriptor(name).enumerable; };
-  return this.getPropertyNames().filter(filt);
 };
 
 // SPConsoleListener reflects nsIConsoleMessage objects into JS in a
@@ -457,6 +368,14 @@ function wrapCallbackObject(obj) {
   return wrapper;
 }
 
+function setWrapped(obj, prop, val) {
+  if (!isWrapper(obj))
+    throw "You only need to use this for SpecialPowers wrapped objects";
+
+  obj = unwrapPrivileged(obj);
+  return Reflect.set(obj, prop, val);
+}
+
 SpecialPowersAPI.prototype = {
 
   /*
@@ -502,6 +421,12 @@ SpecialPowersAPI.prototype = {
   wrapCallbackObject: wrapCallbackObject,
 
   /*
+   * Used for assigning a property to a SpecialPowers wrapper, without unwrapping
+   * the value that is assigned.
+   */
+  setWrapped: setWrapped,
+
+  /*
    * Create blank privileged objects to use as out-params for privileged functions.
    */
   createBlankObject: function () {
@@ -520,26 +445,55 @@ SpecialPowersAPI.prototype = {
   },
 
   get MockFilePicker() {
-    return MockFilePicker
+    return MockFilePicker;
   },
 
   get MockColorPicker() {
-    return MockColorPicker
+    return MockColorPicker;
   },
 
   get MockPermissionPrompt() {
-    return MockPermissionPrompt
+    return MockPermissionPrompt;
   },
 
-  loadChromeScript: function (url) {
+  /*
+   * Load a privileged script that runs same-process. This is different from
+   * |loadChromeScript|, which will run in the parent process in e10s mode.
+   */
+  loadPrivilegedScript: function (aFunction) {
+    var str = "(" + aFunction.toString() + ")();";
+    var systemPrincipal = Services.scriptSecurityManager.getSystemPrincipal();
+    var sb = Cu.Sandbox(systemPrincipal);
+    var window = this.window.get();
+    var mc = new window.MessageChannel();
+    sb.port = mc.port1;
+    try {
+      sb.eval(str);
+    } catch (e) {
+      throw wrapIfUnwrapped(e);
+    }
+
+    return mc.port2;
+  },
+
+  loadChromeScript: function (urlOrFunction) {
     // Create a unique id for this chrome script
     let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"]
                           .getService(Ci.nsIUUIDGenerator);
     let id = uuidGenerator.generateUUID().toString();
 
     // Tells chrome code to evaluate this chrome script
+    let scriptArgs = { id };
+    if (typeof(urlOrFunction) == "function") {
+      scriptArgs.function = {
+        body: "(" + urlOrFunction.toString() + ")();",
+        name: urlOrFunction.name,
+      };
+    } else {
+      scriptArgs.url = urlOrFunction;
+    }
     this._sendSyncMessage("SPLoadChromeScript",
-                          { url: url, id: id });
+                          scriptArgs);
 
     // Returns a MessageManager like API in order to be
     // able to communicate with this chrome script
@@ -560,6 +514,11 @@ SpecialPowersAPI.prototype = {
                               { id: id, name: name, message: message });
       },
 
+      sendSyncMessage: (name, message) => {
+        return this._sendSyncMessage("SPChromeScriptMessage",
+                                     { id, name, message });
+      },
+
       destroy: () => {
         listeners = [];
         this._removeMessageListener("SPChromeScriptMessage", chromeScript);
@@ -576,7 +535,7 @@ SpecialPowersAPI.prototype = {
 
         if (aMessage.name == "SPChromeScriptMessage") {
           listeners.filter(o => (o.name == name))
-                   .forEach(o => o.listener(this.wrap(message)));
+                   .forEach(o => o.listener(message));
         } else if (aMessage.name == "SPChromeScriptAssert") {
           assert(aMessage.json);
         }
@@ -587,13 +546,13 @@ SpecialPowersAPI.prototype = {
 
     let assert = json => {
       // An assertion has been done in a mochitest chrome script
-      let {url, err, message, stack} = json;
+      let {name, err, message, stack} = json;
 
       // Try to fetch a test runner from the mochitest
       // in order to properly log these assertions and notify
       // all usefull log observers
       let window = this.window.get();
-      let parentRunner, repr = function (o) o;
+      let parentRunner, repr = o => o;
       if (window) {
         window = window.wrappedJSObject;
         parentRunner = window.TestRunner;
@@ -613,10 +572,10 @@ SpecialPowersAPI.prototype = {
           ", expected " + repr(err.expected) +
           " (operator " + err.operator + ")";
       }
-      var msg = [resultString, url, diagnostic].join(" | ");
+      var msg = [resultString, name, diagnostic].join(" | ");
       if (parentRunner) {
         if (err) {
-          parentRunner.addFailedTest(url);
+          parentRunner.addFailedTest(name);
           parentRunner.error(msg);
         } else {
           parentRunner.log(msg);
@@ -628,6 +587,14 @@ SpecialPowersAPI.prototype = {
     };
 
     return this.wrap(chromeScript);
+  },
+
+  importInMainProcess: function (importString) {
+    var message = this._sendSyncMessage("SPImportInMainProcess", importString)[0];
+    if (message.hadError) {
+      throw "SpecialPowers.importInMainProcess failed with error " + message.errorMessage;
+    }
+    return;
   },
 
   get Services() {
@@ -662,10 +629,10 @@ SpecialPowersAPI.prototype = {
    * we don't SpecialPowers-wrap Components.interfaces, because it's available
    * to untrusted content, and wrapping it confuses QI and identity checks.
    */
-  get Cc() { return wrapPrivileged(this.getFullComponents()).classes; },
+  get Cc() { return wrapPrivileged(this.getFullComponents().classes); },
   get Ci() { return this.Components.interfaces; },
-  get Cu() { return wrapPrivileged(this.getFullComponents()).utils; },
-  get Cr() { return wrapPrivileged(this.Components).results; },
+  get Cu() { return wrapPrivileged(this.getFullComponents().utils); },
+  get Cr() { return wrapPrivileged(this.Components.results); },
 
   /*
    * SpecialPowers.getRawComponents() allows content to get a reference to a
@@ -772,8 +739,8 @@ SpecialPowersAPI.prototype = {
           originalValue = Ci.nsICookiePermission.ACCESS_LIMIT_THIRD_PARTY;
         }
 
-        let [url, appId, isInBrowserElement, isSystem] = this._getInfoFromPermissionArg(context);
-        if (isSystem) {
+        let principal = this._getPrincipalFromArg(context);
+        if (principal.isSystemPrincipal) {
           continue;
         }
 
@@ -792,14 +759,24 @@ SpecialPowersAPI.prototype = {
           continue;
         }
 
-        var todo = {'op': 'add', 'type': permission.type, 'permission': perm, 'value': perm, 'url': url, 'appId': appId, 'isInBrowserElement': isInBrowserElement};
+        var todo = {'op': 'add',
+                    'type': permission.type,
+                    'permission': perm,
+                    'value': perm,
+                    'principal': principal,
+                    'expireType': (typeof permission.expireType === "number") ?
+                      permission.expireType : 0, // default: EXPIRE_NEVER
+                    'expireTime': (typeof permission.expireTime === "number") ?
+                      permission.expireTime : 0};
+
+        var cleanupTodo = Object.assign({}, todo);
+
         if (permission.remove == true)
           todo.op = 'remove';
 
         pendingPermissions.push(todo);
 
         /* Push original permissions value or clear into cleanup array */
-        var cleanupTodo = {'op': 'add', 'type': permission.type, 'permission': perm, 'value': perm, 'url': url, 'appId': appId, 'isInBrowserElement': isInBrowserElement};
         if (originalValue == Ci.nsIPermissionManager.UNKNOWN_ACTION) {
           cleanupTodo.op = 'remove';
         } else {
@@ -817,12 +794,72 @@ SpecialPowersAPI.prototype = {
       // that the callback checks for. The second delay is because pref
       // observers often defer making their changes by posting an event to the
       // event loop.
+      if (!this._observingPermissions) {
+        this._observingPermissions = true;
+        // If specialpowers is in main-process, then we can add a observer
+        // to get all 'perm-changed' signals. Otherwise, it can't receive
+        // all signals, so we register a observer in specialpowersobserver(in
+        // main-process) and get signals from it.
+        if (this.isMainProcess()) {
+          this.permissionObserverProxy._specialPowersAPI = this;
+          Services.obs.addObserver(this.permissionObserverProxy, "perm-changed", false);
+        } else {
+          this.registerObservers("perm-changed");
+          // bind() is used to set 'this' to SpecialPowersAPI itself.
+          this._addMessageListener("specialpowers-perm-changed", this.permChangedProxy.bind(this));
+        }
+      }
       this._permissionsUndoStack.push(cleanupPermissions);
       this._pendingPermissions.push([pendingPermissions,
-				     this._delayCallbackTwice(callback)]);
+                                     this._delayCallbackTwice(callback)]);
       this._applyPermissions();
     } else {
       this._setTimeout(callback);
+    }
+  },
+
+  /*
+   * This function should be used when specialpowers is in content process but
+   * it want to get the notification from chrome space.
+   *
+   * This function will call Services.obs.addObserver in SpecialPowersObserver
+   * (that is in chrome process) and forward the data received to SpecialPowers
+   * via messageManager.
+   * You can use this._addMessageListener("specialpowers-YOUR_TOPIC") to fire
+   * the callback.
+   *
+   * To get the expected data, you should modify
+   * SpecialPowersObserver.prototype._registerObservers.observe. Or the message
+   * you received from messageManager will only contain 'aData' from Service.obs.
+   *
+   * NOTICE: there is no implementation of _addMessageListener in
+   * ChromePowers.js
+   */
+  registerObservers: function(topic) {
+    var msg = {
+      'op': 'add',
+      'observerTopic': topic,
+    };
+    this._sendSyncMessage("SPObserverService", msg);
+  },
+
+  permChangedProxy: function(aMessage) {
+    let permission = aMessage.json.permission;
+    let aData = aMessage.json.aData;
+    this._permissionObserver.observe(permission, aData);
+  },
+
+  permissionObserverProxy: {
+    // 'this' in permChangedObserverProxy is the permChangedObserverProxy
+    // object itself. The '_specialPowersAPI' will be set to the 'SpecialPowersAPI'
+    // object to call the member function in SpecialPowersAPI.
+    _specialPowersAPI: null,
+    observe: function (aSubject, aTopic, aData)
+    {
+      if (aTopic == "perm-changed") {
+        var permission = aSubject.QueryInterface(Ci.nsIPermission);
+        this._specialPowersAPI._permissionObserver.observe(permission, aData);
+      }
     }
   },
 
@@ -830,11 +867,15 @@ SpecialPowersAPI.prototype = {
     if (this._permissionsUndoStack.length > 0) {
       // See pushPermissions comment regarding delay.
       let cb = callback ? this._delayCallbackTwice(callback) : null;
-      /* Each pop from the stack will yield an object {op/type/permission/value/url/appid/isInBrowserElement} or null */
+      /* Each pop from the stack will yield an object {op/type/permission/value/url/appid/isInIsolatedMozBrowserElement} or null */
       this._pendingPermissions.push([this._permissionsUndoStack.pop(), cb]);
       this._applyPermissions();
     } else {
-       this._setTimeout(callback);
+      if (this._observingPermissions) {
+        this._observingPermissions = false;
+        this._removeMessageListener("specialpowers-perm-changed", this.permChangedProxy.bind(this));
+      }
+      this._setTimeout(callback);
     }
   },
 
@@ -857,15 +898,39 @@ SpecialPowersAPI.prototype = {
     _lastPermission: {},
     _callBack: null,
     _nextCallback: null,
-
-    observe: function (aSubject, aTopic, aData)
+    _obsDataMap: {
+      'deleted':'remove',
+      'added':'add'
+    },
+    observe: function (permission, aData)
     {
-      if (aTopic == "perm-changed") {
-        var permission = aSubject.QueryInterface(Ci.nsIPermission);
+      if (this._self._applyingPermissions) {
         if (permission.type == this._lastPermission.type) {
-          Services.obs.removeObserver(this, "perm-changed");
           this._self._setTimeout(this._callback);
           this._self._setTimeout(this._nextCallback);
+          this._callback = null;
+          this._nextCallback = null;
+        }
+      } else {
+        var found = false;
+        for (var i = 0; !found && i < this._self._permissionsUndoStack.length; i++) {
+          var undos = this._self._permissionsUndoStack[i];
+          for (var j = 0; j < undos.length; j++) {
+            var undo = undos[j];
+            if (undo.op == this._obsDataMap[aData] &&
+                undo.principal.originAttributes.appId == permission.principal.originAttributes.appId &&
+                undo.type == permission.type) {
+              // Remove this undo item if it has been done by others(not
+              // specialpowers itself.)
+              undos.splice(j,1);
+              found = true;
+              break;
+            }
+          }
+          if (!undos.length) {
+            // Remove the empty row in permissionsUndoStack
+            this._self._permissionsUndoStack.splice(i, 1);
+          }
         }
       }
     }
@@ -896,8 +961,6 @@ SpecialPowersAPI.prototype = {
         // Now apply any permissions that may have been queued while we were applying
         self._applyPermissions();
     }
-
-    Services.obs.addObserver(this._permissionObserver, "perm-changed", false);
 
     for (var idx in pendingActions) {
       var perm = pendingActions[idx];
@@ -1012,7 +1075,7 @@ SpecialPowersAPI.prototype = {
       // event loop.
       this._prefEnvUndoStack.push(cleanupActions);
       this._pendingPrefs.push([pendingActions,
-			       this._delayCallbackTwice(callback)]);
+                               this._delayCallbackTwice(callback)]);
       this._applyPrefs();
     } else {
       this._setTimeout(callback);
@@ -1090,15 +1153,6 @@ SpecialPowersAPI.prototype = {
     this.pushPrefEnv({set: [['dom.mozApps.auto_confirm_uninstall', true]]}, cb);
   },
 
-  // Allow tests to disable the per platform app validity checks so we can
-  // test higher level WebApp functionality without full platform support.
-  setAllAppsLaunchable: function(launchable) {
-    this._sendSyncMessage("SPWebAppService", {
-      op: "set-launchable",
-      launchable: launchable
-    });
-  },
-
   // Allow tests to install addons without signing the package, for convenience.
   allowUnsignedAddons: function() {
     this._sendSyncMessage("SPWebAppService", {
@@ -1106,11 +1160,28 @@ SpecialPowersAPI.prototype = {
     });
   },
 
-  // Restore the launchable property to its default value.
-  flushAllAppsLaunchable: function() {
+  // Turn on debug information from UserCustomizations.jsm
+  debugUserCustomizations: function(value) {
     this._sendSyncMessage("SPWebAppService", {
-      op: "set-launchable",
-      launchable: false
+      op: "debug-customizations",
+      value: value
+    });
+  },
+
+  // Force-registering an app in the registry
+  injectApp: function(aAppId, aApp) {
+    this._sendSyncMessage("SPWebAppService", {
+      op: "inject-app",
+      appId: aAppId,
+      app: aApp
+    });
+  },
+
+  // Removing app from the registry
+  rejectApp: function(aAppId) {
+    this._sendSyncMessage("SPWebAppService", {
+      op: "reject-app",
+      appId: aAppId
     });
   },
 
@@ -1119,6 +1190,9 @@ SpecialPowersAPI.prototype = {
       let uri = aMessage.json.uri;
       Services.obs.notifyObservers(null, "specialpowers-http-notify-request", uri);
     },
+    "specialpowers-browser-fullZoom:zoomReset": function() {
+      Services.obs.notifyObservers(null, "specialpowers-browser-fullZoom:zoomReset", null);
+    },
   },
 
   _addObserverProxy: function(notification) {
@@ -1126,7 +1200,6 @@ SpecialPowersAPI.prototype = {
       this._addMessageListener(notification, this._proxiedObservers[notification]);
     }
   },
-
   _removeObserverProxy: function(notification) {
     if (notification in this._proxiedObservers) {
       this._removeMessageListener(notification, this._proxiedObservers[notification]);
@@ -1218,7 +1291,7 @@ SpecialPowersAPI.prototype = {
     var val = this._sendSyncMessage('SPPrefService', msg);
 
     if (val == null || val[0] == null)
-      throw "Error getting pref";
+      throw "Error getting pref '" + aPrefName + "'";
     return val[0];
   },
   _setPref: function(aPrefName, aPrefType, aValue, aIid) {
@@ -1310,14 +1383,6 @@ SpecialPowersAPI.prototype = {
   },
   resetConsole: function() {
     Services.console.reset();
-  },
-
-  getMaxLineBoxWidth: function(window) {
-    return this._getMUDV(window).maxLineBoxWidth;
-  },
-
-  setMaxLineBoxWidth: function(window, width) {
-    this._getMUDV(window).changeMaxLineBoxWidth(width);
   },
 
   getFullZoom: function(window) {
@@ -1474,6 +1539,14 @@ SpecialPowersAPI.prototype = {
     return this._os;
   },
 
+  get isB2G() {
+#ifdef MOZ_B2G
+    return true;
+#else
+    return false;
+#endif
+  },
+
   addSystemEventListener: function(target, type, listener, useCapture) {
     Cc["@mozilla.org/eventlistenerservice;1"].
       getService(Ci.nsIEventListenerService).
@@ -1520,21 +1593,20 @@ SpecialPowersAPI.prototype = {
       getService(Components.interfaces.nsICategoryManager).
       deleteCategoryEntry(category, entry, persists);
   },
-
-  copyString: function(str, doc) {
-    Components.classes["@mozilla.org/widget/clipboardhelper;1"].
-      getService(Components.interfaces.nsIClipboardHelper).
-      copyString(str, doc);
-  },
-
   openDialog: function(win, args) {
     return win.openDialog.apply(win, args);
+  },
+  // This is a blocking call which creates and spins a native event loop
+  spinEventLoop: function(win) {
+    // simply do a sync XHR back to our windows location.
+    var syncXHR = new win.XMLHttpRequest();
+    syncXHR.open('GET', win.location, false);
+    syncXHR.send();
   },
 
   // :jdm gets credit for this.  ex: getPrivilegedProps(window, 'location.href');
   getPrivilegedProps: function(obj, props) {
     var parts = props.split('.');
-
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
       if (obj[p]) {
@@ -1575,7 +1647,19 @@ SpecialPowersAPI.prototype = {
     // With aWindow, it is called in SimpleTest.waitForFocus to allow popup window opener focus switching
     if (aWindow)
       aWindow.focus();
-    sendAsyncMessage("SpecialPowers.Focus", {});
+    var mm = global;
+    if (aWindow) {
+      try {
+        mm = aWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                                    .getInterface(Ci.nsIDocShell)
+                                    .QueryInterface(Ci.nsIInterfaceRequestor)
+                                    .getInterface(Ci.nsIContentFrameMessageManager);
+      } catch (ex) {
+        /* Ignore exceptions for e.g. XUL chrome windows from mochitest-chrome
+         * which won't have a message manager */
+      }
+    }
+    mm.sendAsyncMessage("SpecialPowers.Focus", {});
   },
 
   getClipboardData: function(flavor, whichClipboard) {
@@ -1587,10 +1671,10 @@ SpecialPowersAPI.prototype = {
 
     var xferable = Components.classes["@mozilla.org/widget/transferable;1"].
                    createInstance(Components.interfaces.nsITransferable);
-    // in e10s b-c tests |content.window| is null whereas |window| works fine.
+    // in e10s b-c tests |content.window| is a CPOW whereas |window| works fine.
     // for some non-e10s mochi tests, |window| is null whereas |content.window|
     // works fine.  So we take whatever is non-null!
-    xferable.init(this._getDocShell(content.window || window)
+    xferable.init(this._getDocShell(typeof(window) == "undefined" ? content.window : window)
                       .QueryInterface(Components.interfaces.nsILoadContext));
     xferable.addDataFlavor(flavor);
     this._cb.getData(xferable, whichClipboard);
@@ -1605,10 +1689,10 @@ SpecialPowersAPI.prototype = {
     return data.QueryInterface(Components.interfaces.nsISupportsString).data;
   },
 
-  clipboardCopyString: function(preExpectedVal, doc) {
-    var cbHelperSvc = Components.classes["@mozilla.org/widget/clipboardhelper;1"].
-                      getService(Components.interfaces.nsIClipboardHelper);
-    cbHelperSvc.copyString(preExpectedVal, doc);
+  clipboardCopyString: function(str) {
+    Cc["@mozilla.org/widget/clipboardhelper;1"].
+      getService(Ci.nsIClipboardHelper).
+      copyString(str);
   },
 
   supportsSelectionClipboard: function() {
@@ -1681,67 +1765,40 @@ SpecialPowersAPI.prototype = {
                                   .messageManager);
   },
 
-  setFullscreenAllowed: function(document) {
-    Services.perms.addFromPrincipal(document.nodePrincipal, "fullscreen",
-				     Ci.nsIPermissionManager.ALLOW_ACTION);
-    Services.obs.notifyObservers(document, "fullscreen-approved", null);
-  },
-
-  removeFullscreenAllowed: function(document) {
-    Services.perms.removeFromPrincipal(document.nodePrincipal, "fullscreen");
-  },
-
-  _getInfoFromPermissionArg: function(arg) {
-    let url = "";
-    let appId = Ci.nsIScriptSecurityManager.NO_APP_ID;
-    let isInBrowserElement = false;
-    let isSystem = false;
+  _getPrincipalFromArg: function(arg) {
+    let principal;
+    let secMan = Services.scriptSecurityManager;
 
     if (typeof(arg) == "string") {
       // It's an URL.
-      url = Cc["@mozilla.org/network/io-service;1"]
-              .getService(Ci.nsIIOService)
-              .newURI(arg, null, null)
-              .spec;
+      let uri = Services.io.newURI(arg, null, null);
+      principal = secMan.createCodebasePrincipal(uri, {});
     } else if (arg.manifestURL) {
       // It's a thing representing an app.
       let appsSvc = Cc["@mozilla.org/AppsService;1"]
                       .getService(Ci.nsIAppsService)
       let app = appsSvc.getAppByManifestURL(arg.manifestURL);
-
       if (!app) {
         throw "No app for this manifest!";
       }
 
-      appId = appsSvc.getAppLocalIdByManifestURL(arg.manifestURL);
-      url = app.origin;
-      isInBrowserElement = arg.isInBrowserElement || false;
+      principal = app.principal;
     } else if (arg.nodePrincipal) {
       // It's a document.
-      isSystem = (arg.nodePrincipal instanceof Ci.nsIPrincipal) &&
-                 Cc["@mozilla.org/scriptsecuritymanager;1"].
-                 getService(Ci.nsIScriptSecurityManager).
-                 isSystemPrincipal(arg.nodePrincipal);
-      if (!isSystem) {
-        // System principals don't have a URL associated with them, and they
-        // don't really need any permissions to be registered with the
-        // permission manager anyway.
-        url = arg.nodePrincipal.URI.spec;
-        appId = arg.nodePrincipal.appId;
-        isInBrowserElement = arg.nodePrincipal.isInBrowserElement;
-      }
+      // In some tests the arg is a wrapped DOM element, so we unwrap it first.
+      principal = unwrapIfWrapped(arg).nodePrincipal;
     } else {
-      url = arg.url;
-      appId = arg.appId;
-      isInBrowserElement = arg.isInBrowserElement;
+      let uri = Services.io.newURI(arg.url, null, null);
+      let attrs = arg.originAttributes || {};
+      principal = secMan.createCodebasePrincipal(uri, attrs);
     }
 
-    return [ url, appId, isInBrowserElement, isSystem ];
+    return principal;
   },
 
-  addPermission: function(type, allow, arg) {
-    let [url, appId, isInBrowserElement, isSystem] = this._getInfoFromPermissionArg(arg);
-    if (isSystem) {
+  addPermission: function(type, allow, arg, expireType, expireTime) {
+    let principal = this._getPrincipalFromArg(arg);
+    if (principal.isSystemPrincipal) {
       return; // nothing to do
     }
 
@@ -1757,60 +1814,55 @@ SpecialPowersAPI.prototype = {
       'op': 'add',
       'type': type,
       'permission': permission,
-      'url': url,
-      'appId': appId,
-      'isInBrowserElement': isInBrowserElement
+      'principal': principal,
+      'expireType': (typeof expireType === "number") ? expireType : 0,
+      'expireTime': (typeof expireTime === "number") ? expireTime : 0
     };
 
     this._sendSyncMessage('SPPermissionManager', msg);
   },
 
   removePermission: function(type, arg) {
-    let [url, appId, isInBrowserElement, isSystem] = this._getInfoFromPermissionArg(arg);
-    if (isSystem) {
+    let principal = this._getPrincipalFromArg(arg);
+    if (principal.isSystemPrincipal) {
       return; // nothing to do
     }
 
     var msg = {
       'op': 'remove',
       'type': type,
-      'url': url,
-      'appId': appId,
-      'isInBrowserElement': isInBrowserElement
+      'principal': principal
     };
 
     this._sendSyncMessage('SPPermissionManager', msg);
   },
 
   hasPermission: function (type, arg) {
-    let [url, appId, isInBrowserElement, isSystem] = this._getInfoFromPermissionArg(arg);
-    if (isSystem) {
+    let principal = this._getPrincipalFromArg(arg);
+    if (principal.isSystemPrincipal) {
       return true; // system principals have all permissions
     }
 
     var msg = {
       'op': 'has',
       'type': type,
-      'url': url,
-      'appId': appId,
-      'isInBrowserElement': isInBrowserElement
+      'principal': principal
     };
 
     return this._sendSyncMessage('SPPermissionManager', msg)[0];
   },
+
   testPermission: function (type, value, arg) {
-    let [url, appId, isInBrowserElement, isSystem] = this._getInfoFromPermissionArg(arg);
-    if (isSystem) {
+    let principal = this._getPrincipalFromArg(arg);
+    if (principal.isSystemPrincipal) {
       return true; // system principals have all permissions
     }
 
     var msg = {
       'op': 'test',
       'type': type,
-      'value': value, 
-      'url': url,
-      'appId': appId,
-      'isInBrowserElement': isInBrowserElement
+      'value': value,
+      'principal': principal
     };
     return this._sendSyncMessage('SPPermissionManager', msg)[0];
   },
@@ -1835,63 +1887,183 @@ SpecialPowersAPI.prototype = {
     this._sendSyncMessage('SPObserverService', msg);
   },
 
-  clearStorageForURI: function(uri, callback, appId, inBrowser) {
-    this._quotaManagerRequest('clear', uri, appId, inBrowser, callback);
+  removeAllServiceWorkerData: function() {
+    this.notifyObserversInParentProcess(null, "browser:purge-session-history", "");
   },
 
-  getStorageUsageForURI: function(uri, callback, appId, inBrowser) {
-    this._quotaManagerRequest('getUsage', uri, appId, inBrowser, callback);
+  removeServiceWorkerDataForExampleDomain: function() {
+    this.notifyObserversInParentProcess(null, "browser:purge-domain-data", "example.com");
   },
 
-  _quotaManagerRequest: function(op, uri, appId, inBrowser, callback) {
-    const messageTopic = "SPQuotaManager";
+  cleanUpSTSData: function(origin, flags) {
+    return this._sendSyncMessage('SPCleanUpSTSData', {origin: origin, flags: flags || 0});
+  },
 
-    if (uri instanceof Ci.nsIURI) {
-      uri = uri.spec;
+  loadExtension: function(id, ext, handler) {
+    if (!id) {
+      let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
+      id = uuidGenerator.generateUUID().number;
     }
 
-    const id = Cc["@mozilla.org/uuid-generator;1"]
-                 .getService(Ci.nsIUUIDGenerator)
-                 .generateUUID()
-                 .toString();
+    let resolveStartup, resolveUnload, rejectStartup;
+    let startupPromise = new Promise((resolve, reject) => {
+      resolveStartup = resolve;
+      rejectStartup = reject;
+    });
+    let unloadPromise = new Promise(resolve => { resolveUnload = resolve; });
 
-    let callbackInfo = { id: id, callback: callback };
+    startupPromise.catch(() => {
+      this._removeMessageListener("SPExtensionMessage", listener);
+    });
 
-    if (this._quotaManagerCallbackInfos) {
-      callbackInfo.listener = this._quotaManagerCallbackInfos[0].listener;
-      this._quotaManagerCallbackInfos.push(callbackInfo)
-    } else {
-      callbackInfo.listener = function(msg) {
-        msg = msg.data;
-        for (let index in this._quotaManagerCallbackInfos) {
-          let callbackInfo = this._quotaManagerCallbackInfos[index];
-          if (callbackInfo.id == msg.id) {
-            if (this._quotaManagerCallbackInfos.length > 1) {
-              this._quotaManagerCallbackInfos.splice(index, 1);
-            } else {
-              this._quotaManagerCallbackInfos = null;
-              this._removeMessageListener(messageTopic, callbackInfo.listener);
-            }
+    handler = Cu.waiveXrays(handler);
+    ext = Cu.waiveXrays(ext);
 
-            if ('usage' in msg) {
-              callbackInfo.callback(msg.usage, msg.fileUsage);
-            } else {
-              callbackInfo.callback();
-            }
-          }
+    let sp = this;
+    let state = "uninitialized";
+    let extension = {
+      id,
+
+      get state() { return state; },
+
+      startup() {
+        state = "pending";
+        sp._sendAsyncMessage("SPStartupExtension", {id});
+        return startupPromise;
+      },
+
+      unload() {
+        state = "unloading";
+        sp._sendAsyncMessage("SPUnloadExtension", {id});
+        return unloadPromise;
+      },
+
+      sendMessage(...args) {
+        sp._sendAsyncMessage("SPExtensionMessage", {id, args});
+      },
+    };
+
+    this._sendAsyncMessage("SPLoadExtension", {ext, id});
+
+    let listener = (msg) => {
+      if (msg.data.id == id) {
+        if (msg.data.type == "extensionStarted") {
+          state = "running";
+          resolveStartup();
+        } else if (msg.data.type == "extensionFailed") {
+          state = "failed";
+          rejectStartup("startup failed");
+        } else if (msg.data.type == "extensionUnloaded") {
+          this._removeMessageListener("SPExtensionMessage", listener);
+          state = "unloaded";
+          resolveUnload();
+        } else if (msg.data.type in handler) {
+          handler[msg.data.type](...msg.data.args);
+        } else {
+          dump(`Unexpected: ${msg.data.type}\n`);
         }
-      }.bind(this);
+      }
+    };
 
-      this._addMessageListener(messageTopic, callbackInfo.listener);
-      this._quotaManagerCallbackInfos = [ callbackInfo ];
-    }
-
-    let msg = { op: op, uri: uri, appId: appId, inBrowser: inBrowser, id: id };
-    this._sendAsyncMessage(messageTopic, msg);
+    this._addMessageListener("SPExtensionMessage", listener);
+    return extension;
   },
 
-  createDOMFile: function(path, options) {
-    return new File(path, options);
+  invalidateExtensionStorageCache: function() {
+    this.notifyObserversInParentProcess(null, "extension-invalidate-storage-cache", "");
+  },
+
+  allowMedia: function(window, enable) {
+    this._getDocShell(window).allowMedia = enable;
+  },
+
+  createChromeCache: function(name, url) {
+    let principal = this._getPrincipalFromArg(url);
+    return wrapIfUnwrapped(new content.window.CacheStorage(name, principal));
+  },
+
+  loadChannelAndReturnStatus: function(url, loadUsingSystemPrincipal) {
+    const BinaryInputStream =
+        Components.Constructor("@mozilla.org/binaryinputstream;1",
+                               "nsIBinaryInputStream",
+                               "setInputStream");
+
+    return new Promise(function(resolve) {
+      let listener = {
+        httpStatus : 0,
+
+        onStartRequest: function(request, context) {
+          request.QueryInterface(Ci.nsIHttpChannel);
+          this.httpStatus = request.responseStatus;
+        },
+
+        onDataAvailable: function(request, context, stream, offset, count) {
+          new BinaryInputStream(stream).readByteArray(count);
+        },
+
+        onStopRequest: function(request, context, status) {
+         /* testing here that the redirect was not followed. If it was followed
+            we would see a http status of 200 and status of NS_OK */
+
+          let httpStatus = this.httpStatus;
+          resolve({status, httpStatus});
+        }
+      };
+      let uri = NetUtil.newURI(url);
+      let channel = NetUtil.newChannel({uri, loadUsingSystemPrincipal});
+
+      channel.loadFlags |= Ci.nsIChannel.LOAD_DOCUMENT_URI;
+      channel.QueryInterface(Ci.nsIHttpChannelInternal);
+      channel.documentURI = uri;
+      channel.asyncOpen2(listener);
+    });
+  },
+
+  _pu: null,
+
+  get ParserUtils() {
+    if (this._pu != null)
+      return this._pu;
+
+    let pu = Cc["@mozilla.org/parserutils;1"].getService(Ci.nsIParserUtils);
+    // We need to create and return our own wrapper.
+    this._pu = {
+      sanitize: function(src, flags) {
+        return pu.sanitize(src, flags);
+      },
+      convertToPlainText: function(src, flags, wrapCol) {
+        return pu.convertToPlainText(src, flags, wrapCol);
+      },
+      parseFragment: function(fragment, flags, isXML, baseURL, element) {
+        let baseURI = baseURL ? NetUtil.newURI(baseURL) : null;
+        return pu.parseFragment(unwrapIfWrapped(fragment),
+                                flags, isXML, baseURI,
+                                unwrapIfWrapped(element));
+      },
+    };
+    return this._pu;
+  },
+
+  createDOMWalker: function(node, showAnonymousContent) {
+    node = unwrapIfWrapped(node);
+    let walker = Cc["@mozilla.org/inspector/deep-tree-walker;1"].
+                 createInstance(Ci.inIDeepTreeWalker);
+    walker.showAnonymousContent = showAnonymousContent;
+    walker.init(node.ownerDocument, Ci.nsIDOMNodeFilter.SHOW_ALL);
+    walker.currentNode = node;
+    return {
+      get firstChild() {
+        return wrapIfUnwrapped(walker.firstChild());
+      },
+      get lastChild() {
+        return wrapIfUnwrapped(walker.lastChild());
+      },
+    };
+  },
+
+  observeMutationEvents: function(mo, node, nativeAnonymousChildList, subtree) {
+    unwrapIfWrapped(mo).observe(unwrapIfWrapped(node),
+                                {nativeAnonymousChildList, subtree});
   },
 };
 

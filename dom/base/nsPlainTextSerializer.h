@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -32,7 +33,7 @@ class Element;
 } // namespace dom
 } // namespace mozilla
 
-class nsPlainTextSerializer : public nsIContentSerializer
+class nsPlainTextSerializer final : public nsIContentSerializer
 {
 public:
   nsPlainTextSerializer();
@@ -42,33 +43,33 @@ public:
   // nsIContentSerializer
   NS_IMETHOD Init(uint32_t flags, uint32_t aWrapColumn,
                   const char* aCharSet, bool aIsCopying,
-                  bool aIsWholeDocument) MOZ_OVERRIDE;
+                  bool aIsWholeDocument) override;
 
   NS_IMETHOD AppendText(nsIContent* aText, int32_t aStartOffset,
-                        int32_t aEndOffset, nsAString& aStr) MOZ_OVERRIDE;
+                        int32_t aEndOffset, nsAString& aStr) override;
   NS_IMETHOD AppendCDATASection(nsIContent* aCDATASection,
                                 int32_t aStartOffset, int32_t aEndOffset,
-                                nsAString& aStr) MOZ_OVERRIDE;
+                                nsAString& aStr) override;
   NS_IMETHOD AppendProcessingInstruction(nsIContent* aPI,
                                          int32_t aStartOffset,
                                          int32_t aEndOffset,
-                                         nsAString& aStr) MOZ_OVERRIDE  { return NS_OK; }
+                                         nsAString& aStr) override  { return NS_OK; }
   NS_IMETHOD AppendComment(nsIContent* aComment, int32_t aStartOffset,
-                           int32_t aEndOffset, nsAString& aStr) MOZ_OVERRIDE  { return NS_OK; }
+                           int32_t aEndOffset, nsAString& aStr) override  { return NS_OK; }
   NS_IMETHOD AppendDoctype(nsIContent *aDoctype,
-                           nsAString& aStr) MOZ_OVERRIDE  { return NS_OK; }
+                           nsAString& aStr) override  { return NS_OK; }
   NS_IMETHOD AppendElementStart(mozilla::dom::Element* aElement,
                                 mozilla::dom::Element* aOriginalElement,
-                                nsAString& aStr) MOZ_OVERRIDE; 
+                                nsAString& aStr) override; 
   NS_IMETHOD AppendElementEnd(mozilla::dom::Element* aElement,
-                              nsAString& aStr) MOZ_OVERRIDE;
-  NS_IMETHOD Flush(nsAString& aStr) MOZ_OVERRIDE;
+                              nsAString& aStr) override;
+  NS_IMETHOD Flush(nsAString& aStr) override;
 
   NS_IMETHOD AppendDocumentStart(nsIDocument *aDocument,
-                                 nsAString& aStr) MOZ_OVERRIDE;
+                                 nsAString& aStr) override;
 
-protected:
-  virtual ~nsPlainTextSerializer();
+private:
+  ~nsPlainTextSerializer();
 
   nsresult GetAttributeValue(nsIAtom* aName, nsString& aValueRet);
   void AddToLine(const char16_t* aStringToAdd, int32_t aLength);
@@ -100,6 +101,10 @@ protected:
       ((mFlags & nsIDocumentEncoder::OutputFormatted) ||
        (mFlags & nsIDocumentEncoder::OutputWrap));
   }
+  inline bool MayBreakLines()
+  {
+    return !(mFlags & nsIDocumentEncoder::OutputDisallowLineBreaking);
+  }
 
   inline bool DoOutput()
   {
@@ -113,24 +118,15 @@ protected:
   bool PopBool(nsTArray<bool>& aStack);
 
   bool ShouldReplaceContainerWithPlaceholder(nsIAtom* aTag);
+  bool IsIgnorableRubyAnnotation(nsIAtom* aTag);
 
-private:
   bool IsElementPreformatted(mozilla::dom::Element* aElement);
   bool IsElementBlock(mozilla::dom::Element* aElement);
 
-protected:
+private:
   nsString         mCurrentLine;
   uint32_t         mHeadLevel;
   bool             mAtFirstColumn;
-
-  // Handling of quoted text (for mail):
-  // Quotes need to be wrapped differently from non-quoted text,
-  // because quoted text has a few extra characters (e.g. ">> ")
-  // which makes the line length longer.
-  // Mail can represent quotes in different ways:
-  // Not wrapped in any special tag (if mail.compose.wrap_to_window_width)
-  // or in a <span>.
-  bool             mDontWrapAnyQuotes;  // no special quote markers
 
   bool             mStructs;            // Output structs (pref)
 
@@ -176,6 +172,9 @@ protected:
 
   bool             mPreformattedBlockBoundary;
 
+  // Whether the output should include ruby annotations.
+  bool             mWithRubyAnnotation;
+
   nsString         mURL;
   int32_t          mHeaderStrategy;    /* Header strategy (pref)
                                           0 = no indention
@@ -188,13 +187,13 @@ protected:
                                           section.
                                           mHeaderCounter[1] for <h1> etc. */
 
-  nsRefPtr<mozilla::dom::Element> mElement;
+  RefPtr<mozilla::dom::Element> mElement;
 
   // For handling table rows
-  nsAutoTArray<bool, 8> mHasWrittenCellsForRow;
+  AutoTArray<bool, 8> mHasWrittenCellsForRow;
   
   // Values gotten in OpenContainer that is (also) needed in CloseContainer
-  nsAutoTArray<bool, 8> mIsInCiteBlockquote;
+  AutoTArray<bool, 8> mIsInCiteBlockquote;
 
   // The output data
   nsAString*            mOutputString;

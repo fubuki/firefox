@@ -27,15 +27,17 @@ XPCOMUtils.defineLazyServiceGetter(this, "_focusManager",
 
 
 // Constants
-const TAB_EVENTS = ["TabOpen", "TabSelect"];
+const TAB_EVENTS = ["TabOpen", "TabSelect", "TabRemotenessChange"];
 const WINDOW_EVENTS = ["activate", "unload"];
-// PRIORITY DELTA is -10 because lower priority value is actually a higher priority
-const PRIORITY_DELTA = -10;
+// lower value means higher priority
+const PRIORITY_DELTA = Ci.nsISupportsPriority.PRIORITY_NORMAL - Ci.nsISupportsPriority.PRIORITY_LOW;
 
 
 // Variables
-let _lastFocusedWindow = null;
-let _windows = [];
+var _lastFocusedWindow = null;
+var _windows = [];
+// this is used for restoring the priority after TabRemotenessChange
+var _priorityBackup = new WeakMap();
 
 
 // Exported symbol
@@ -56,6 +58,9 @@ function _handleEvent(aEvent) {
     case "activate":
       WindowHelper.onActivate(aEvent.target);
       break;
+    case "TabRemotenessChange":
+      BrowserHelper.onRemotenessChange(aEvent.target.linkedBrowser);
+      break;
     case "unload":
       WindowHelper.removeWindow(aEvent.currentTarget);
       break;
@@ -64,8 +69,10 @@ function _handleEvent(aEvent) {
 
 
 // Methods that impact a browser. Put into single object for organization.
-let BrowserHelper = {
+var BrowserHelper = {
   onOpen: function NP_BH_onOpen(aBrowser) {
+    _priorityBackup.set(aBrowser.permanentKey, Ci.nsISupportsPriority.PRIORITY_NORMAL);
+
     // If the tab is in the focused window, leave priority as it is
     if (aBrowser.ownerDocument.defaultView != _lastFocusedWindow)
       this.decreasePriority(aBrowser);
@@ -80,18 +87,26 @@ let BrowserHelper = {
     windowEntry.lastSelectedBrowser = aBrowser;
   },
 
+  onRemotenessChange: function (aBrowser) {
+    aBrowser.setPriority(_priorityBackup.get(aBrowser.permanentKey));
+  },
+
   increasePriority: function NP_BH_increasePriority(aBrowser) {
     aBrowser.adjustPriority(PRIORITY_DELTA);
+    _priorityBackup.set(aBrowser.permanentKey,
+                        _priorityBackup.get(aBrowser.permanentKey) + PRIORITY_DELTA);
   },
 
   decreasePriority: function NP_BH_decreasePriority(aBrowser) {
     aBrowser.adjustPriority(PRIORITY_DELTA * -1);
+    _priorityBackup.set(aBrowser.permanentKey,
+                        _priorityBackup.get(aBrowser.permanentKey) - PRIORITY_DELTA);
   }
 };
 
 
 // Methods that impact a window. Put into single object for organization.
-let WindowHelper = {
+var WindowHelper = {
   addWindow: function NP_WH_addWindow(aWindow) {
     // Build internal data object
     _windows.push({ window: aWindow, lastSelectedBrowser: null });

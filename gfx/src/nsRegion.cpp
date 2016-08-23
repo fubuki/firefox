@@ -4,17 +4,16 @@
 
 
 #include "nsRegion.h"
-#include "nsPrintfCString.h"
 #include "nsTArray.h"
-#include "gfx3DMatrix.h"
 #include "gfxUtils.h"
+#include "mozilla/ToString.h"
 
 bool nsRegion::Contains(const nsRegion& aRgn) const
 {
-  // XXX this could be made faster
-  nsRegionRectIterator iter(aRgn);
-  while (const nsRect* r = iter.Next()) {
-    if (!Contains (*r)) {
+  // XXX this could be made faster by iterating over
+  // both regions at the same time some how
+  for (auto iter = aRgn.RectIter(); !iter.Done(); iter.Next()) {
+    if (!Contains(iter.Get())) {
       return false;
     }
   }
@@ -23,10 +22,9 @@ bool nsRegion::Contains(const nsRegion& aRgn) const
 
 bool nsRegion::Intersects(const nsRect& aRect) const
 {
-  // XXX this could be made faster
-  nsRegionRectIterator iter(*this);
-  while (const nsRect* r = iter.Next()) {
-    if (r->Intersects(aRect)) {
+  // XXX this could be made faster by using pixman_region32_contains_rect
+  for (auto iter = RectIter(); !iter.Done(); iter.Next()) {
+    if (iter.Get().Intersects(aRect)) {
       return true;
     }
   }
@@ -307,7 +305,7 @@ void nsRegion::SimplifyOutwardByArea(uint32_t aThreshold)
   pixman_box32_t *topRects = boxes;
 
   // we need some temporary storage for merging both rows of rectangles
-  nsAutoTArray<pixman_box32_t, 10> tmpStorage;
+  AutoTArray<pixman_box32_t, 10> tmpStorage;
   tmpStorage.SetCapacity(n);
   pixman_box32_t *tmpRect = tmpStorage.Elements();
 
@@ -336,23 +334,23 @@ void nsRegion::SimplifyOutwardByArea(uint32_t aThreshold)
       // merge the rects into tmpRect
       rect = MergeRects(topRects, topRectsEnd, bottomRects, bottomRectsEnd, tmpRect);
 
+      // set topRects to where the newly merged rects will be so that we use them
+      // as our next set of topRects
+      topRects = destRect;
       // copy the merged rects back into the destination
       topRectsEnd = CopyRow(destRect, tmpRect, rect);
-      topRects = destRect;
-      bottomRects = bottomRectsEnd;
-      destRect = topRects;
     } else {
       // copy the unmerged rects
       destRect = CopyRow(destRect, topRects, topRectsEnd);
 
       topRects = bottomRects;
       topRectsEnd = bottomRectsEnd;
-      bottomRects = bottomRectsEnd;
       if (bottomRectsEnd == end) {
         // copy the last row when we are done
         topRectsEnd = CopyRow(destRect, topRects, topRectsEnd);
       }
     }
+    bottomRects = bottomRectsEnd;
   } while (bottomRectsEnd != end);
 
 
@@ -555,16 +553,20 @@ void nsRegion::SimplifyInward (uint32_t aMaxRects)
 uint64_t nsRegion::Area () const
 {
   uint64_t area = 0;
-  nsRegionRectIterator iter(*this);
-  const nsRect* r;
-  while ((r = iter.Next()) != nullptr) {
-    area += uint64_t(r->width)*r->height;
+  for (auto iter = RectIter(); !iter.Done(); iter.Next()) {
+    const nsRect& rect = iter.Get();
+    area += uint64_t(rect.width) * rect.height;
   }
   return area;
 }
 
 nsRegion& nsRegion::ScaleRoundOut (float aXScale, float aYScale)
 {
+  if (mozilla::gfx::FuzzyEqual(aXScale, 1.0f) &&
+      mozilla::gfx::FuzzyEqual(aYScale, 1.0f)) {
+    return *this;
+  }
+
   int n;
   pixman_box32_t *boxes = pixman_region32_rectangles(&mImpl, &n);
   for (int i=0; i<n; i++) {
@@ -601,26 +603,26 @@ nsRegion& nsRegion::ScaleInverseRoundOut (float aXScale, float aYScale)
   return *this;
 }
 
-static nsIntRect
-TransformRect(const nsIntRect& aRect, const gfx3DMatrix& aTransform)
+static mozilla::gfx::IntRect
+TransformRect(const mozilla::gfx::IntRect& aRect, const mozilla::gfx::Matrix4x4& aTransform)
 {
     if (aRect.IsEmpty()) {
-        return nsIntRect();
+        return mozilla::gfx::IntRect();
     }
 
-    gfxRect rect(aRect.x, aRect.y, aRect.width, aRect.height);
-    rect = aTransform.TransformBounds(rect);
+    mozilla::gfx::RectDouble rect(aRect.x, aRect.y, aRect.width, aRect.height);
+    rect = aTransform.TransformAndClipBounds(rect, mozilla::gfx::RectDouble::MaxIntRect());
     rect.RoundOut();
 
-    nsIntRect intRect;
-    if (!gfxUtils::GfxRectToIntRect(rect, &intRect)) {
-        return nsIntRect();
+    mozilla::gfx::IntRect intRect;
+    if (!gfxUtils::GfxRectToIntRect(ThebesRect(rect), &intRect)) {
+        return mozilla::gfx::IntRect();
     }
 
     return intRect;
 }
 
-nsRegion& nsRegion::Transform (const gfx3DMatrix &aTransform)
+nsRegion& nsRegion::Transform (const mozilla::gfx::Matrix4x4 &aTransform)
 {
   int n;
   pixman_box32_t *boxes = pixman_region32_rectangles(&mImpl, &n);
@@ -639,7 +641,7 @@ nsRegion& nsRegion::Transform (const gfx3DMatrix &aTransform)
 }
 
 
-nsRegion nsRegion::ConvertAppUnitsRoundOut (int32_t aFromAPP, int32_t aToAPP) const
+nsRegion nsRegion::ScaleToOtherAppUnitsRoundOut (int32_t aFromAPP, int32_t aToAPP) const
 {
   if (aFromAPP == aToAPP) {
     return *this;
@@ -650,7 +652,7 @@ nsRegion nsRegion::ConvertAppUnitsRoundOut (int32_t aFromAPP, int32_t aToAPP) co
   pixman_box32_t *boxes = pixman_region32_rectangles(&region.mImpl, &n);
   for (int i=0; i<n; i++) {
     nsRect rect = BoxToRect(boxes[i]);
-    rect = rect.ConvertAppUnitsRoundOut(aFromAPP, aToAPP);
+    rect = rect.ScaleToOtherAppUnitsRoundOut(aFromAPP, aToAPP);
     boxes[i] = RectToBox(rect);
   }
 
@@ -663,7 +665,7 @@ nsRegion nsRegion::ConvertAppUnitsRoundOut (int32_t aFromAPP, int32_t aToAPP) co
   return region;
 }
 
-nsRegion nsRegion::ConvertAppUnitsRoundIn (int32_t aFromAPP, int32_t aToAPP) const
+nsRegion nsRegion::ScaleToOtherAppUnitsRoundIn (int32_t aFromAPP, int32_t aToAPP) const
 {
   if (aFromAPP == aToAPP) {
     return *this;
@@ -674,7 +676,7 @@ nsRegion nsRegion::ConvertAppUnitsRoundIn (int32_t aFromAPP, int32_t aToAPP) con
   pixman_box32_t *boxes = pixman_region32_rectangles(&region.mImpl, &n);
   for (int i=0; i<n; i++) {
     nsRect rect = BoxToRect(boxes[i]);
-    rect = rect.ConvertAppUnitsRoundIn(aFromAPP, aToAPP);
+    rect = rect.ScaleToOtherAppUnitsRoundIn(aFromAPP, aToAPP);
     boxes[i] = RectToBox(rect);
   }
 
@@ -694,7 +696,7 @@ nsIntRegion nsRegion::ToPixels (nscoord aAppUnitsPerPixel, bool aOutsidePixels) 
   pixman_box32_t *boxes = pixman_region32_rectangles(&region.mImpl, &n);
   for (int i=0; i<n; i++) {
     nsRect rect = BoxToRect(boxes[i]);
-    nsIntRect deviceRect;
+    mozilla::gfx::IntRect deviceRect;
     if (aOutsidePixels)
       deviceRect = rect.ToOutsidePixels(aAppUnitsPerPixel);
     else
@@ -725,11 +727,9 @@ nsIntRegion nsRegion::ScaleToNearestPixels (float aScaleX, float aScaleY,
                                             nscoord aAppUnitsPerPixel) const
 {
   nsIntRegion result;
-  nsRegionRectIterator rgnIter(*this);
-  const nsRect* currentRect;
-  while ((currentRect = rgnIter.Next())) {
-    nsIntRect deviceRect =
-      currentRect->ScaleToNearestPixels(aScaleX, aScaleY, aAppUnitsPerPixel);
+  for (auto iter = RectIter(); !iter.Done(); iter.Next()) {
+    mozilla::gfx::IntRect deviceRect =
+      iter.Get().ScaleToNearestPixels(aScaleX, aScaleY, aAppUnitsPerPixel);
     result.Or(result, deviceRect);
   }
   return result;
@@ -738,15 +738,24 @@ nsIntRegion nsRegion::ScaleToNearestPixels (float aScaleX, float aScaleY,
 nsIntRegion nsRegion::ScaleToOutsidePixels (float aScaleX, float aScaleY,
                                             nscoord aAppUnitsPerPixel) const
 {
-  nsIntRegion result;
-  nsRegionRectIterator rgnIter(*this);
-  const nsRect* currentRect;
-  while ((currentRect = rgnIter.Next())) {
-    nsIntRect deviceRect =
-      currentRect->ScaleToOutsidePixels(aScaleX, aScaleY, aAppUnitsPerPixel);
-    result.Or(result, deviceRect);
+  // make a copy of the region so that we can mutate it inplace
+  nsRegion region = *this;
+  int n;
+  pixman_box32_t *boxes = pixman_region32_rectangles(&region.mImpl, &n);
+  boxes = pixman_region32_rectangles(&region.mImpl, &n);
+  for (int i=0; i<n; i++) {
+    nsRect rect = BoxToRect(boxes[i]);
+    mozilla::gfx::IntRect irect = rect.ScaleToOutsidePixels(aScaleX, aScaleY, aAppUnitsPerPixel);
+    boxes[i] = RectToBox(irect);
   }
-  return result;
+
+  nsIntRegion iRegion;
+  // clear out the initial pixman_region so that we can replace it below
+  pixman_region32_fini(&iRegion.mImpl.mImpl);
+  // This will union all of the rectangles and runs in about O(n lg(n))
+  pixman_region32_init_rects(&iRegion.mImpl.mImpl, boxes, n);
+
+  return iRegion;
 }
 
 nsIntRegion nsRegion::ScaleToInsidePixels (float aScaleX, float aScaleY,
@@ -773,14 +782,14 @@ nsIntRegion nsRegion::ScaleToInsidePixels (float aScaleX, float aScaleY,
   nsIntRegion intRegion;
   if (n) {
     nsRect first = BoxToRect(boxes[0]);
-    nsIntRect firstDeviceRect =
+    mozilla::gfx::IntRect firstDeviceRect =
       first.ScaleToInsidePixels(aScaleX, aScaleY, aAppUnitsPerPixel);
 
     for (int i=1; i<n; i++) {
       nsRect rect = nsRect(boxes[i].x1, boxes[i].y1,
 	  boxes[i].x2 - boxes[i].x1,
 	  boxes[i].y2 - boxes[i].y1);
-      nsIntRect deviceRect =
+      mozilla::gfx::IntRect deviceRect =
 	rect.ScaleToInsidePixels(aScaleX, aScaleY, aAppUnitsPerPixel);
 
       if (rect.y <= first.YMost()) {
@@ -952,11 +961,6 @@ namespace {
       result.mSize = result.mSizeContainingRect = kVeryLargeNegativeNumber;
       return result;
     }
-    SizePair& operator=(const SizePair& aOther) {
-      mSizeContainingRect = aOther.mSizeContainingRect;
-      mSize = aOther.mSize;
-      return *this;
-    }
     bool operator<(const SizePair& aOther) const {
       if (mSizeContainingRect < aOther.mSizeContainingRect)
         return true;
@@ -1009,7 +1013,7 @@ namespace {
 
     return max;
   }
-}
+} // namespace
 
 nsRect nsRegion::GetLargestRectangle (const nsRect& aContainingRect) const {
   nsRect bestRect;
@@ -1022,13 +1026,12 @@ nsRect nsRegion::GetLargestRectangle (const nsRect& aContainingRect) const {
   AxisPartition xaxis, yaxis;
 
   // Step 1: Calculate the grid lines
-  nsRegionRectIterator iter(*this);
-  const nsRect *currentRect;
-  while ((currentRect = iter.Next())) {
-    xaxis.InsertCoord(currentRect->x);
-    xaxis.InsertCoord(currentRect->XMost());
-    yaxis.InsertCoord(currentRect->y);
-    yaxis.InsertCoord(currentRect->YMost());
+  for (auto iter = RectIter(); !iter.Done(); iter.Next()) {
+    const nsRect& rect = iter.Get();
+    xaxis.InsertCoord(rect.x);
+    xaxis.InsertCoord(rect.XMost());
+    yaxis.InsertCoord(rect.y);
+    yaxis.InsertCoord(rect.YMost());
   }
   if (!aContainingRect.IsEmpty()) {
     xaxis.InsertCoord(aContainingRect.x);
@@ -1046,19 +1049,19 @@ nsRect nsRegion::GetLargestRectangle (const nsRect& aContainingRect) const {
   nsTArray<SizePair> areas(matrixSize);
   areas.SetLength(matrixSize);
 
-  iter.Reset();
-  while ((currentRect = iter.Next())) {
-    int32_t xstart = xaxis.IndexOf(currentRect->x);
-    int32_t xend = xaxis.IndexOf(currentRect->XMost());
-    int32_t y = yaxis.IndexOf(currentRect->y);
-    int32_t yend = yaxis.IndexOf(currentRect->YMost());
+  for (auto iter = RectIter(); !iter.Done(); iter.Next()) {
+    const nsRect& rect = iter.Get();
+    int32_t xstart = xaxis.IndexOf(rect.x);
+    int32_t xend = xaxis.IndexOf(rect.XMost());
+    int32_t y = yaxis.IndexOf(rect.y);
+    int32_t yend = yaxis.IndexOf(rect.YMost());
 
     for (; y < yend; y++) {
       nscoord height = yaxis.StopSize(y);
       for (int32_t x = xstart; x < xend; x++) {
         nscoord width = xaxis.StopSize(x);
         int64_t size = width*int64_t(height);
-        if (currentRect->Intersects(aContainingRect)) {
+        if (rect.Intersects(aContainingRect)) {
           areas[y*matrixWidth+x].mSizeContainingRect = size;
         }
         areas[y*matrixWidth+x].mSize = size;
@@ -1139,18 +1142,5 @@ std::ostream& operator<<(std::ostream& stream, const nsRegion& m) {
 
 nsCString
 nsRegion::ToString() const {
-  return nsCString(mozilla::ToString(this).c_str());
-}
-
-
-nsRegion nsIntRegion::ToAppUnits (nscoord aAppUnitsPerPixel) const
-{
-  nsRegion result;
-  nsIntRegionRectIterator rgnIter(*this);
-  const nsIntRect* currentRect;
-  while ((currentRect = rgnIter.Next())) {
-    nsRect appRect = currentRect->ToAppUnits(aAppUnitsPerPixel);
-    result.Or(result, appRect);
-  }
-  return result;
+  return nsCString(mozilla::ToString(*this).c_str());
 }

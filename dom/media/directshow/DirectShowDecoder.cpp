@@ -6,6 +6,7 @@
 
 #include "DirectShowDecoder.h"
 #include "DirectShowReader.h"
+#include "DirectShowUtils.h"
 #include "MediaDecoderStateMachine.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/WindowsVersion.h"
@@ -45,10 +46,12 @@ DirectShowDecoder::GetSupportedCodecs(const nsACString& aType,
 bool
 DirectShowDecoder::IsEnabled()
 {
-  return Preferences::GetBool("media.directshow.enabled");
+  return CanDecodeMP3UsingDirectShow() &&
+         Preferences::GetBool("media.directshow.enabled");
 }
 
-DirectShowDecoder::DirectShowDecoder()
+DirectShowDecoder::DirectShowDecoder(MediaDecoderOwner* aOwner)
+  : MediaDecoder(aOwner)
 {
   MOZ_COUNT_CTOR(DirectShowDecoder);
 }

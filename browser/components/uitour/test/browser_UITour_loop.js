@@ -3,25 +3,40 @@
 
 "use strict";
 
-let gTestTab;
-let gContentAPI;
-let gContentWindow;
-let loopButton;
-let loopPanel = document.getElementById("loop-notification-panel");
+var gTestTab;
+var gContentAPI;
+var gContentWindow;
+var gMessageHandlers;
+var loopButton;
+var fakeRoom;
+var loopPanel = document.getElementById("loop-notification-panel");
 
-Components.utils.import("resource:///modules/UITour.jsm");
-const { LoopRooms } = Components.utils.import("resource:///modules/loop/LoopRooms.jsm", {});
-const { MozLoopServiceInternal } = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
+const { LoopAPI } = Cu.import("chrome://loop/content/modules/MozLoopAPI.jsm", {});
+const { LoopRooms } = Cu.import("chrome://loop/content/modules/LoopRooms.jsm", {});
+const { MozLoopServiceInternal } = Cu.import("chrome://loop/content/modules/MozLoopService.jsm", {});
+
+const FTU_VERSION = 1;
 
 function test() {
   UITourTest();
 }
 
-let tests = [
+function runOffline(fun) {
+  return (done) => {
+    Services.io.offline = true;
+    fun(function onComplete() {
+      Services.io.offline = false;
+      done();
+    });
+  }
+}
+
+var tests = [
   taskify(function* test_gettingStartedClicked_linkOpenedWithExpectedParams() {
-    Services.prefs.setBoolPref("loop.gettingStarted.seen", false);
+    // Set latestFTUVersion to lower number to show FTU panel.
+    Services.prefs.setIntPref("loop.gettingStarted.latestFTUVersion", 0);
     Services.prefs.setCharPref("loop.gettingStarted.url", "http://example.com");
-    ise(loopButton.open, false, "Menu should initially be closed");
+    is(loopButton.open, false, "Menu should initially be closed");
     loopButton.click();
 
     yield waitForConditionPromise(() => {
@@ -34,32 +49,36 @@ let tests = [
     });
 
     let loopDoc = document.getElementById("loop-notification-panel").children[0].contentDocument;
+    yield waitForConditionPromise(() => {
+      return loopDoc.readyState == 'complete';
+    }, "Loop notification panel document should be fully loaded.", 50);
     let gettingStartedButton = loopDoc.getElementById("fte-button");
     ok(gettingStartedButton, "Getting Started button should be found");
 
     let newTabPromise = waitForConditionPromise(() => {
-      return gBrowser.currentURI.path.contains("utm_source=firefox-browser");
+      return gBrowser.currentURI.path.includes("utm_source=firefox-browser");
     }, "New tab with utm_content=testPageNewID should have opened");
 
     gettingStartedButton.click();
     yield newTabPromise;
-    ok(gBrowser.currentURI.path.contains("utm_content=hello-tour_OpenPanel_testPage"),
+    ok(gBrowser.currentURI.path.includes("utm_content=hello-tour_OpenPanel_testPage"),
         "Expected URL opened (" + gBrowser.currentURI.path + ")");
     yield gBrowser.removeCurrentTab();
 
     checkLoopPanelIsHidden();
   }),
   taskify(function* test_gettingStartedClicked_linkOpenedWithExpectedParams2() {
-    Services.prefs.setBoolPref("loop.gettingStarted.seen", false);
+    // Set latestFTUVersion to lower number to show FTU panel.
+    Services.prefs.setIntPref("loop.gettingStarted.latestFTUVersion", 0);
     // Force a refresh of the loop panel since going from seen -> unseen doesn't trigger
     // automatic re-rendering.
     let loopWin = document.getElementById("loop-notification-panel").children[0].contentWindow;
-    var event = new loopWin.CustomEvent("GettingStartedSeen");
+    var event = new loopWin.CustomEvent("GettingStartedSeen", { detail: false });
     loopWin.dispatchEvent(event);
 
     UITour.pageIDsForSession.clear();
     Services.prefs.setCharPref("loop.gettingStarted.url", "http://example.com");
-    ise(loopButton.open, false, "Menu should initially be closed");
+    is(loopButton.open, false, "Menu should initially be closed");
     loopButton.click();
 
     yield waitForConditionPromise(() => {
@@ -81,37 +100,15 @@ let tests = [
 
     let newTabPromise = waitForConditionPromise(() => {
       Services.console.logStringMessage(gBrowser.currentURI.path);
-      return gBrowser.currentURI.path.contains("utm_source=firefox-browser");
+      return gBrowser.currentURI.path.includes("utm_source=firefox-browser");
     }, "New tab with utm_content=testPageNewID should have opened");
 
     gettingStartedButton.click();
     yield newTabPromise;
-    ok(!gBrowser.currentURI.path.contains("utm_content=hello-tour_OpenPanel_testPageOldId"),
+    ok(!gBrowser.currentURI.path.includes("utm_content=hello-tour_OpenPanel_testPageOldId"),
        "Expected URL opened without the utm_content parameter (" +
         gBrowser.currentURI.path + ")");
     yield gBrowser.removeCurrentTab();
-
-    checkLoopPanelIsHidden();
-  }),
-  taskify(function* test_menu_show_hide() {
-    // The targets to highlight only appear after getting started is launched.
-    Services.prefs.setBoolPref("loop.gettingStarted.seen", true);
-    ise(loopButton.open, false, "Menu should initially be closed");
-    gContentAPI.showMenu("loop");
-
-    yield waitForConditionPromise(() => {
-      return loopButton.open;
-    }, "Menu should be visible after showMenu()");
-
-    ok(loopPanel.hasAttribute("noautohide"), "@noautohide should be on the loop panel");
-    ok(loopPanel.hasAttribute("panelopen"), "The panel should have @panelopen");
-    is(loopPanel.state, "open", "The panel should be open");
-    ok(loopButton.hasAttribute("open"), "Loop button should know that the menu is open");
-
-    gContentAPI.hideMenu("loop");
-    yield waitForConditionPromise(() => {
-        return !loopButton.open;
-    }, "Menu should be hidden after hideMenu()");
 
     checkLoopPanelIsHidden();
   }),
@@ -139,7 +136,7 @@ let tests = [
     });
   },
   function test_getConfigurationLoop(done) {
-    let gettingStartedSeen = Services.prefs.getBoolPref("loop.gettingStarted.seen");
+    let gettingStartedSeen = Services.prefs.getIntPref("loop.gettingStarted.latestFTUVersion") >= FTU_VERSION;
     gContentAPI.getConfiguration("loop", (data) => {
       is(data.gettingStartedSeen, gettingStartedSeen,
          "The configuration property should equal that of the pref");
@@ -172,54 +169,7 @@ let tests = [
       });
     });
   },
-  taskify(function* test_panelTabChangeNotifications() {
-    // First make sure the Loop panel looks like we're logged in to have more than
-    // just one tab to switch to.
-    const fxASampleToken = {
-      token_type: "bearer",
-      access_token: "1bad3e44b12f77a88fe09f016f6a37c42e40f974bc7a8b432bb0d2f0e37e1752",
-      scope: "profile"
-    };
-    const fxASampleProfile = {
-      email: "test@example.com",
-      uid: "abcd1234"
-    };
-    MozLoopServiceInternal.fxAOAuthTokenData = fxASampleToken;
-    MozLoopServiceInternal.fxAOAuthProfile = fxASampleProfile;
-    yield MozLoopServiceInternal.notifyStatusChanged("login");
-
-    // Show the Loop menu.
-    yield showMenuPromise("loop");
-
-    // Listen for and test the notifications that will arrive from now on.
-    let tabChangePromise = new Promise(resolve => {
-      gContentAPI.observe((event, params) => {
-        is(event, "Loop:PanelTabChanged", "Check Loop:PanelTabChanged notification");
-        is(params, "contacts", "Check the tab name param");
-
-        gContentAPI.observe((event, params) => {
-          is(event, "Loop:PanelTabChanged", "Check Loop:PanelTabChanged notification");
-          is(params, "rooms", "Check the tab name param");
-
-          gContentAPI.observe((event, params) => {
-            ok(false, "No more notifications should have arrived");
-          });
-          resolve();
-        });
-      });
-    });
-
-    // Switch to the contacts tab.
-    yield window.LoopUI.openCallPanel(null, "contacts");
-
-    // Logout. The panel tab will switch back to 'rooms'.
-    MozLoopServiceInternal.fxAOAuthTokenData =
-      MozLoopServiceInternal.fxAOAuthProfile = null;
-    yield MozLoopServiceInternal.notifyStatusChanged();
-
-    yield tabChangePromise;
-  }),
-  function test_notifyLoopChatWindowOpenedClosed(done) {
+  runOffline(function test_notifyLoopChatWindowOpenedClosed(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Check Loop:ChatWindowOpened notification");
       gContentAPI.observe((event, params) => {
@@ -235,8 +185,8 @@ let tests = [
       document.querySelector("#pinnedchats > chatbox").close();
     });
     LoopRooms.open("fakeTourRoom");
-  },
-  function test_notifyLoopRoomURLCopied(done) {
+  }),
+  runOffline(function test_notifyLoopRoomURLCopied(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Loop chat window should've opened");
       gContentAPI.observe((event, params) => {
@@ -251,13 +201,17 @@ let tests = [
           chat.close();
           done();
         });
-        chat.content.contentDocument.querySelector(".btn-copy").click();
+
+        let window = chat.content.contentWindow;
+        waitForConditionPromise(
+          () => chat.content.contentDocument.querySelector(".btn-copy"),
+          "Copy button should be there"
+        ).then(() => chat.content.contentDocument.querySelector(".btn-copy").click());
       });
     });
-    setupFakeRoom();
     LoopRooms.open("fakeTourRoom");
-  },
-  function test_notifyLoopRoomURLEmailed(done) {
+  }),
+  runOffline(function test_notifyLoopRoomURLEmailed(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Loop chat window should've opened");
       gContentAPI.observe((event, params) => {
@@ -276,20 +230,23 @@ let tests = [
           done();
         });
 
-        let chatWin = chat.content.contentWindow;
-        let oldComposeEmail = chatWin.navigator.wrappedJSObject.mozLoop.composeEmail;
-        chatWin.navigator.wrappedJSObject.mozLoop.composeEmail = function(recipient, subject, body) {
-          ok(recipient, "composeEmail should be invoked with at least a recipient value");
+        gMessageHandlers.ComposeEmail = function(message, reply) {
+          let [subject, body, recipient] = message.data;
+          ok(subject, "composeEmail should be invoked with at least a subject value");
           composeEmailCalled = true;
-          chatWin.navigator.wrappedJSObject.mozLoop.composeEmail = oldComposeEmail;
+          reply();
         };
-        chatWin.document.querySelector(".btn-email").click();
+
+        waitForConditionPromise(
+          () => chat.content.contentDocument.querySelector(".btn-email"),
+          "Email button should be there"
+        ).then(() => chat.content.contentDocument.querySelector(".btn-email").click());
       });
     });
     LoopRooms.open("fakeTourRoom");
-  },
+  }),
   taskify(function* test_arrow_panel_position() {
-    ise(loopButton.open, false, "Menu should initially be closed");
+    is(loopButton.open, false, "Menu should initially be closed");
     let popup = document.getElementById("UITourTooltip");
 
     yield showMenuPromise("loop");
@@ -332,7 +289,7 @@ let tests = [
     let observationPromise = new Promise((resolve) => {
       gContentAPI.observe((event, params) => {
         is(event, "Loop:IncomingConversation", "Page should have been notified about incoming conversation");
-        ise(params.conversationOpen, false, "conversationOpen should be false");
+        is(params.conversationOpen, false, "conversationOpen should be false");
         is(gBrowser.selectedTab, gTestTab, "The same tab should be selected");
         resolve();
       });
@@ -357,7 +314,7 @@ let tests = [
     Services.prefs.setCharPref("loop.gettingStarted.url", gBrowser.currentURI.prePath);
 
     let newTabPromise = waitForConditionPromise(() => {
-      return gBrowser.currentURI.path.contains("incomingConversation=waiting");
+      return gBrowser.currentURI.path.includes("incomingConversation=waiting");
     }, "New tab with incomingConversation=waiting should have opened");
 
     // Now open the menu while that non-owner is in the fake room to trigger resuming the tour
@@ -380,9 +337,7 @@ function checkLoopPanelIsHidden() {
 }
 
 function setupFakeRoom() {
-  let room = {};
-  for (let prop of ["roomToken", "roomName", "roomOwner", "roomUrl", "participants"])
-    room[prop] = "fakeTourRoom";
+  let room = Object.create(fakeRoom);
   let roomsMap = new Map([
     [room.roomToken, room]
   ]);
@@ -393,10 +348,50 @@ function setupFakeRoom() {
 if (Services.prefs.getBoolPref("loop.enabled")) {
   loopButton = window.LoopUI.toolbarButton.node;
 
+  fakeRoom = {
+    decryptedContext: { roomName: "fakeTourRoom" },
+    participants: [],
+    maxSize: 2,
+    ctime: Date.now()
+  };
+  for (let prop of ["roomToken", "roomOwner", "roomUrl"])
+    fakeRoom[prop] = "fakeTourRoom";
+
+  LoopAPI.stubMessageHandlers(gMessageHandlers = {
+    // Stub the rooms object API to fully control the test behavior.
+    "Rooms:*": function(action, message, reply) {
+      switch (action.split(":").pop()) {
+        case "GetAll":
+          reply([fakeRoom]);
+          break;
+        case "Get":
+          reply(fakeRoom);
+          break;
+        case "Join":
+          reply({
+            apiKey: "fakeTourRoom",
+            sessionToken: "fakeTourRoom",
+            sessionId: "fakeTourRoom",
+            expires: Date.now() + 240000
+          });
+          break;
+        case "RefreshMembership":
+          reply({ expires: Date.now() + 240000 });
+        default:
+          reply();
+      }
+    },
+    // Stub the metadata retrieval to suppress console warnings and return faster.
+    GetSelectedTabMetadata: function(message, reply) {
+      reply({ favicon: null });
+    }
+  });
+
   registerCleanupFunction(() => {
     Services.prefs.clearUserPref("loop.gettingStarted.resumeOnFirstJoin");
-    Services.prefs.clearUserPref("loop.gettingStarted.seen");
+    Services.prefs.clearUserPref("loop.gettingStarted.latestFTUVersion");
     Services.prefs.clearUserPref("loop.gettingStarted.url");
+    Services.io.offline = false;
 
     // Copied from browser/components/loop/test/mochitest/head.js
     // Remove the iframe after each test. This also avoids mochitest complaining
@@ -408,8 +403,10 @@ if (Services.prefs.getBoolPref("loop.enabled")) {
       frame.remove();
     }
 
-    // Remove the stubbed rooms
+    // Remove the stubbed rooms.
     LoopRooms.stubCache(null);
+    // Restore the stubbed handlers.
+    LoopAPI.restore();
   });
 } else {
   ok(true, "Loop is disabled so skip the UITour Loop tests");

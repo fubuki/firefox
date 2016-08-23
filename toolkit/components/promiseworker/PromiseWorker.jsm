@@ -37,7 +37,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
  */
 function Queue() {
   this._array = [];
-};
+}
 Queue.prototype = {
   pop: function pop() {
     return this._array.shift();
@@ -290,11 +290,13 @@ this.BasePromiseWorker.prototype = {
       this.log("Posting message", message);
       try {
         this._worker.postMessage(message, ...[transfers]);
-      } catch (ex if typeof ex == "number") {
-        this.log("Could not post message", message, "due to xpcom error", ex);
-        // handle raw xpcom errors (see eg bug 961317)
-        throw new Components.Exception("Error in postMessage", ex);
       } catch (ex) {
+        if (typeof ex == "number") {
+          this.log("Could not post message", message, "due to xpcom error", ex);
+          // handle raw xpcom errors (see eg bug 961317)
+          throw new Components.Exception("Error in postMessage", ex);
+        }
+
         this.log("Could not post message", message, "due to error", ex);
         throw ex;
       }
@@ -370,7 +372,7 @@ this.BasePromiseWorker.prototype = {
  */
 function WorkerError(data) {
   this.data = data;
-};
+}
 
 /**
  * A constructor used to send data to the worker thread while

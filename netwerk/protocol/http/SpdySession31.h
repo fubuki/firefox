@@ -10,6 +10,7 @@
 
 #include "ASpdySession.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/UniquePtr.h"
 #include "nsAHttpConnection.h"
 #include "nsClassHashtable.h"
 #include "nsDataHashtable.h"
@@ -25,10 +26,10 @@ class SpdyPushedStream31;
 class SpdyStream31;
 class nsHttpTransaction;
 
-class SpdySession31 MOZ_FINAL : public ASpdySession
-                              , public nsAHttpConnection
-                              , public nsAHttpSegmentReader
-                              , public nsAHttpSegmentWriter
+class SpdySession31 final : public ASpdySession
+                          , public nsAHttpConnection
+                          , public nsAHttpSegmentReader
+                          , public nsAHttpSegmentWriter
 {
   ~SpdySession31();
 
@@ -42,18 +43,18 @@ public:
   explicit SpdySession31(nsISocketTransport *);
 
   bool AddStream(nsAHttpTransaction *, int32_t,
-                 bool, nsIInterfaceRequestor *) MOZ_OVERRIDE;
-  bool CanReuse() MOZ_OVERRIDE { return !mShouldGoAway && !mClosed; }
-  bool RoomForMoreStreams() MOZ_OVERRIDE;
+                 bool, nsIInterfaceRequestor *) override;
+  bool CanReuse() override { return !mShouldGoAway && !mClosed; }
+  bool RoomForMoreStreams() override;
 
   // When the connection is active this is called up to once every 1 second
   // return the interval (in seconds) that the connection next wants to
   // have this invoked. It might happen sooner depending on the needs of
   // other connections.
-  uint32_t  ReadTimeoutTick(PRIntervalTime now) MOZ_OVERRIDE;
+  uint32_t  ReadTimeoutTick(PRIntervalTime now) override;
 
   // Idle time represents time since "goodput".. e.g. a data or header frame
-  PRIntervalTime IdleTime() MOZ_OVERRIDE;
+  PRIntervalTime IdleTime() override;
 
   // Registering with a newID of 0 means pick the next available odd ID
   uint32_t RegisterStreamID(SpdyStream31 *, uint32_t aNewID = 0);
@@ -134,7 +135,6 @@ public:
   const static uint32_t kQueueTailRoom    =  4096;
   const static uint32_t kQueueReserved    =  1024;
 
-  const static uint32_t kDefaultMaxConcurrent = 100;
   const static uint32_t kMaxStreamID = 0x7800000;
 
   // This is a sentinel for a deleted stream. It is not a valid
@@ -165,25 +165,26 @@ public:
                     const char *, uint32_t);
 
   // an overload of nsAHttpConnection
-  void TransactionHasDataToWrite(nsAHttpTransaction *) MOZ_OVERRIDE;
+  void TransactionHasDataToWrite(nsAHttpTransaction *) override;
 
   // a similar version for SpdyStream31
   void TransactionHasDataToWrite(SpdyStream31 *);
 
   // an overload of nsAHttpSegementReader
-  virtual nsresult CommitToSegmentSize(uint32_t size, bool forceCommitment) MOZ_OVERRIDE;
+  virtual nsresult CommitToSegmentSize(uint32_t size, bool forceCommitment) override;
   nsresult BufferOutput(const char *, uint32_t, uint32_t *);
   void     FlushOutputQueue();
   uint32_t AmountOfOutputBuffered() { return mOutputQueueUsed - mOutputQueueSent; }
 
   uint32_t GetServerInitialStreamWindow() { return mServerInitialStreamWindow; }
 
+  bool TryToActivate(SpdyStream31 *stream);
   void ConnectPushedStream(SpdyStream31 *stream);
   void DecrementConcurrent(SpdyStream31 *stream);
 
   uint64_t Serial() { return mSerial; }
 
-  void     PrintDiagnostics (nsCString &log) MOZ_OVERRIDE;
+  void     PrintDiagnostics (nsCString &log) override;
 
   // Streams need access to these
   uint32_t SendingChunkSize() { return mSendingChunkSize; }
@@ -193,9 +194,13 @@ public:
   int64_t RemoteSessionWindow() { return mRemoteSessionWindow; }
   void DecrementRemoteSessionWindow (uint32_t bytes) { mRemoteSessionWindow -= bytes; }
 
-  void SendPing() MOZ_OVERRIDE;
+  void SendPing() override;
 
-  bool MaybeReTunnel(nsAHttpTransaction *) MOZ_OVERRIDE;
+  bool MaybeReTunnel(nsAHttpTransaction *) override;
+
+  // overload of nsAHttpTransaction
+  nsresult ReadSegmentsAgain(nsAHttpSegmentReader *, uint32_t, uint32_t *, bool *) override final;
+  nsresult WriteSegmentsAgain(nsAHttpSegmentWriter *, uint32_t , uint32_t *, bool *) override final;
 
 private:
 
@@ -225,8 +230,6 @@ private:
   void        SetWriteCallbacks();
   void        RealignOutputQueue();
 
-  bool        RoomForMoreConcurrent();
-  void        ActivateStream(SpdyStream31 *);
   void        ProcessPending();
   nsresult    SetInputFrameDataStream(uint32_t);
   bool        VerifyStream(SpdyStream31 *, uint32_t);
@@ -236,30 +239,20 @@ private:
   void        UpdateLocalStreamWindow(SpdyStream31 *stream, uint32_t bytes);
   void        UpdateLocalSessionWindow(uint32_t bytes);
 
+  bool        RoomForMoreConcurrent();
+  void        IncrementConcurrent(SpdyStream31 *stream);
+  void        QueueStream(SpdyStream31 *stream);
+
   // a wrapper for all calls to the nshttpconnection level segment writer. Used
   // to track network I/O for timeout purposes
   nsresult   NetworkRead(nsAHttpSegmentWriter *, char *, uint32_t, uint32_t *);
 
-  static PLDHashOperator ShutdownEnumerator(nsAHttpTransaction *,
-                                            nsAutoPtr<SpdyStream31> &,
-                                            void *);
-
-  static PLDHashOperator GoAwayEnumerator(nsAHttpTransaction *,
-                                          nsAutoPtr<SpdyStream31> &,
-                                          void *);
-
-  static PLDHashOperator UpdateServerRwinEnumerator(nsAHttpTransaction *,
-                                                    nsAutoPtr<SpdyStream31> &,
-                                                    void *);
-
-  static PLDHashOperator RestartBlockedOnRwinEnumerator(nsAHttpTransaction *,
-                                                        nsAutoPtr<SpdyStream31> &,
-                                                        void *);
+  void Shutdown();
 
   // This is intended to be nsHttpConnectionMgr:nsConnectionHandle taken
   // from the first transaction on this session. That object contains the
   // pointer to the real network-level nsHttpConnection object.
-  nsRefPtr<nsAHttpConnection> mConnection;
+  RefPtr<nsAHttpConnection> mConnection;
 
   // The underlying socket transport object is needed to propogate some events
   nsISocketTransport         *mSocketTransport;
@@ -305,7 +298,7 @@ private:
   // of header on data packets
   uint32_t             mInputFrameBufferSize;
   uint32_t             mInputFrameBufferUsed;
-  nsAutoArrayPtr<char> mInputFrameBuffer;
+  UniquePtr<char[]>    mInputFrameBuffer;
 
   // mInputFrameDataSize/Read are used for tracking the amount of data consumed
   // in a data frame. the data itself is not buffered in spdy
@@ -393,7 +386,7 @@ private:
   uint32_t             mOutputQueueSize;
   uint32_t             mOutputQueueUsed;
   uint32_t             mOutputQueueSent;
-  nsAutoArrayPtr<char> mOutputQueueBuffer;
+  UniquePtr<char[]>    mOutputQueueBuffer;
 
   PRIntervalTime       mPingThreshold;
   PRIntervalTime       mLastReadEpoch;     // used for ping timeouts
@@ -423,6 +416,7 @@ private:
   nsDataHashtable<nsCStringHashKey, uint32_t> mTunnelHash;
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // mozilla_net_SpdySession31_h

@@ -13,34 +13,42 @@ namespace mozilla
 class MockMediaDecoderOwner : public MediaDecoderOwner
 {
 public:
-  virtual nsresult DispatchAsyncEvent(const nsAString& aName) MOZ_OVERRIDE
+  nsresult DispatchAsyncEvent(const nsAString& aName) override
   {
     return NS_OK;
   }
-  virtual void FireTimeUpdate(bool aPeriodic) MOZ_OVERRIDE {}
-  virtual bool GetPaused() MOZ_OVERRIDE { return false; }
-  virtual void MetadataLoaded(const MediaInfo* aInfo,
-                              nsAutoPtr<const MetadataTags> aTags) MOZ_OVERRIDE
+  void FireTimeUpdate(bool aPeriodic) override {}
+  bool GetPaused() override { return false; }
+  void MetadataLoaded(const MediaInfo* aInfo,
+                      nsAutoPtr<const MetadataTags> aTags) override
   {
   }
-  virtual void NetworkError() MOZ_OVERRIDE {}
-  virtual void DecodeError() MOZ_OVERRIDE {}
-  virtual void LoadAborted() MOZ_OVERRIDE {}
-  virtual void PlaybackEnded() MOZ_OVERRIDE {}
-  virtual void SeekStarted() MOZ_OVERRIDE {}
-  virtual void SeekCompleted() MOZ_OVERRIDE {}
-  virtual void DownloadSuspended() MOZ_OVERRIDE {}
-  virtual void DownloadResumed(bool aForceNetworkLoading) MOZ_OVERRIDE {}
-  virtual void NotifySuspendedByCache(bool aIsSuspended) MOZ_OVERRIDE {}
-  virtual void NotifyDecoderPrincipalChanged() MOZ_OVERRIDE {}
-  virtual void UpdateReadyStateForData(NextFrameStatus aNextFrame) MOZ_OVERRIDE
-  {
-  }
-  virtual VideoFrameContainer* GetVideoFrameContainer() MOZ_OVERRIDE
+  void NetworkError() override {}
+  void DecodeError() override {}
+  bool HasError() const override { return false; }
+  void LoadAborted() override {}
+  void PlaybackEnded() override {}
+  void SeekStarted() override {}
+  void SeekCompleted() override {}
+  void DownloadProgressed() override {}
+  void UpdateReadyState() override {}
+  void FirstFrameLoaded() override {}
+#ifdef MOZ_EME
+  void DispatchEncrypted(const nsTArray<uint8_t>& aInitData,
+                         const nsAString& aInitDataType) override {}
+#endif // MOZ_EME
+  bool IsActive() const override { return true; }
+  bool IsHidden() const override { return false; }
+  void DownloadSuspended() override {}
+  void DownloadResumed(bool aForceNetworkLoading) override {}
+  void NotifySuspendedByCache(bool aIsSuspended) override {}
+  void NotifyDecoderPrincipalChanged() override {}
+  VideoFrameContainer* GetVideoFrameContainer() override
   {
     return nullptr;
   }
-  virtual void ResetConnectionState() MOZ_OVERRIDE {}
+  void ResetConnectionState() override {}
+  void NotifyAudibleStateChanged(bool aAudible) override {}
 };
 }
 

@@ -2,15 +2,19 @@
  * This test checks that window activation state is set properly with multiple tabs.
  */
 
-let testPage = "data:text/html,<body><style>:-moz-window-inactive { background-color: red; }</style><div id='area'></div></body>";
+var testPage = "data:text/html,<body><style>:-moz-window-inactive { background-color: red; }</style><div id='area'></div></body>";
 
-let colorChangeNotifications = 0;
-let otherWindow;
+var colorChangeNotifications = 0;
+var otherWindow;
 
-let browser1, browser2;
+var browser1, browser2;
 
 function test() {
   waitForExplicitFinish();
+  waitForFocus(reallyRunTests);
+}
+
+function reallyRunTests() {
 
   let tab1 = gBrowser.addTab();
   let tab2 = gBrowser.addTab();
@@ -84,6 +88,14 @@ function test() {
     }
   });
 
+  window.messageManager.addMessageListener("Test:ActivateEvent", function(message) {
+    ok(message.data.ok, "Test:ActivateEvent");
+  });
+
+  window.messageManager.addMessageListener("Test:DeactivateEvent", function(message) {
+    ok(message.data.ok, "Test:DeactivateEvent");
+  });
+
   browser1.addEventListener("load", check, true);
   browser2.addEventListener("load", check, true);
   browser1.contentWindow.location = testPage;
@@ -131,6 +143,25 @@ function childFunction()
   content.addEventListener("focus", function () {
     sendAsyncMessage("Test:FocusReceived", { });
   }, false);
+
+  var windowGotActivate = false;
+  var windowGotDeactivate = false;
+  addEventListener("activate", function() {
+      sendAsyncMessage("Test:ActivateEvent", { ok: !windowGotActivate });
+      windowGotActivate = false;
+    });
+  
+  addEventListener("deactivate", function() {
+      sendAsyncMessage("Test:DeactivateEvent", { ok: !windowGotDeactivate });
+      windowGotDeactivate = false;
+    });
+  content.addEventListener("activate", function() {
+      windowGotActivate = true;;
+    });
+  
+  content.addEventListener("deactivate", function() {
+      windowGotDeactivate = true;
+    });
 
   content.setInterval(function () {
     if (!expectingResponse) {

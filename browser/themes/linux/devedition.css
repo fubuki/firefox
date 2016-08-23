@@ -4,7 +4,24 @@
 
 %include ../shared/devedition.inc.css
 
-.tab-close-button[selected]:not(:hover) {
+:root {
+  --forwardbutton-width: 29px;
+}
+
+:root[devtoolstheme="light"] {
+  --urlbar-dropmarker-url: url("chrome://browser/skin/devedition/urlbar-history-dropmarker.svg");
+  --urlbar-dropmarker-region: rect(0px, 11px, 14px, 0px);
+  --urlbar-dropmarker-hover-region: rect(0, 22px, 14px, 11px);
+  --urlbar-dropmarker-active-region: rect(0px, 33px, 14px, 22px);
+  --urlbar-dropmarker-2x-url: url("chrome://browser/skin/devedition/urlbar-history-dropmarker.svg");
+  --urlbar-dropmarker-2x-region: rect(0px, 11px, 14px, 0px);
+  --urlbar-dropmarker-hover-2x-region: rect(0, 22px, 14px, 11px);
+  --urlbar-dropmarker-active-2x-region: rect(0px, 33px, 14px, 22px);
+}
+
+:root[devtoolstheme="dark"] .findbar-closebutton:not(:hover),
+:root[devtoolstheme="dark"] #sidebar-header > .close-icon:not(:hover),
+.tab-close-button[visuallyselected]:not(:hover) {
   background-image: -moz-image-rect(url("chrome://global/skin/icons/close.svg"), 0, 80, 16, 64);
 }
 
@@ -27,13 +44,17 @@
 }
 
 /* Square back and forward buttons */
-#back-button:not(:-moz-lwtheme) > .toolbarbutton-icon,
-#forward-button:not(:-moz-lwtheme) > .toolbarbutton-icon {
+#back-button > .toolbarbutton-icon,
+#forward-button > .toolbarbutton-icon {
   margin: 0;
-  border: none;
-  padding: 2px 6px;
+  border: 1px solid var(--chrome-nav-bar-controls-border-color);
+  padding: 2px 5px;
   background: var(--chrome-nav-buttons-background);
   box-shadow: none !important;
+}
+
+#forward-button > .toolbarbutton-icon {
+  -moz-border-start: none;
 }
 
 /* Override a box shadow for disabled back button */
@@ -70,4 +91,16 @@
 /* Prevent double border below tabs toolbar */
 #TabsToolbar:not([collapsed="true"]) + #nav-bar {
   border-top-width: 0 !important;
+}
+
+/* Fix the bad-looking text-shadow in the sidebar header: */
+.sidebar-header,
+#sidebar-header {
+  text-shadow: none;
+}
+
+.ac-type-icon {
+  /* Left-align the type icon in awesomebar popup results with the icon in the
+     urlbar. */
+  -moz-margin-start: 11px;
 }

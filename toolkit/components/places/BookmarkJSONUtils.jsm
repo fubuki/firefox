@@ -14,7 +14,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/PlacesUtils.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
+Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesBackups",
@@ -40,7 +40,7 @@ function generateHash(aString) {
   stringStream.data = aString;
   cryptoHash.updateFromStream(stringStream, -1);
   // base64 allows the '/' char, but we can't use it for filenames.
-  return cryptoHash.finish(true).replace("/", "-", "g");
+  return cryptoHash.finish(true).replace(/\//g, "-");
 }
 
 this.BookmarkJSONUtils = Object.freeze({
@@ -188,40 +188,34 @@ BookmarkImporter.prototype = {
    * @resolves When the new bookmarks have been created.
    * @rejects JavaScript exception.
    */
-  importFromURL: function BI_importFromURL(aSpec) {
-    let deferred = Promise.defer();
-
-    let streamObserver = {
-      onStreamComplete: function (aLoader, aContext, aStatus, aLength,
-                                  aResult) {
-        let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"].
-                        createInstance(Ci.nsIScriptableUnicodeConverter);
-        converter.charset = "UTF-8";
-
-        try {
-          let jsonString = converter.convertFromByteArray(aResult,
-                                                          aResult.length);
-          deferred.resolve(this.importFromJSON(jsonString));
-        } catch (ex) {
-          Cu.reportError("Failed to import from URL: " + ex);
-          deferred.reject(ex);
-          throw ex;
+  importFromURL(spec) {
+    return new Promise((resolve, reject) => {
+      let streamObserver = {
+        onStreamComplete: (aLoader, aContext, aStatus, aLength, aResult) => {
+          let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"].
+                          createInstance(Ci.nsIScriptableUnicodeConverter);
+          converter.charset = "UTF-8";
+          try {
+            let jsonString = converter.convertFromByteArray(aResult,
+                                                            aResult.length);
+            resolve(this.importFromJSON(jsonString));
+          } catch (ex) {
+            Cu.reportError("Failed to import from URL: " + ex);
+            reject(ex);
+          }
         }
-      }.bind(this)
-    };
+      };
 
-    try {
-      let channel = Services.io.newChannelFromURI(NetUtil.newURI(aSpec));
-      let streamLoader = Cc["@mozilla.org/network/stream-loader;1"].
-                         createInstance(Ci.nsIStreamLoader);
-
+      let uri = NetUtil.newURI(spec);
+      let channel = NetUtil.newChannel({
+        uri: uri,
+        loadUsingSystemPrincipal: true
+      });
+      let streamLoader = Cc["@mozilla.org/network/stream-loader;1"]
+                           .createInstance(Ci.nsIStreamLoader);
       streamLoader.init(streamObserver);
-      channel.asyncOpen(streamLoader, channel);
-    } catch (ex) {
-      deferred.reject(ex);
-    }
-
-    return deferred.promise;
+      channel.asyncOpen2(streamLoader);
+    });
   },
 
   /**
@@ -249,8 +243,9 @@ BookmarkImporter.prototype = {
    * @param aString
    *        JSON string of serialized bookmark data.
    */
-  importFromJSON: function BI_importFromJSON(aString) {
-    let deferred = Promise.defer();
+  importFromJSON: Task.async(function* (aString) {
+    this._importPromises = [];
+    let deferred = PromiseUtils.defer();
     let nodes =
       PlacesUtils.unwrapNodes(aString, PlacesUtils.TYPE_X_MOZ_PLACE_CONTAINER);
 
@@ -260,8 +255,11 @@ BookmarkImporter.prototype = {
     } else {
       // Ensure tag folder gets processed last
       nodes[0].children.sort(function sortRoots(aNode, bNode) {
-        return (aNode.root && aNode.root == "tagsFolder") ? 1 :
-               (bNode.root && bNode.root == "tagsFolder") ? -1 : 0;
+        if (aNode.root && aNode.root == "tagsFolder")
+          return 1;
+        if (bNode.root && bNode.root == "tagsFolder")
+          return -1;
+        return 0;
       });
 
       let batch = {
@@ -280,7 +278,7 @@ BookmarkImporter.prototype = {
             let childIds = [];
             for (let i = 0; i < root.childCount; i++) {
               let childId = root.getChild(i).itemId;
-              if (excludeItems.indexOf(childId) == -1 &&
+              if (!excludeItems.includes(childId) &&
                   childId != PlacesUtils.tagsFolderId) {
                 childIds.push(childId);
               }
@@ -353,8 +351,15 @@ BookmarkImporter.prototype = {
 
       PlacesUtils.bookmarks.runInBatchMode(batch, null);
     }
-    return deferred.promise;
-  },
+    yield deferred.promise;
+    // TODO (bug 1095426) once converted to the new bookmarks API, methods will
+    // yield, so this hack should not be needed anymore.
+    try {
+      yield Promise.all(this._importPromises);
+    } finally {
+      delete this._importPromises;
+    }
+  }),
 
   /**
    * Takes a JSON-serialized node and inserts it into the db.
@@ -408,7 +413,7 @@ BookmarkImporter.prototype = {
           });
 
           if (feedURI) {
-            PlacesUtils.livemarks.addLivemark({
+            let lmPromise = PlacesUtils.livemarks.addLivemark({
               title: aData.title,
               feedURI: feedURI,
               parentId: aContainer,
@@ -421,7 +426,8 @@ BookmarkImporter.prototype = {
                 PlacesUtils.bookmarks.setItemDateAdded(id, aData.dateAdded);
               if (aData.annos && aData.annos.length)
                 PlacesUtils.setAnnotationsForItem(id, aData.annos);
-            }, Cu.reportError);
+            });
+            this._importPromises.push(lmPromise);
           }
         } else {
           id = PlacesUtils.bookmarks.createFolder(
@@ -445,13 +451,29 @@ BookmarkImporter.prototype = {
       case PlacesUtils.TYPE_X_MOZ_PLACE:
         id = PlacesUtils.bookmarks.insertBookmark(
                aContainer, NetUtil.newURI(aData.uri), aIndex, aData.title);
-        if (aData.keyword)
-          PlacesUtils.bookmarks.setKeywordForBookmark(id, aData.keyword);
+        if (aData.keyword) {
+          // POST data could be set in 2 ways:
+          // 1. new backups have a postData property
+          // 2. old backups have an item annotation
+          let postDataAnno = aData.annos &&
+                             aData.annos.find(anno => anno.name == PlacesUtils.POST_DATA_ANNO);
+          let postData = aData.postData || (postDataAnno && postDataAnno.value);
+          let kwPromise = PlacesUtils.keywords.insert({ keyword: aData.keyword,
+                                                        url: aData.uri,
+                                                        postData });
+          this._importPromises.push(kwPromise);
+        }
         if (aData.tags) {
-          // TODO (bug 967196) the tagging service should trim by itself.
-          let tags = aData.tags.split(",").map(tag => tag.trim());
-          if (tags.length)
-            PlacesUtils.tagging.tagURI(NetUtil.newURI(aData.uri), tags);
+          let tags = aData.tags.split(",").filter(aTag =>
+            aTag.length <= Ci.nsITaggingService.MAX_TAG_LENGTH);
+          if (tags.length) {
+            try {
+              PlacesUtils.tagging.tagURI(NetUtil.newURI(aData.uri), tags);
+            } catch (ex) {
+              // Invalid tag child, skip it.
+              Cu.reportError(`Unable to set tags "${tags.join(", ")}" for ${aData.uri}: ${ex}`);
+            }
+          }
         }
         if (aData.charset) {
           PlacesUtils.annotations.setPageAnnotation(
@@ -465,10 +487,12 @@ BookmarkImporter.prototype = {
             // Create a fake faviconURI to use (FIXME: bug 523932)
             let faviconURI = NetUtil.newURI("fake-favicon-uri:" + aData.uri);
             PlacesUtils.favicons.replaceFaviconDataFromDataURL(
-              faviconURI, aData.icon, 0);
+              faviconURI, aData.icon, 0,
+              Services.scriptSecurityManager.getSystemPrincipal());
             PlacesUtils.favicons.setAndFetchFaviconForPage(
               NetUtil.newURI(aData.uri), faviconURI, false,
-              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE);
+              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, null,
+              Services.scriptSecurityManager.getSystemPrincipal());
           } catch (ex) {
             Components.utils.reportError("Failed to import favicon data:" + ex);
           }
@@ -477,7 +501,8 @@ BookmarkImporter.prototype = {
           try {
             PlacesUtils.favicons.setAndFetchFaviconForPage(
               NetUtil.newURI(aData.uri), NetUtil.newURI(aData.iconUri), false,
-              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE);
+              PlacesUtils.favicons.FAVICON_LOAD_NON_PRIVATE, null,
+              Services.scriptSecurityManager.getSystemPrincipal());
           } catch (ex) {
             Components.utils.reportError("Failed to import favicon URI:" + ex);
           }

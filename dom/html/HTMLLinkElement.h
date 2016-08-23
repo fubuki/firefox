@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,10 +19,10 @@ class EventChainPostVisitor;
 class EventChainPreVisitor;
 namespace dom {
 
-class HTMLLinkElement MOZ_FINAL : public nsGenericHTMLElement,
-                                  public nsIDOMHTMLLinkElement,
-                                  public nsStyleLinkElement,
-                                  public Link
+class HTMLLinkElement final : public nsGenericHTMLElement,
+                              public nsIDOMHTMLLinkElement,
+                              public nsStyleLinkElement,
+                              public Link
 {
 public:
   explicit HTMLLinkElement(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo);
@@ -45,42 +46,42 @@ public:
   void UpdateImport();
 
   // nsIDOMEventTarget
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
-                     EventChainPostVisitor& aVisitor) MOZ_OVERRIDE;
+                     EventChainPostVisitor& aVisitor) override;
 
   // nsINode
-  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
-  virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const override;
+  virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // nsIContent
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
-                              bool aCompileEventHandlers) MOZ_OVERRIDE;
+                              bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep = true,
-                              bool aNullParent = true) MOZ_OVERRIDE;
-  nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                   const nsAString& aValue, bool aNotify)
-  {
-    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
-  }
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) MOZ_OVERRIDE;
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) MOZ_OVERRIDE;
-  virtual bool IsLink(nsIURI** aURI) const MOZ_OVERRIDE;
-  virtual already_AddRefed<nsIURI> GetHrefURI() const MOZ_OVERRIDE;
+                              bool aNullParent = true) override;
+  virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+                                 nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+                                const nsAttrValue* aValue,
+                                bool aNotify) override;
+  virtual bool IsLink(nsIURI** aURI) const override;
+  virtual already_AddRefed<nsIURI> GetHrefURI() const override;
 
   // Element
   virtual bool ParseAttribute(int32_t aNamespaceID,
                               nsIAtom* aAttribute,
                               const nsAString& aValue,
-                              nsAttrValue& aResult) MOZ_OVERRIDE;
-  virtual void GetLinkTarget(nsAString& aTarget) MOZ_OVERRIDE;
-  virtual EventStates IntrinsicState() const MOZ_OVERRIDE;
+                              nsAttrValue& aResult) override;
+  virtual void GetLinkTarget(nsAString& aTarget) override;
+  virtual EventStates IntrinsicState() const override;
 
   void CreateAndDispatchEvent(nsIDocument* aDoc, const nsAString& aEventName);
+
+  virtual void OnDNSPrefetchDeferred() override;
+  virtual void OnDNSPrefetchRequested() override;
+  virtual bool HasDeferredDNSPrefetchRequest() override;
 
   // WebIDL
   bool Disabled();
@@ -117,7 +118,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::hreflang, aHreflang, aRv);
   }
-  nsDOMSettableTokenList* Sizes()
+  nsDOMTokenList* Sizes()
   {
     return GetTokenList(nsGkAtoms::sizes);
   }
@@ -141,31 +142,40 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::target, aTarget, aRv);
   }
+  void GetIntegrity(nsAString& aIntegrity) const
+  {
+    GetHTMLAttr(nsGkAtoms::integrity, aIntegrity);
+  }
+  void SetIntegrity(const nsAString& aIntegrity, ErrorResult& aRv)
+  {
+    SetHTMLAttr(nsGkAtoms::integrity, aIntegrity, aRv);
+  }
 
   already_AddRefed<nsIDocument> GetImport();
   already_AddRefed<ImportLoader> GetImportLoader()
   {
-    return nsRefPtr<ImportLoader>(mImportLoader).forget();
+    return RefPtr<ImportLoader>(mImportLoader).forget();
   }
 
+  virtual CORSMode GetCORSMode() const override;
 protected:
   virtual ~HTMLLinkElement();
 
   // nsStyleLinkElement
-  virtual already_AddRefed<nsIURI> GetStyleSheetURL(bool* aIsInline) MOZ_OVERRIDE;
+  virtual already_AddRefed<nsIURI> GetStyleSheetURL(bool* aIsInline) override;
   virtual void GetStyleSheetInfo(nsAString& aTitle,
                                  nsAString& aType,
                                  nsAString& aMedia,
                                  bool* aIsScoped,
-                                 bool* aIsAlternate) MOZ_OVERRIDE;
-  virtual CORSMode GetCORSMode() const MOZ_OVERRIDE;
+                                 bool* aIsAlternate) override;
 protected:
   // nsGenericHTMLElement
-  virtual void GetItemValueText(nsAString& text) MOZ_OVERRIDE;
-  virtual void SetItemValueText(const nsAString& text) MOZ_OVERRIDE;
-  nsRefPtr<nsDOMTokenList > mRelList;
+  virtual void GetItemValueText(DOMString& text) override;
+  virtual void SetItemValueText(const nsAString& text) override;
+
+  RefPtr<nsDOMTokenList > mRelList;
 private:
-  nsRefPtr<ImportLoader> mImportLoader;
+  RefPtr<ImportLoader> mImportLoader;
 };
 
 } // namespace dom

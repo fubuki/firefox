@@ -15,7 +15,7 @@
 namespace mozilla {
 namespace gmp {
 
-class GMPChild;
+class GMPContentChild;
 
 class GMPDecryptorChild : public GMPDecryptorCallback
                         , public GMPDecryptorHost
@@ -24,100 +24,106 @@ class GMPDecryptorChild : public GMPDecryptorCallback
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GMPDecryptorChild);
 
-  explicit GMPDecryptorChild(GMPChild* aPlugin,
+  explicit GMPDecryptorChild(GMPContentChild* aPlugin,
                              const nsTArray<uint8_t>& aPluginVoucher,
                              const nsTArray<uint8_t>& aSandboxVoucher);
 
   void Init(GMPDecryptor* aSession);
 
   // GMPDecryptorCallback
-  virtual void SetSessionId(uint32_t aCreateSessionToken,
-                            const char* aSessionId,
-                            uint32_t aSessionIdLength) MOZ_OVERRIDE;
-  virtual void ResolveLoadSessionPromise(uint32_t aPromiseId,
-                                         bool aSuccess) MOZ_OVERRIDE;
-  virtual void ResolvePromise(uint32_t aPromiseId) MOZ_OVERRIDE;
+  void SetSessionId(uint32_t aCreateSessionToken,
+                    const char* aSessionId,
+                    uint32_t aSessionIdLength) override;
+  void ResolveLoadSessionPromise(uint32_t aPromiseId,
+                                 bool aSuccess) override;
+  void ResolvePromise(uint32_t aPromiseId) override;
 
-  virtual void RejectPromise(uint32_t aPromiseId,
-                             GMPDOMException aException,
-                             const char* aMessage,
-                             uint32_t aMessageLength) MOZ_OVERRIDE;
+  void RejectPromise(uint32_t aPromiseId,
+                     GMPDOMException aException,
+                     const char* aMessage,
+                     uint32_t aMessageLength) override;
 
-  virtual void SessionMessage(const char* aSessionId,
-                              uint32_t aSessionIdLength,
-                              GMPSessionMessageType aMessageType,
-                              const uint8_t* aMessage,
-                              uint32_t aMessageLength) MOZ_OVERRIDE;
+  void SessionMessage(const char* aSessionId,
+                      uint32_t aSessionIdLength,
+                      GMPSessionMessageType aMessageType,
+                      const uint8_t* aMessage,
+                      uint32_t aMessageLength) override;
 
-  virtual void ExpirationChange(const char* aSessionId,
-                                 uint32_t aSessionIdLength,
-                                 GMPTimestamp aExpiryTime) MOZ_OVERRIDE;
+  void ExpirationChange(const char* aSessionId,
+                        uint32_t aSessionIdLength,
+                        GMPTimestamp aExpiryTime) override;
 
-   virtual void SessionClosed(const char* aSessionId,
-                             uint32_t aSessionIdLength) MOZ_OVERRIDE;
+  void SessionClosed(const char* aSessionId,
+                     uint32_t aSessionIdLength) override;
 
-  virtual void SessionError(const char* aSessionId,
-                            uint32_t aSessionIdLength,
-                            GMPDOMException aException,
-                            uint32_t aSystemCode,
-                            const char* aMessage,
-                            uint32_t aMessageLength) MOZ_OVERRIDE;
+  void SessionError(const char* aSessionId,
+                    uint32_t aSessionIdLength,
+                    GMPDOMException aException,
+                    uint32_t aSystemCode,
+                    const char* aMessage,
+                    uint32_t aMessageLength) override;
 
-  virtual void KeyStatusChanged(const char* aSessionId,
-                                uint32_t aSessionIdLength,
-                                const uint8_t* aKeyId,
-                                uint32_t aKeyIdLength,
-                                GMPMediaKeyStatus aStatus) MOZ_OVERRIDE;
+  void KeyStatusChanged(const char* aSessionId,
+                        uint32_t aSessionIdLength,
+                        const uint8_t* aKeyId,
+                        uint32_t aKeyIdLength,
+                        GMPMediaKeyStatus aStatus) override;
 
-  virtual void SetCapabilities(uint64_t aCaps) MOZ_OVERRIDE;
+  void SetCapabilities(uint64_t aCaps) override;
 
-  virtual void Decrypted(GMPBuffer* aBuffer, GMPErr aResult) MOZ_OVERRIDE;
+  void Decrypted(GMPBuffer* aBuffer, GMPErr aResult) override;
 
   // GMPDecryptorHost
-  virtual void GetSandboxVoucher(const uint8_t** aVoucher,
-                                 uint32_t* aVoucherLength) MOZ_OVERRIDE;
+  void GetSandboxVoucher(const uint8_t** aVoucher,
+                         uint32_t* aVoucherLength) override;
 
-  virtual void GetPluginVoucher(const uint8_t** aVoucher,
-                                uint32_t* aVoucherLength) MOZ_OVERRIDE;
+  void GetPluginVoucher(const uint8_t** aVoucher,
+                        uint32_t* aVoucherLength) override;
 private:
   ~GMPDecryptorChild();
 
   // GMPDecryptorChild
-  virtual bool RecvInit() MOZ_OVERRIDE;
+  bool RecvInit() override;
 
-  virtual bool RecvCreateSession(const uint32_t& aCreateSessionToken,
-                                 const uint32_t& aPromiseId,
-                                 const nsCString& aInitDataType,
-                                 const nsTArray<uint8_t>& aInitData,
-                                 const GMPSessionType& aSessionType) MOZ_OVERRIDE;
+  bool RecvCreateSession(const uint32_t& aCreateSessionToken,
+                         const uint32_t& aPromiseId,
+                         const nsCString& aInitDataType,
+                         InfallibleTArray<uint8_t>&& aInitData,
+                         const GMPSessionType& aSessionType) override;
 
-  virtual bool RecvLoadSession(const uint32_t& aPromiseId,
-                               const nsCString& aSessionId) MOZ_OVERRIDE;
+  bool RecvLoadSession(const uint32_t& aPromiseId,
+                       const nsCString& aSessionId) override;
 
-  virtual bool RecvUpdateSession(const uint32_t& aPromiseId,
-                                 const nsCString& aSessionId,
-                                 const nsTArray<uint8_t>& aResponse) MOZ_OVERRIDE;
+  bool RecvUpdateSession(const uint32_t& aPromiseId,
+                         const nsCString& aSessionId,
+                         InfallibleTArray<uint8_t>&& aResponse) override;
 
-  virtual bool RecvCloseSession(const uint32_t& aPromiseId,
-                                const nsCString& aSessionId) MOZ_OVERRIDE;
+  bool RecvCloseSession(const uint32_t& aPromiseId,
+                        const nsCString& aSessionId) override;
 
-  virtual bool RecvRemoveSession(const uint32_t& aPromiseId,
-                                 const nsCString& aSessionId) MOZ_OVERRIDE;
+  bool RecvRemoveSession(const uint32_t& aPromiseId,
+                         const nsCString& aSessionId) override;
 
-  virtual bool RecvDecrypt(const uint32_t& aId,
-                           const nsTArray<uint8_t>& aBuffer,
-                           const GMPDecryptionData& aMetadata) MOZ_OVERRIDE;
+  bool RecvDecrypt(const uint32_t& aId,
+                   InfallibleTArray<uint8_t>&& aBuffer,
+                   const GMPDecryptionData& aMetadata) override;
 
   // Resolve/reject promise on completion.
-  virtual bool RecvSetServerCertificate(const uint32_t& aPromiseId,
-                                        const nsTArray<uint8_t>& aServerCert) MOZ_OVERRIDE;
+  bool RecvSetServerCertificate(const uint32_t& aPromiseId,
+                                InfallibleTArray<uint8_t>&& aServerCert) override;
 
-  virtual bool RecvDecryptingComplete() MOZ_OVERRIDE;
+  bool RecvDecryptingComplete() override;
+
+  template <typename MethodType, typename... ParamType>
+  void CallMethod(MethodType, ParamType&&...);
+
+  template<typename MethodType, typename... ParamType>
+  void CallOnGMPThread(MethodType, ParamType&&...);
 
   // GMP's GMPDecryptor implementation.
   // Only call into this on the (GMP process) main thread.
   GMPDecryptor* mSession;
-  GMPChild* mPlugin;
+  GMPContentChild* mPlugin;
 
   // Reference to the vouchers owned by the GMPChild.
   const nsTArray<uint8_t>& mPluginVoucher;

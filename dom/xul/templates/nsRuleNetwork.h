@@ -34,12 +34,10 @@
 #include "nsIAtom.h"
 #include "nsIDOMNode.h"
 #include "plhash.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsIRDFNode.h"
 
-class nsIRDFResource;
 class nsXULTemplateResultSetRDF;
-class nsXULTemplateQueryProcessorRDF;
 
 //----------------------------------------------------------------------
 
@@ -803,7 +801,7 @@ public:
      * aTakenInstantiations will be set properly even if an error occurs.
      */
     virtual nsresult Propagate(InstantiationSet& aInstantiations,
-                               bool aIsUpdate, bool& aTakenInstantiations) MOZ_OVERRIDE;
+                               bool aIsUpdate, bool& aTakenInstantiations) override;
 
     /**
      * This is called by a child node on its parent to allow the

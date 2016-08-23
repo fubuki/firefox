@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,7 +24,7 @@ using mozilla::ErrorResult;
  * CellBroadcast::Listener Implementation.
  */
 
-class CellBroadcast::Listener MOZ_FINAL : public nsICellBroadcastListener
+class CellBroadcast::Listener final : public nsICellBroadcastListener
 {
 private:
   CellBroadcast* mCellBroadcast;
@@ -59,7 +60,7 @@ NS_IMPL_ISUPPORTS(CellBroadcast::Listener, nsICellBroadcastListener)
 
 // static
 already_AddRefed<CellBroadcast>
-CellBroadcast::Create(nsPIDOMWindow* aWindow, ErrorResult& aRv)
+CellBroadcast::Create(nsPIDOMWindowInner* aWindow, ErrorResult& aRv)
 {
   MOZ_ASSERT(aWindow);
   MOZ_ASSERT(aWindow->IsInnerWindow());
@@ -71,12 +72,12 @@ CellBroadcast::Create(nsPIDOMWindow* aWindow, ErrorResult& aRv)
     return nullptr;
   }
 
-  nsRefPtr<CellBroadcast> cb = new CellBroadcast(aWindow, service);
+  RefPtr<CellBroadcast> cb = new CellBroadcast(aWindow, service);
   return cb.forget();
 }
 
-CellBroadcast::CellBroadcast(nsPIDOMWindow *aWindow,
-                             nsICellBroadcastService *aService)
+CellBroadcast::CellBroadcast(nsPIDOMWindowInner* aWindow,
+                             nsICellBroadcastService* aService)
   : DOMEventTargetHelper(aWindow)
 {
   mListener = new Listener(this);
@@ -102,9 +103,9 @@ CellBroadcast::~CellBroadcast()
 NS_IMPL_ISUPPORTS_INHERITED0(CellBroadcast, DOMEventTargetHelper)
 
 JSObject*
-CellBroadcast::WrapObject(JSContext* aCx)
+CellBroadcast::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozCellBroadcastBinding::Wrap(aCx, this);
+  return MozCellBroadcastBinding::Wrap(aCx, this, aGivenProto);
 }
 
 // Forwarded nsICellBroadcastListener methods
@@ -141,7 +142,7 @@ CellBroadcast::NotifyMessageReceived(uint32_t aServiceId,
                                            aEtwsEmergencyUserAlert,
                                            aEtwsPopup);
 
-  nsRefPtr<MozCellBroadcastEvent> event =
+  RefPtr<MozCellBroadcastEvent> event =
     MozCellBroadcastEvent::Constructor(this, NS_LITERAL_STRING("received"), init);
   return DispatchTrustedEvent(event);
 }
@@ -151,7 +152,7 @@ NS_CreateCellBroadcastService()
 {
   nsCOMPtr<nsICellBroadcastService> service;
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     service = new mozilla::dom::cellbroadcast::CellBroadcastIPCService();
 #if defined(MOZ_WIDGET_GONK) && defined(MOZ_B2G_RIL)
   } else {

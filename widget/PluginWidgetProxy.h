@@ -18,10 +18,10 @@
 namespace mozilla {
 namespace plugins {
 class PluginWidgetChild;
-}
+} // namespace plugins
 namespace widget {
 
-class PluginWidgetProxy MOZ_FINAL : public PuppetWidget
+class PluginWidgetProxy final : public PuppetWidget
 {
 public:
   explicit PluginWidgetProxy(dom::TabChild* aTabChild,
@@ -34,27 +34,22 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   // nsIWidget
+  using PuppetWidget::Create; // for Create signature not overridden here
   NS_IMETHOD Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
-                    const nsIntRect& aRect, nsDeviceContext* aContext,
-                    nsWidgetInitData* aInitData = nullptr) MOZ_OVERRIDE;
-  NS_IMETHOD Destroy() MOZ_OVERRIDE;
-  NS_IMETHOD Show(bool aState) MOZ_OVERRIDE;
-  NS_IMETHOD Invalidate(const nsIntRect& aRect) MOZ_OVERRIDE;
-  NS_IMETHOD Resize(double aWidth, double aHeight, bool aRepaint) MOZ_OVERRIDE;
-  NS_IMETHOD Resize(double aX, double aY, double aWidth,
-                    double aHeight, bool aRepaint)  MOZ_OVERRIDE;
-  NS_IMETHOD Move(double aX, double aY) MOZ_OVERRIDE;
-  NS_IMETHOD SetFocus(bool aRaise = false) MOZ_OVERRIDE;
-  NS_IMETHOD SetParent(nsIWidget* aNewParent) MOZ_OVERRIDE;
+                    const LayoutDeviceIntRect& aRect,
+                    nsWidgetInitData* aInitData = nullptr) override;
+  NS_IMETHOD Destroy() override;
+  NS_IMETHOD SetFocus(bool aRaise = false) override;
+  NS_IMETHOD SetParent(nsIWidget* aNewParent) override;
 
-  virtual nsIWidget* GetParent(void) MOZ_OVERRIDE;
-  virtual void* GetNativeData(uint32_t aDataType) MOZ_OVERRIDE;
-  virtual nsresult SetWindowClipRegion(const nsTArray<nsIntRect>& aRects,
-                                       bool aIntersectWithExisting) MOZ_OVERRIDE;
-
-  // nsBaseWidget
-  virtual nsTransparencyMode GetTransparencyMode() MOZ_OVERRIDE
+  virtual nsIWidget* GetParent(void) override;
+  virtual void* GetNativeData(uint32_t aDataType) override;
+#if defined(XP_WIN)
+  void SetNativeData(uint32_t aDataType, uintptr_t aVal) override;
+#endif
+  virtual nsTransparencyMode GetTransparencyMode() override
   { return eTransparencyOpaque; }
+  virtual void GetWindowClipRegion(nsTArray<LayoutDeviceIntRect>* aRects) override;
 
 public:
   /**
@@ -72,8 +67,10 @@ private:
   // PuppetWidget does not implement parent apis, but we need
   // them for plugin widgets.
   nsCOMPtr<nsIWidget> mParent;
+  uintptr_t mCachedPluginPort;
 };
 
-}  // namespace widget
-}  // namespace mozilla
+} // namespace widget
+} // namespace mozilla
+
 #endif

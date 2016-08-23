@@ -459,6 +459,21 @@ SECStatus PK11_SetPrivateKeyNickname(SECKEYPrivateKey *privKey,
 SECStatus PK11_SetPublicKeyNickname(SECKEYPublicKey *pubKey, 
 							const char *nickname);
 
+/*
+ * Using __PK11_SetCertificateNickname is *DANGEROUS*.
+ *
+ * The API will update the NSS database, but it *will NOT* update the in-memory data.
+ * As a result, after calling this API, there will be INCONSISTENCY between
+ * in-memory data and the database.
+ *
+ * Use of the API should be limited to short-lived tools, which will exit immediately
+ * after using this API.
+ *
+ * If you ignore this warning, your process is TAINTED and will most likely misbehave.
+ */
+SECStatus __PK11_SetCertificateNickname(CERTCertificate *cert,
+                                      const char *nickname);
+
 /* size to hold key in bytes */
 unsigned int PK11_GetKeyLength(PK11SymKey *key);
 /* size of actual secret parts of key in bits */
@@ -694,12 +709,20 @@ int PK11_SignatureLen(SECKEYPrivateKey *key);
 PK11SlotInfo * PK11_GetSlotFromPrivateKey(SECKEYPrivateKey *key);
 SECStatus PK11_Sign(SECKEYPrivateKey *key, SECItem *sig,
 		    const SECItem *hash);
+SECStatus PK11_SignWithMechanism(SECKEYPrivateKey *key,
+                                 CK_MECHANISM_TYPE mechanism,
+                                 const SECItem *param, SECItem *sig,
+                                 const SECItem *hash);
 SECStatus PK11_SignWithSymKey(PK11SymKey *symKey, CK_MECHANISM_TYPE mechanism,
 		    SECItem *param, SECItem *sig, const SECItem *data);
 SECStatus PK11_VerifyRecover(SECKEYPublicKey *key, const SECItem *sig,
 			     SECItem *dsig, void * wincx);
 SECStatus PK11_Verify(SECKEYPublicKey *key, const SECItem *sig,
 		      const SECItem *hash, void *wincx);
+SECStatus PK11_VerifyWithMechanism(SECKEYPublicKey *key,
+                                   CK_MECHANISM_TYPE mechanism,
+                                   const SECItem *param, const SECItem *sig,
+                                   const SECItem *hash, void *wincx);
 
 
 

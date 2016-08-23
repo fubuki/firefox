@@ -27,7 +27,7 @@ public:
   /**
    * Gets the raw destination of this axis at this moment.
    */
-  double GetDestination();
+  double GetDestination() const;
 
   /**
    * Sets the raw destination of this axis at this moment.
@@ -38,7 +38,7 @@ public:
    * Returns true when the position is close to the destination and the
    * velocity is low.
    */
-  bool IsFinished();
+  bool IsFinished(double aSmallestVisibleIncrement);
 
 protected:
   virtual double Acceleration(const State &aState);
@@ -80,7 +80,7 @@ private:
 };
 
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif

@@ -85,16 +85,11 @@ NSSDialogs.prototype = {
       }
 
       aTrust.value = Ci.nsIX509CertDB.UNTRUSTED;
-      if (response.trustSSL == "true") aTrust.value |= Ci.nsIX509CertDB.TRUSTED_SSL;
-      if (response.trustEmail == "true") aTrust.value |= Ci.nsIX509CertDB.TRUSTED_EMAIL;
-      if (response.trustSign == "true") aTrust.value |= Ci.nsIX509CertDB.TRUSTED_OBJSIGN;
+      if (response.trustSSL) aTrust.value |= Ci.nsIX509CertDB.TRUSTED_SSL;
+      if (response.trustEmail) aTrust.value |= Ci.nsIX509CertDB.TRUSTED_EMAIL;
+      if (response.trustSign) aTrust.value |= Ci.nsIX509CertDB.TRUSTED_OBJSIGN;
       return true;
     }
-  },
-
-  notifyCACertExists: function(aCtx) {
-    let p = this.getPrompt(this.getString("caCertExists.title"), this.getString("caCertExists.message"));
-    this.showPrompt(p);
   },
 
   setPKCS12FilePassword: function(aCtx, aPassword) {

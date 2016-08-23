@@ -8,11 +8,13 @@
 
 #include "2D.h"
 
+#include "mozilla/UniquePtr.h"
+
 namespace mozilla {
 namespace gfx {
 
 void
-ConvertBGRXToBGRA(uint8_t* aData, const IntSize &aSize, int32_t aStride);
+ConvertBGRXToBGRA(uint8_t* aData, const IntSize &aSize, const int32_t aStride);
 
 /**
  * Copy the pixel data from aSrc and pack it into aDst. aSrcSize, aSrcStride
@@ -25,11 +27,9 @@ CopySurfaceDataToPackedArray(uint8_t* aSrc, uint8_t* aDst, IntSize aSrcSize,
                              int32_t aSrcStride, int32_t aBytesPerPixel);
 
 /**
- * Convert aSurface to a packed buffer in BGRA format. The pixel data is
- * returned in a buffer allocated with new uint8_t[]. The caller then has
- * ownership of the buffer and is responsible for delete[]'ing it.
+ * Convert aSurface to a packed buffer in BGRA format.
  */
-uint8_t*
+UniquePtr<uint8_t[]>
 SurfaceToPackedBGRA(DataSourceSurface *aSurface);
 
 /**
@@ -83,14 +83,16 @@ CopyRect(DataSourceSurface* aSrc, DataSourceSurface* aDest,
  *
  * @return a dss allocated by Factory that contains a copy a aSource.
  */
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 CreateDataSourceSurfaceByCloning(DataSourceSurface* aSource);
 
 /**
  * Return the byte at aPoint.
  */
 uint8_t*
-DataAtOffset(DataSourceSurface* aSurface, IntPoint aPoint);
+DataAtOffset(DataSourceSurface* aSurface,
+             const DataSourceSurface::MappedSurface* aMap,
+             IntPoint aPoint);
 
 /**
  * Check if aPoint is contained by the surface.
@@ -100,7 +102,7 @@ DataAtOffset(DataSourceSurface* aSurface, IntPoint aPoint);
 bool
 SurfaceContainsPoint(SourceSurface* aSurface, const IntPoint& aPoint);
 
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 #endif // _MOZILLA_GFX_DATASURFACEHELPERS_H

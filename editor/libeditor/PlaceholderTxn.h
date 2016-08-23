@@ -15,13 +15,11 @@
 #include "nsWeakReference.h"
 #include "nsAutoPtr.h"
 
-class nsHTMLEditor;
-
 namespace mozilla {
 namespace dom {
 class IMETextTxn;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 /**
  * An aggregate transaction that knows how to absorb all subsequent
@@ -29,14 +27,14 @@ class IMETextTxn;
  * But it absorbs other transactions via merge, and can undo/redo the
  * transactions it has absorbed.
  */
- 
-class PlaceholderTxn : public EditAggregateTxn, 
-                       public nsIAbsorbingTransaction, 
+
+class PlaceholderTxn : public EditAggregateTxn,
+                       public nsIAbsorbingTransaction,
                        public nsSupportsWeakReference
 {
 public:
-  NS_DECL_ISUPPORTS_INHERITED  
-  
+  NS_DECL_ISUPPORTS_INHERITED
+
   PlaceholderTxn();
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PlaceholderTxn, EditAggregateTxn)
@@ -44,23 +42,23 @@ public:
 
   NS_DECL_EDITTXN
 
-  NS_IMETHOD RedoTransaction() MOZ_OVERRIDE;
-  NS_IMETHOD Merge(nsITransaction *aTransaction, bool *aDidMerge) MOZ_OVERRIDE;
+  NS_IMETHOD RedoTransaction() override;
+  NS_IMETHOD Merge(nsITransaction *aTransaction, bool *aDidMerge) override;
 
 // ------------ nsIAbsorbingTransaction -----------------------
 
   NS_IMETHOD Init(nsIAtom* aName, nsSelectionState* aSelState,
-                  nsEditor* aEditor) MOZ_OVERRIDE;
-  
-  NS_IMETHOD GetTxnName(nsIAtom **aName) MOZ_OVERRIDE;
-  
-  NS_IMETHOD StartSelectionEquals(nsSelectionState *aSelState, bool *aResult) MOZ_OVERRIDE;
+                  nsEditor* aEditor) override;
 
-  NS_IMETHOD EndPlaceHolderBatch() MOZ_OVERRIDE;
+  NS_IMETHOD GetTxnName(nsIAtom **aName) override;
 
-  NS_IMETHOD ForwardEndBatchTo(nsIAbsorbingTransaction *aForwardingAddress) MOZ_OVERRIDE;
+  NS_IMETHOD StartSelectionEquals(nsSelectionState *aSelState, bool *aResult) override;
 
-  NS_IMETHOD Commit() MOZ_OVERRIDE;
+  NS_IMETHOD EndPlaceHolderBatch() override;
+
+  NS_IMETHOD ForwardEndBatchTo(nsIAbsorbingTransaction *aForwardingAddress) override;
+
+  NS_IMETHOD Commit() override;
 
   nsresult RememberEndingSelection();
 
@@ -73,7 +71,7 @@ protected:
   mozilla::dom::IMETextTxn *mIMETextTxn;      // first IME txn in this placeholder - used for IME merging
                                 // non-owning for now - can't nsCOMPtr it due to broken transaction interfaces
   bool        mCommitted;       // do we stop auto absorbing any matching placeholder txns?
-  // these next two members store the state of the selection in a safe way. 
+  // these next two members store the state of the selection in a safe way.
   // selection at the start of the txn is stored, as is the selection at the end.
   // This is so that UndoTransaction() and RedoTransaction() can restore the
   // selection properly.

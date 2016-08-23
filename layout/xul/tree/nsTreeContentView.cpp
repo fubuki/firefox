@@ -21,7 +21,7 @@
 using namespace mozilla;
 
 #define NS_ENSURE_NATIVE_COLUMN(_col)                                \
-  nsRefPtr<nsTreeColumn> col = nsTreeBodyFrame::GetColumnImpl(_col); \
+  RefPtr<nsTreeColumn> col = nsTreeBodyFrame::GetColumnImpl(_col); \
   if (!col) {                                                        \
     return NS_ERROR_INVALID_ARG;                                     \
   }
@@ -148,7 +148,7 @@ bool
 nsTreeContentView::CanTrustTreeSelection(nsISupports* aValue)
 {
   // Untrusted content is only allowed to specify known-good views
-  if (nsContentUtils::IsCallerChrome())
+  if (nsContentUtils::LegacyIsCallerChromeOrNativeCode())
     return true;
   nsCOMPtr<nsINativeTreeSelection> nativeTreeSel = do_QueryInterface(aValue);
   return nativeTreeSel && NS_SUCCEEDED(nativeTreeSel->EnsureNative());
@@ -171,7 +171,7 @@ nsTreeContentView::GetRowProperties(int32_t aIndex, nsAString& aProps)
   if (aIndex < 0 || aIndex >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   nsIContent* realRow;
   if (row->IsSeparator())
     realRow = row->mContent;
@@ -194,7 +194,7 @@ nsTreeContentView::GetCellProperties(int32_t aRow, nsITreeColumn* aCol,
   if (aRow < 0 || aRow >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
   if (realRow) {
@@ -323,10 +323,10 @@ nsTreeContentView::HasNextSibling(int32_t aRowIndex, int32_t aAfterIndex, bool* 
   if (parentIndex >= 0) {
     // Compute the last index in this subtree.
     int32_t lastIndex = parentIndex + (mRows[parentIndex])->mSubtreeSize;
-    Row* row = mRows[lastIndex];
+    Row* row = mRows[lastIndex].get();
     while (row->mParentIndex != parentIndex) {
       lastIndex = row->mParentIndex;
-      row = mRows[lastIndex];
+      row = mRows[lastIndex].get();
     }
 
     *_retval = aRowIndex < lastIndex;
@@ -346,10 +346,10 @@ nsTreeContentView::GetLevel(int32_t aIndex, int32_t* _retval)
     return NS_ERROR_INVALID_ARG;   
 
   int32_t level = 0;
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   while (row->mParentIndex >= 0) {
     level++;
-    row = mRows[row->mParentIndex];
+    row = mRows[row->mParentIndex].get();
   }
   *_retval = level;
 
@@ -365,7 +365,7 @@ nsTreeContentView::GetImageSrc(int32_t aRow, nsITreeColumn* aCol, nsAString& _re
   if (aRow < 0 || aRow >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -388,7 +388,7 @@ nsTreeContentView::GetProgressMode(int32_t aRow, nsITreeColumn* aCol, int32_t* _
 
   *_retval = nsITreeView::PROGRESS_NONE;
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -417,7 +417,7 @@ nsTreeContentView::GetCellValue(int32_t aRow, nsITreeColumn* aCol, nsAString& _r
   if (aRow < 0 || aRow >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -441,7 +441,7 @@ nsTreeContentView::GetCellText(int32_t aRow, nsITreeColumn* aCol, nsAString& _re
   if (aRow < 0 || aRow >= int32_t(mRows.Length()) || !aCol)
     return NS_ERROR_INVALID_ARG;
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   // Check for a "label" attribute - this is valid on an <treeitem>
   // with a single implied column.
@@ -449,8 +449,7 @@ nsTreeContentView::GetCellText(int32_t aRow, nsITreeColumn* aCol, nsAString& _re
       && !_retval.IsEmpty())
     return NS_OK;
 
-  nsIAtom *rowTag = row->mContent->Tag();
-  if (rowTag == nsGkAtoms::treeitem && row->mContent->IsXUL()) {
+  if (row->mContent->IsXULElement(nsGkAtoms::treeitem)) {
     nsIContent* realRow =
       nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
     if (realRow) {
@@ -513,7 +512,7 @@ nsTreeContentView::ToggleOpenState(int32_t aIndex)
 
   // We don't serialize content right here, since content might be generated
   // lazily.
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
 
   if (row->IsOpen())
     row->mContent->SetAttr(kNameSpaceID_None, nsGkAtoms::open, NS_LITERAL_STRING("false"), true);
@@ -588,7 +587,7 @@ nsTreeContentView::IsEditable(int32_t aRow, nsITreeColumn* aCol, bool* _retval)
 
   *_retval = true;
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -613,7 +612,7 @@ nsTreeContentView::IsSelectable(int32_t aRow, nsITreeColumn* aCol, bool* _retval
 
   *_retval = true;
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -636,7 +635,7 @@ nsTreeContentView::SetCellValue(int32_t aRow, nsITreeColumn* aCol, const nsAStri
   if (aRow < 0 || aRow >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -657,7 +656,7 @@ nsTreeContentView::SetCellText(int32_t aRow, nsITreeColumn* aCol, const nsAStrin
   if (aRow < 0 || aRow >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aRow];
+  Row* row = mRows[aRow].get();
 
   nsIContent* realRow =
     nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treerow);
@@ -696,7 +695,7 @@ nsTreeContentView::GetItemAtIndex(int32_t aIndex, nsIDOMElement** _retval)
   if (aIndex < 0 || aIndex >= int32_t(mRows.Length()))
     return NS_ERROR_INVALID_ARG;   
 
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   row->mContent->QueryInterface(NS_GET_IID(nsIDOMElement), (void**)_retval);
 
   return NS_OK;
@@ -716,14 +715,14 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
                                     dom::Element* aElement,
                                     int32_t       aNameSpaceID,
                                     nsIAtom*      aAttribute,
-                                    int32_t       aModType)
+                                    int32_t       aModType,
+                                    const nsAttrValue* aOldValue)
 {
   // Lots of codepaths under here that do all sorts of stuff, so be safe.
   nsCOMPtr<nsIMutationObserver> kungFuDeathGrip(this);
 
   // Make sure this notification concerns us.
   // First check the tag to see if it's one that we care about.
-  nsIAtom* tag = aElement->Tag();
 
   if (mBoxObject && (aElement == mRoot || aElement == mBody)) {
     mBoxObject->ClearStyleAndImageCaches();
@@ -732,15 +731,15 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
 
   // We don't consider non-XUL nodes.
   nsIContent* parent = nullptr;
-  if (!aElement->IsXUL() ||
-      ((parent = aElement->GetParent()) && !parent->IsXUL())) {
+  if (!aElement->IsXULElement() ||
+      ((parent = aElement->GetParent()) && !parent->IsXULElement())) {
     return;
   }
-  if (tag != nsGkAtoms::treecol &&
-      tag != nsGkAtoms::treeitem &&
-      tag != nsGkAtoms::treeseparator &&
-      tag != nsGkAtoms::treerow &&
-      tag != nsGkAtoms::treecell) {
+  if (!aElement->IsAnyOfXULElements(nsGkAtoms::treecol,
+                                    nsGkAtoms::treeitem,
+                                    nsGkAtoms::treeseparator,
+                                    nsGkAtoms::treerow,
+                                    nsGkAtoms::treecell)) {
     return;
   }
 
@@ -750,14 +749,14 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
   for (nsIContent* element = aElement; element != mBody; element = element->GetParent()) {
     if (!element)
       return; // this is not for us
-    nsIAtom *parentTag = element->Tag();
-    if (element->IsXUL() && parentTag == nsGkAtoms::tree)
+    if (element->IsXULElement(nsGkAtoms::tree))
       return; // this is not for us
   }
 
   // Handle changes of the hidden attribute.
   if (aAttribute == nsGkAtoms::hidden &&
-     (tag == nsGkAtoms::treeitem || tag == nsGkAtoms::treeseparator)) {
+      aElement->IsAnyOfXULElements(nsGkAtoms::treeitem,
+                                   nsGkAtoms::treeseparator)) {
     bool hidden = aElement->AttrValueIs(kNameSpaceID_None,
                                           nsGkAtoms::hidden,
                                           nsGkAtoms::_true, eCaseMatters);
@@ -780,7 +779,7 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
     return;
   }
 
-  if (tag == nsGkAtoms::treecol) {
+  if (aElement->IsXULElement(nsGkAtoms::treecol)) {
     if (aAttribute == nsGkAtoms::properties) {
       if (mBoxObject) {
         nsCOMPtr<nsITreeColumns> cols;
@@ -794,10 +793,10 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
       }
     }
   }
-  else if (tag == nsGkAtoms::treeitem) {
+  else if (aElement->IsXULElement(nsGkAtoms::treeitem)) {
     int32_t index = FindContent(aElement);
     if (index >= 0) {
-      Row* row = mRows[index];
+      Row* row = mRows[index].get();
       if (aAttribute == nsGkAtoms::container) {
         bool isContainer =
           aElement->AttrValueIs(kNameSpaceID_None, nsGkAtoms::container,
@@ -826,7 +825,7 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
       }
     }
   }
-  else if (tag == nsGkAtoms::treeseparator) {
+  else if (aElement->IsXULElement(nsGkAtoms::treeseparator)) {
     int32_t index = FindContent(aElement);
     if (index >= 0) {
       if (aAttribute == nsGkAtoms::properties && mBoxObject) {
@@ -834,7 +833,7 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
       }
     }
   }
-  else if (tag == nsGkAtoms::treerow) {
+  else if (aElement->IsXULElement(nsGkAtoms::treerow)) {
     if (aAttribute == nsGkAtoms::properties) {
       nsCOMPtr<nsIContent> parent = aElement->GetParent();
       if (parent) {
@@ -845,7 +844,7 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
       }
     }
   }
-  else if (tag == nsGkAtoms::treecell) {
+  else if (aElement->IsXULElement(nsGkAtoms::treecell)) {
     if (aAttribute == nsGkAtoms::ref ||
         aAttribute == nsGkAtoms::properties ||
         aAttribute == nsGkAtoms::mode ||
@@ -855,7 +854,7 @@ nsTreeContentView::AttributeChanged(nsIDocument*  aDocument,
       nsIContent* parent = aElement->GetParent();
       if (parent) {
         nsCOMPtr<nsIContent> grandParent = parent->GetParent();
-        if (grandParent && grandParent->IsXUL()) {
+        if (grandParent && grandParent->IsXULElement()) {
           int32_t index = FindContent(grandParent);
           if (index >= 0 && mBoxObject) {
             // XXX Should we make an effort to invalidate only cell ?
@@ -889,16 +888,16 @@ nsTreeContentView::ContentInserted(nsIDocument *aDocument,
 
   // Make sure this notification concerns us.
   // First check the tag to see if it's one that we care about.
-  nsIAtom *childTag = aChild->Tag();
 
   // Don't allow non-XUL nodes.
-  if (!aChild->IsXUL() || !aContainer->IsXUL())
+  if (!aChild->IsXULElement() || !aContainer->IsXULElement())
     return;
-  if (childTag != nsGkAtoms::treeitem &&
-      childTag != nsGkAtoms::treeseparator &&
-      childTag != nsGkAtoms::treechildren &&
-      childTag != nsGkAtoms::treerow &&
-      childTag != nsGkAtoms::treecell) {
+
+  if (!aChild->IsAnyOfXULElements(nsGkAtoms::treeitem,
+                                  nsGkAtoms::treeseparator,
+                                  nsGkAtoms::treechildren,
+                                  nsGkAtoms::treerow,
+                                  nsGkAtoms::treecell)) {
     return;
   }
 
@@ -908,18 +907,17 @@ nsTreeContentView::ContentInserted(nsIDocument *aDocument,
   for (nsIContent* element = aContainer; element != mBody; element = element->GetParent()) {
     if (!element)
       return; // this is not for us
-    nsIAtom *parentTag = element->Tag();
-    if (element->IsXUL() && parentTag == nsGkAtoms::tree)
+    if (element->IsXULElement(nsGkAtoms::tree))
       return; // this is not for us
   }
 
   // Lots of codepaths under here that do all sorts of stuff, so be safe.
   nsCOMPtr<nsIMutationObserver> kungFuDeathGrip(this);
 
-  if (childTag == nsGkAtoms::treechildren) {
+  if (aChild->IsXULElement(nsGkAtoms::treechildren)) {
     int32_t index = FindContent(aContainer);
     if (index >= 0) {
-      Row* row = mRows[index];
+      Row* row = mRows[index].get();
       row->SetEmpty(false);
       if (mBoxObject)
         mBoxObject->InvalidateRow(index);
@@ -930,16 +928,16 @@ nsTreeContentView::ContentInserted(nsIDocument *aDocument,
       }
     }
   }
-  else if (childTag == nsGkAtoms::treeitem ||
-           childTag == nsGkAtoms::treeseparator) {
+  else if (aChild->IsAnyOfXULElements(nsGkAtoms::treeitem,
+                                      nsGkAtoms::treeseparator)) {
     InsertRowFor(aContainer, aChild);
   }
-  else if (childTag == nsGkAtoms::treerow) {
+  else if (aChild->IsXULElement(nsGkAtoms::treerow)) {
     int32_t index = FindContent(aContainer);
     if (index >= 0 && mBoxObject)
       mBoxObject->InvalidateRow(index);
   }
-  else if (childTag == nsGkAtoms::treecell) {
+  else if (aChild->IsXULElement(nsGkAtoms::treecell)) {
     nsCOMPtr<nsIContent> parent = aContainer->GetParent();
     if (parent) {
       int32_t index = FindContent(parent);
@@ -960,16 +958,16 @@ nsTreeContentView::ContentRemoved(nsIDocument *aDocument,
 
   // Make sure this notification concerns us.
   // First check the tag to see if it's one that we care about.
-  nsIAtom *tag = aChild->Tag();
 
   // We don't consider non-XUL nodes.
-  if (!aChild->IsXUL() || !aContainer->IsXUL())
+  if (!aChild->IsXULElement() || !aContainer->IsXULElement())
     return;
-  if (tag != nsGkAtoms::treeitem &&
-      tag != nsGkAtoms::treeseparator &&
-      tag != nsGkAtoms::treechildren &&
-      tag != nsGkAtoms::treerow &&
-      tag != nsGkAtoms::treecell) {
+
+  if (!aChild->IsAnyOfXULElements(nsGkAtoms::treeitem,
+                                  nsGkAtoms::treeseparator,
+                                  nsGkAtoms::treechildren,
+                                  nsGkAtoms::treerow,
+                                  nsGkAtoms::treecell)) {
     return;
   }
 
@@ -979,18 +977,17 @@ nsTreeContentView::ContentRemoved(nsIDocument *aDocument,
   for (nsIContent* element = aContainer; element != mBody; element = element->GetParent()) {
     if (!element)
       return; // this is not for us
-    nsIAtom *parentTag = element->Tag();
-    if (element->IsXUL() && parentTag == nsGkAtoms::tree)
+    if (element->IsXULElement(nsGkAtoms::tree))
       return; // this is not for us
   }
 
   // Lots of codepaths under here that do all sorts of stuff, so be safe.
   nsCOMPtr<nsIMutationObserver> kungFuDeathGrip(this);
 
-  if (tag == nsGkAtoms::treechildren) {
+  if (aChild->IsXULElement(nsGkAtoms::treechildren)) {
     int32_t index = FindContent(aContainer);
     if (index >= 0) {
-      Row* row = mRows[index];
+      Row* row = mRows[index].get();
       row->SetEmpty(true);
       int32_t count = RemoveSubtree(index);
       // Invalidate also the row to update twisty.
@@ -1000,9 +997,8 @@ nsTreeContentView::ContentRemoved(nsIDocument *aDocument,
       }
     }
   }
-  else if (tag == nsGkAtoms::treeitem ||
-           tag == nsGkAtoms::treeseparator
-          ) {
+  else if (aChild->IsAnyOfXULElements(nsGkAtoms::treeitem,
+                                      nsGkAtoms::treeseparator)) {
     int32_t index = FindContent(aChild);
     if (index >= 0) {
       int32_t count = RemoveRow(index);
@@ -1010,12 +1006,12 @@ nsTreeContentView::ContentRemoved(nsIDocument *aDocument,
         mBoxObject->RowCountChanged(index, -count);
     }
   }
-  else if (tag == nsGkAtoms::treerow) {
+  else if (aChild->IsXULElement(nsGkAtoms::treerow)) {
     int32_t index = FindContent(aContainer);
     if (index >= 0 && mBoxObject)
       mBoxObject->InvalidateRow(index);
   }
-  else if (tag == nsGkAtoms::treecell) {
+  else if (aChild->IsXULElement(nsGkAtoms::treecell)) {
     nsCOMPtr<nsIContent> parent = aContainer->GetParent();
     if (parent) {
       int32_t index = FindContent(parent);
@@ -1037,37 +1033,36 @@ nsTreeContentView::NodeWillBeDestroyed(const nsINode* aNode)
 // Recursively serialize content, starting with aContent.
 void
 nsTreeContentView::Serialize(nsIContent* aContent, int32_t aParentIndex,
-                             int32_t* aIndex, nsTArray<nsAutoPtr<Row> >& aRows)
+                             int32_t* aIndex, nsTArray<UniquePtr<Row>>& aRows)
 {
   // Don't allow non-XUL nodes.
-  if (!aContent->IsXUL())
+  if (!aContent->IsXULElement())
     return;
 
   dom::FlattenedChildIterator iter(aContent);
   for (nsIContent* content = iter.GetNextChild(); content; content = iter.GetNextChild()) {
-    nsIAtom *tag = content->Tag();
     int32_t count = aRows.Length();
 
-    if (content->IsXUL()) {
-      if (tag == nsGkAtoms::treeitem)
-        SerializeItem(content, aParentIndex, aIndex, aRows);
-      else if (tag == nsGkAtoms::treeseparator)
-        SerializeSeparator(content, aParentIndex, aIndex, aRows);
+    if (content->IsXULElement(nsGkAtoms::treeitem)) {
+      SerializeItem(content, aParentIndex, aIndex, aRows);
+    } else if (content->IsXULElement(nsGkAtoms::treeseparator)) {
+      SerializeSeparator(content, aParentIndex, aIndex, aRows);
     }
+
     *aIndex += aRows.Length() - count;
   }
 }
 
 void
 nsTreeContentView::SerializeItem(nsIContent* aContent, int32_t aParentIndex,
-                                 int32_t* aIndex, nsTArray<nsAutoPtr<Row> >& aRows)
+                                 int32_t* aIndex, nsTArray<UniquePtr<Row>>& aRows)
 {
   if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
                             nsGkAtoms::_true, eCaseMatters))
     return;
 
-  Row* row = new Row(aContent, aParentIndex);
-  aRows.AppendElement(row);
+  aRows.AppendElement(MakeUnique<Row>(aContent, aParentIndex));
+  Row* row = aRows.LastElement().get();
 
   if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::container,
                             nsGkAtoms::_true, eCaseMatters)) {
@@ -1077,7 +1072,7 @@ nsTreeContentView::SerializeItem(nsIContent* aContent, int32_t aParentIndex,
       row->SetOpen(true);
       nsIContent* child =
         nsTreeUtils::GetImmediateChild(aContent, nsGkAtoms::treechildren);
-      if (child && child->IsXUL()) {
+      if (child && child->IsXULElement()) {
         // Now, recursively serialize our child.
         int32_t count = aRows.Length();
         int32_t index = 0;
@@ -1096,15 +1091,15 @@ nsTreeContentView::SerializeItem(nsIContent* aContent, int32_t aParentIndex,
 void
 nsTreeContentView::SerializeSeparator(nsIContent* aContent,
                                       int32_t aParentIndex, int32_t* aIndex,
-                                      nsTArray<nsAutoPtr<Row> >& aRows)
+                                      nsTArray<UniquePtr<Row>>& aRows)
 {
   if (aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
                             nsGkAtoms::_true, eCaseMatters))
     return;
 
-  Row* row = new Row(aContent, aParentIndex);
+  auto row = MakeUnique<Row>(aContent, aParentIndex);
   row->SetSeparator(true);
-  aRows.AppendElement(row);
+  aRows.AppendElement(Move(row));
 }
 
 void
@@ -1113,7 +1108,7 @@ nsTreeContentView::GetIndexInSubtree(nsIContent* aContainer,
 {
   uint32_t childCount = aContainer->GetChildCount();
   
-  if (!aContainer->IsXUL())
+  if (!aContainer->IsXULElement())
     return;
 
   for (uint32_t i = 0; i < childCount; i++) {
@@ -1122,29 +1117,25 @@ nsTreeContentView::GetIndexInSubtree(nsIContent* aContainer,
     if (content == aContent)
       break;
 
-    nsIAtom *tag = content->Tag();
-
-    if (content->IsXUL()) {
-      if (tag == nsGkAtoms::treeitem) {
-        if (! content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
-                                   nsGkAtoms::_true, eCaseMatters)) {
-          (*aIndex)++;
-          if (content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::container,
-                                   nsGkAtoms::_true, eCaseMatters) &&
-              content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::open,
-                                   nsGkAtoms::_true, eCaseMatters)) {
-            nsIContent* child =
-              nsTreeUtils::GetImmediateChild(content, nsGkAtoms::treechildren);
-            if (child && child->IsXUL())
-              GetIndexInSubtree(child, aContent, aIndex);
-          }
+    if (content->IsXULElement(nsGkAtoms::treeitem)) {
+      if (! content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
+                                 nsGkAtoms::_true, eCaseMatters)) {
+        (*aIndex)++;
+        if (content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::container,
+                                 nsGkAtoms::_true, eCaseMatters) &&
+            content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::open,
+                                 nsGkAtoms::_true, eCaseMatters)) {
+          nsIContent* child =
+            nsTreeUtils::GetImmediateChild(content, nsGkAtoms::treechildren);
+          if (child && child->IsXULElement())
+            GetIndexInSubtree(child, aContent, aIndex);
         }
       }
-      else if (tag == nsGkAtoms::treeseparator) {
-        if (! content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
-                                   nsGkAtoms::_true, eCaseMatters))
-          (*aIndex)++;
-      }
+    }
+    else if (content->IsXULElement(nsGkAtoms::treeseparator)) {
+      if (! content->AttrValueIs(kNameSpaceID_None, nsGkAtoms::hidden,
+                                 nsGkAtoms::_true, eCaseMatters))
+        (*aIndex)++;
     }
   }
 }
@@ -1152,22 +1143,25 @@ nsTreeContentView::GetIndexInSubtree(nsIContent* aContainer,
 int32_t
 nsTreeContentView::EnsureSubtree(int32_t aIndex)
 {
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
 
   nsIContent* child;
   child = nsTreeUtils::GetImmediateChild(row->mContent, nsGkAtoms::treechildren);
-  if (!child || !child->IsXUL()) {
+  if (!child || !child->IsXULElement()) {
     return 0;
   }
 
-  nsAutoTArray<nsAutoPtr<Row>, 8> rows;
+  AutoTArray<UniquePtr<Row>, 8> rows;
   int32_t index = 0;
   Serialize(child, aIndex, &index, rows);
-  // We can't use InsertElementsAt since the destination can't steal
-  // ownership from its const source argument.
+  // Insert |rows| into |mRows| at position |aIndex|, by first creating empty
+  // UniquePtr entries and then Move'ing |rows|'s entries into them. (Note
+  // that we can't simply use InsertElementsAt with an array argument, since
+  // the destination can't steal ownership from its const source argument.)
+  UniquePtr<Row>* newRows = mRows.InsertElementsAt(aIndex + 1,
+                                                   rows.Length());
   for (nsTArray<Row>::index_type i = 0; i < rows.Length(); i++) {
-    nsAutoPtr<Row>* newRow = mRows.InsertElementAt(aIndex + i + 1);
-    *newRow = rows[i];
+    newRows[i] = Move(rows[i]);
   }
   int32_t count = rows.Length();
 
@@ -1184,7 +1178,7 @@ nsTreeContentView::EnsureSubtree(int32_t aIndex)
 int32_t
 nsTreeContentView::RemoveSubtree(int32_t aIndex)
 {
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   int32_t count = row->mSubtreeSize;
 
   mRows.RemoveElementsAt(aIndex + 1, count);
@@ -1204,9 +1198,8 @@ nsTreeContentView::InsertRowFor(nsIContent* aParent, nsIContent* aChild)
   bool insertRow = false;
 
   nsCOMPtr<nsIContent> grandParent = aParent->GetParent();
-  nsIAtom* grandParentTag = grandParent->Tag();
 
-  if (grandParent->IsXUL() && grandParentTag == nsGkAtoms::tree) {
+  if (grandParent->IsXULElement(nsGkAtoms::tree)) {
     // Allow insertion to the outermost container.
     insertRow = true;
   }
@@ -1236,22 +1229,19 @@ nsTreeContentView::InsertRowFor(nsIContent* aParent, nsIContent* aChild)
 int32_t
 nsTreeContentView::InsertRow(int32_t aParentIndex, int32_t aIndex, nsIContent* aContent)
 {
-  nsAutoTArray<nsAutoPtr<Row>, 8> rows;
-  nsIAtom *tag = aContent->Tag();
-  if (aContent->IsXUL()) {
-    if (tag == nsGkAtoms::treeitem)
-      SerializeItem(aContent, aParentIndex, &aIndex, rows);
-    else if (tag == nsGkAtoms::treeseparator)
-      SerializeSeparator(aContent, aParentIndex, &aIndex, rows);
+  AutoTArray<UniquePtr<Row>, 8> rows;
+  if (aContent->IsXULElement(nsGkAtoms::treeitem)) {
+    SerializeItem(aContent, aParentIndex, &aIndex, rows);
+  } else if (aContent->IsXULElement(nsGkAtoms::treeseparator)) {
+    SerializeSeparator(aContent, aParentIndex, &aIndex, rows);
   }
 
   // We can't use InsertElementsAt since the destination can't steal
   // ownership from its const source argument.
-  for (nsTArray<Row>::index_type i = 0; i < rows.Length(); i++) {
-    nsAutoPtr<Row>* newRow = mRows.InsertElementAt(aParentIndex + aIndex + i + 1);
-    *newRow = rows[i];
-  }
   int32_t count = rows.Length();
+  for (nsTArray<Row>::index_type i = 0; i < size_t(count); i++) {
+    mRows.InsertElementAt(aParentIndex + aIndex + i + 1, Move(rows[i]));
+  }
 
   UpdateSubtreeSizes(aParentIndex, count);
 
@@ -1265,7 +1255,7 @@ nsTreeContentView::InsertRow(int32_t aParentIndex, int32_t aIndex, nsIContent* a
 int32_t
 nsTreeContentView::RemoveRow(int32_t aIndex)
 {
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   int32_t count = row->mSubtreeSize + 1;
   int32_t parentIndex = row->mParentIndex;
 
@@ -1294,7 +1284,7 @@ nsTreeContentView::ClearRows()
 void
 nsTreeContentView::OpenContainer(int32_t aIndex)
 {
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   row->SetOpen(true);
 
   int32_t count = EnsureSubtree(aIndex);
@@ -1307,7 +1297,7 @@ nsTreeContentView::OpenContainer(int32_t aIndex)
 void
 nsTreeContentView::CloseContainer(int32_t aIndex)
 {
-  Row* row = mRows[aIndex];
+  Row* row = mRows[aIndex].get();
   row->SetOpen(false);
 
   int32_t count = RemoveSubtree(aIndex);
@@ -1333,7 +1323,7 @@ void
 nsTreeContentView::UpdateSubtreeSizes(int32_t aParentIndex, int32_t count)
 {
   while (aParentIndex >= 0) {
-    Row* row = mRows[aParentIndex];
+    Row* row = mRows[aParentIndex].get();
     row->mSubtreeSize += count;
     aParentIndex = row->mParentIndex;
   }
@@ -1344,7 +1334,7 @@ nsTreeContentView::UpdateParentIndexes(int32_t aIndex, int32_t aSkip, int32_t aC
 {
   int32_t count = mRows.Length();
   for (int32_t i = aIndex + aSkip; i < count; i++) {
-    Row* row = mRows[i];
+    Row* row = mRows[i].get();
     if (row->mParentIndex > aIndex) {
       row->mParentIndex += aCount;
     }
@@ -1365,7 +1355,7 @@ nsTreeContentView::GetCell(nsIContent* aContainer, nsITreeColumn* aCol)
   int32_t j = 0;
   dom::FlattenedChildIterator iter(aContainer);
   for (nsIContent* cell = iter.GetNextChild(); cell; cell = iter.GetNextChild()) {
-    if (cell->Tag() == nsGkAtoms::treecell) {
+    if (cell->IsXULElement(nsGkAtoms::treecell)) {
       if (colAtom && cell->AttrValueIs(kNameSpaceID_None, nsGkAtoms::ref,
                                        colAtom, eCaseMatters)) {
         result = cell;

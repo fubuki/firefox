@@ -14,7 +14,7 @@
 /**
  * Helper function for test logging: prints a POSIX file permission mode as an
  * octal number, with a leading '0' per C (not JS) convention.  When the
- * numeric value is 0777 or lower, it is padded on the left with zeroes to
+ * numeric value is 0o777 or lower, it is padded on the left with zeroes to
  * four digits wide.
  * Sample outputs:  0022, 0644, 04755.
  */
@@ -39,7 +39,7 @@ function apply_umask(mode) {
 
 // Sequence of setPermission parameters and expected file mode.  The first test
 // checks the permissions when the file is first created.
-let testSequence = [
+var testSequence = [
   [null,                                        apply_umask(0o600)],
   [{ unixMode: 0o4777 },                        apply_umask(0o4777)],
   [{ unixMode: 0o4777, unixHonorUmask: false }, 0o4777],

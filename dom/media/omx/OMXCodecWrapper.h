@@ -14,23 +14,21 @@
 
 #include "AudioSegment.h"
 #include "GonkNativeWindow.h"
-#include "GonkNativeWindowClient.h"
-
-#include "IMediaResourceManagerService.h"
-#include "MediaResourceManagerClient.h"
+#include "mozilla/media/MediaSystemResourceClient.h"
+#include "mozilla/RefPtr.h"
 
 #include <speex/speex_resampler.h>
 
 namespace android {
 
 // Wrapper class for managing HW codec reservations
-class OMXCodecReservation : public MediaResourceManagerClient::EventListener
+class OMXCodecReservation : public RefBase
 {
 public:
-  OMXCodecReservation(bool aEncoder)
+  OMXCodecReservation(bool aEncoder) : mOwned(false)
   {
-    mType = aEncoder ? IMediaResourceManagerService::HW_VIDEO_ENCODER :
-            IMediaResourceManagerService::HW_VIDEO_DECODER;
+    mType = aEncoder ? mozilla::MediaSystemResourceType::VIDEO_ENCODER :
+            mozilla::MediaSystemResourceType::VIDEO_DECODER;
   }
 
   virtual ~OMXCodecReservation()
@@ -44,14 +42,11 @@ public:
   /** Release the Encode or Decode resource for this instance */
   virtual void ReleaseOMXCodec();
 
-  // MediaResourceManagerClient::EventListener
-  virtual void statusChanged(int event) {}
-
 private:
-  IMediaResourceManagerService::ResourceType mType;
+  mozilla::MediaSystemResourceType mType;
+  bool mOwned;  // We already own this resource
 
-  sp<MediaResourceManagerClient> mClient;
-  sp<IMediaResourceManagerService> mManagerService;
+  RefPtr<mozilla::MediaSystemResourceClient> mClient;
 };
 
 
@@ -93,6 +88,7 @@ public:
     AAC_ENC, // AAC encoder.
     AMR_NB_ENC, // AMR_NB encoder.
     AVC_ENC, // AVC/H.264 encoder.
+    EVRC_ENC, // EVRC encoder
     TYPE_COUNT
   };
 
@@ -124,6 +120,9 @@ public:
 
   /** Create a AMR audio encoder. Returns nullptr when failed. */
   static OMXAudioEncoder* CreateAMRNBEncoder();
+
+  /** Create a EVRC audio encoder. Returns nullptr when failed. */
+  static OMXAudioEncoder* CreateEVRCEncoder();
 
   /** Create a AVC/H.264 video encoder. Returns nullptr when failed. */
   static OMXVideoEncoder* CreateAVCEncoder();
@@ -209,12 +208,13 @@ private:
   int mCodecType;
   bool mStarted; // Has MediaCodec been started?
   bool mAMRCSDProvided;
+  bool mEVRCCSDProvided;
 };
 
 /**
  * Audio encoder.
  */
-class OMXAudioEncoder MOZ_FINAL : public OMXCodecWrapper
+class OMXAudioEncoder final : public OMXCodecWrapper
 {
 public:
   /**
@@ -229,13 +229,18 @@ public:
    * stream, set aInputFlags to BUFFER_EOS. Since encoder has limited buffers,
    * this function might not be able to encode all chunks in one call, however
    * it will remove chunks it consumes from aSegment.
+   * aSendEOS is the output to tell the caller EOS signal sent into MediaCodec
+   * because the signal might not be sent due to the dequeueInputBuffer timeout.
+   * And the value of aSendEOS won't be set to any default value, only set to
+   * true when EOS signal sent into MediaCodec.
    */
-  nsresult Encode(mozilla::AudioSegment& aSegment, int aInputFlags = 0);
+  nsresult Encode(mozilla::AudioSegment& aSegment, int aInputFlags = 0,
+                  bool* aSendEOS = nullptr);
 
   ~OMXAudioEncoder();
 protected:
   virtual status_t AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
-                                       ABuffer* aData) MOZ_OVERRIDE;
+                                       ABuffer* aData) override;
 private:
   // Hide these. User should always use creator functions to get a media codec.
   OMXAudioEncoder() = delete;
@@ -276,9 +281,8 @@ private:
 /**
  * Video encoder.
  */
-class OMXVideoEncoder MOZ_FINAL : public OMXCodecWrapper
+class OMXVideoEncoder final : public OMXCodecWrapper
 {
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(OMXVideoEncoder)
 public:
   // Types of output blob format.
   enum BlobFormat {
@@ -304,9 +308,14 @@ public:
    * semi-planar YUV420 format stored in the buffer of aImage. aTimestamp gives
    * the frame timestamp/presentation time (in microseconds). To notify end of
    * stream, set aInputFlags to BUFFER_EOS.
+   * aSendEOS is the output to tell the caller EOS signal sent into MediaCodec
+   * because the signal might not be sent due to the dequeueInputBuffer timeout.
+   * And the value of aSendEOS won't be set to any default value, only set to
+   * true when EOS signal sent into MediaCodec.
    */
   nsresult Encode(const mozilla::layers::Image* aImage, int aWidth, int aHeight,
-                  int64_t aTimestamp, int aInputFlags = 0);
+                  int64_t aTimestamp, int aInputFlags = 0,
+                  bool* aSendEOS = nullptr);
 
 #if ANDROID_VERSION >= 18
   /** Set encoding bitrate (in kbps). */
@@ -321,13 +330,13 @@ public:
 
 protected:
   virtual status_t AppendDecoderConfig(nsTArray<uint8_t>* aOutputBuf,
-                                       ABuffer* aData) MOZ_OVERRIDE;
+                                       ABuffer* aData) override;
 
   // If configured to output MP4 format blob, AVC/H.264 encoder has to replace
   // NAL unit start code with the unit length as specified in
   // ISO/IEC 14496-15 5.2.3.
   virtual void AppendFrame(nsTArray<uint8_t>* aOutputBuf,
-                           const uint8_t* aData, size_t aSize) MOZ_OVERRIDE;
+                           const uint8_t* aData, size_t aSize) override;
 
 private:
   // Hide these. User should always use creator functions to get a media codec.
@@ -355,4 +364,5 @@ private:
 };
 
 } // namespace android
+
 #endif // OMXCodecWrapper_h_

@@ -8,27 +8,21 @@
 
 #include "nsError.h" // for nsresult
 #include "nsString.h"
+#include "nsTArray.h"
 
 namespace mozilla {
 namespace jni {
 
-class Accessor;
-template<class T> class Constructor;
-template<class T> class Field;
-template<class T, typename R> class Method;
-
 // Wrapped object reference (e.g. jobject, jclass, etc...)
-template<class Cls> class Ref;
+template<class Cls, typename JNIType> class Ref;
+// Represents a calling context for JNI methods.
+template<class Cls, typename JNIType> class Context;
 // Wrapped local reference that inherits from Ref.
 template<class Cls> class LocalRef;
 // Wrapped global reference that inherits from Ref.
 template<class Cls> class GlobalRef;
-
-// Type used for a reference parameter. Default is a wrapped object
-// reference, but Param can be specialized to define custom behavior,
-// e.g. a StringParam class that automatically converts nsAString& and
-// nsACString& to a jstring.
-template<class Cls> struct Param { typedef Ref<Cls> Type; };
+// Wrapped dangling reference that's owned by someone else.
+template<class Cls> class DependentRef;
 
 
 // How exception during a JNI call should be treated.
@@ -43,140 +37,116 @@ enum class ExceptionMode
 };
 
 
-// Base class for all JNI binding classes.
-// Templated so that we have one sClassRef for each class.
-template<class Cls>
-class Class
-{
-    friend class Accessor;
-    template<class T> friend class Constructor;
-    template<class T> friend class Field;
-    template<class T, typename R> friend class Method;
-
-private:
-    static jclass sClassRef; // global reference
-
-protected:
-    jobject mInstance; // local or global reference
-
-    Class(jobject instance) : mInstance(instance) {}
-};
+// Class to hold the native types of a method's arguments.
+// For example, if a method has signature (ILjava/lang/String;)V,
+// its arguments class would be jni::Args<int32_t, jni::String::Param>
+template<typename...>
+struct Args {};
 
 
-// Binding for a plain jobject.
-class Object : public Class<Object>
-{
-protected:
-    Object(jobject instance) : Class(instance) {}
-
-public:
-    typedef jni::Ref<Object> Ref;
-    typedef jni::LocalRef<Object>  LocalRef;
-    typedef jni::GlobalRef<Object> GlobalRef;
-    typedef const typename jni::Param<Object>::Type& Param;
-};
-
-
-// Binding for a built-in object reference other than jobject.
-template<typename T>
-class TypedObject : public Object
-{
-    typedef TypedObject<T> Self;
-
-protected:
-    TypedObject(jobject instance) : Object(instance) {}
-
-public:
-    typedef jni::Ref<Self> Ref;
-    typedef jni::LocalRef<Self>  LocalRef;
-    typedef jni::GlobalRef<Self> GlobalRef;
-    typedef const typename jni::Param<Self>::Type& Param;
-};
-
-// Define bindings for built-in types.
-typedef TypedObject<jstring>    String;
-typedef TypedObject<jclass>     ClassObject;
-typedef TypedObject<jthrowable> Throwable;
-
-typedef TypedObject<jbooleanArray> BooleanArray;
-typedef TypedObject<jbyteArray>    ByteArray;
-typedef TypedObject<jcharArray>    CharArray;
-typedef TypedObject<jshortArray>   ShortArray;
-typedef TypedObject<jintArray>     IntArray;
-typedef TypedObject<jlongArray>    LongArray;
-typedef TypedObject<jfloatArray>   FloatArray;
-typedef TypedObject<jdoubleArray>  DoubleArray;
-typedef TypedObject<jobjectArray>  ObjectArray;
-
-template<> struct Param<String> { class Type; };
-
+class Object;
 
 // Base class for Ref and its specializations.
-template<class Cls, typename JNIType>
-class RefBase : protected Cls
+template<class Cls, typename Type>
+class Ref
 {
-    typedef RefBase<Cls, JNIType> Self;
-    typedef void (Self::*bool_type)() const;
+    template<class C, typename T> friend class Ref;
+
+    using Self = Ref<Cls, Type>;
+    using bool_type = void (Self::*)() const;
     void non_null_reference() const {}
 
+    // A Cls-derivative that allows copying
+    // (e.g. when acting as a return value).
+    struct CopyableCtx : public Context<Cls, Type>
+    {
+        CopyableCtx(JNIEnv* env, Type instance)
+            : Context<Cls, Type>(env, instance)
+        {}
+
+        CopyableCtx(const CopyableCtx& cls)
+            : Context<Cls, Type>(cls.Env(), cls.Get())
+        {}
+    };
+
+    // Private copy constructor so that there's no danger of assigning a
+    // temporary LocalRef/GlobalRef to a Ref, and potentially use the Ref
+    // after the source had been freed.
+    Ref(const Ref&) = default;
+
 protected:
-    RefBase(jobject instance) : Cls(instance) {}
+    static JNIEnv* FindEnv()
+    {
+        return Cls::isMultithreaded ? GetEnvForThread() : GetGeckoThreadEnv();
+    }
+
+    Type mInstance;
+
+    // Protected jobject constructor because outside code should be using
+    // Ref::From. Using Ref::From makes it very easy to see which code is using
+    // raw JNI types for future refactoring.
+    explicit Ref(Type instance) : mInstance(instance) {}
 
 public:
+    using JNIType = Type;
+
     // Construct a Ref form a raw JNI reference.
-    static Ref<Cls> From(JNIType obj)
+    static Ref<Cls, Type> From(JNIType obj)
     {
-        return Ref<Cls>(static_cast<jobject>(obj));
+        return Ref<Cls, Type>(obj);
     }
+
+    // Construct a Ref form a generic object reference.
+    static Ref<Cls, Type> From(const Ref<Object, jobject>& obj)
+    {
+        return Ref<Cls, Type>(JNIType(obj.Get()));
+    }
+
+    MOZ_IMPLICIT Ref(decltype(nullptr)) : mInstance(nullptr) {}
 
     // Get the raw JNI reference.
     JNIType Get() const
     {
-        return static_cast<JNIType>(Cls::mInstance);
+        return mInstance;
     }
 
-    bool operator==(const RefBase& other) const
+    bool operator==(const Ref& other) const
     {
         // Treat two references of the same object as being the same.
-        return Cls::mInstance == other.mInstance &&
-                GetJNIForThread()->IsSameObject(
-                        Cls::mInstance, other.mInstance) != JNI_FALSE;
+        return mInstance == other.mInstance || JNI_FALSE !=
+                FindEnv()->IsSameObject(mInstance, other.mInstance);
     }
 
-    bool operator!=(const RefBase& other) const
+    bool operator!=(const Ref& other) const
     {
         return !operator==(other);
     }
 
     bool operator==(decltype(nullptr)) const
     {
-        return !Cls::mInstance;
+        return !mInstance;
     }
 
     bool operator!=(decltype(nullptr)) const
     {
-        return !!Cls::mInstance;
+        return !!mInstance;
     }
 
-    Cls* operator->()
+    CopyableCtx operator->() const
     {
-        MOZ_ASSERT(Cls::mInstance);
-        return this;
-    }
-
-    const Cls* operator->() const
-    {
-        MOZ_ASSERT(Cls::mInstance);
-        return this;
+        return CopyableCtx(FindEnv(), mInstance);
     }
 
     // Any ref can be cast to an object ref.
-    operator Ref<Object>() const;
+    operator Ref<Object, jobject>() const
+    {
+        return Ref<Object, jobject>(mInstance);
+    }
 
     // Null checking (e.g. !!ref) using the safe-bool idiom.
     operator bool_type() const
     {
-        return Cls::mInstance ? &Self::non_null_reference : nullptr;
+        return mInstance ? &Self::non_null_reference : nullptr;
     }
 
     // We don't allow implicit conversion to jobject because that can lead
@@ -191,93 +161,196 @@ public:
 };
 
 
-// Wrapped object reference (e.g. jobject, jclass, etc...)
-template<class Cls>
-class Ref : public RefBase<Cls, jobject>
+// Represents a calling context for JNI methods.
+template<class Cls, typename Type>
+class Context : public Ref<Cls, Type>
 {
-    template<class C, typename T> friend class RefBase;
-    friend class jni::LocalRef<Cls>;
-    friend class jni::GlobalRef<Cls>;
+    using Ref = jni::Ref<Cls, Type>;
 
-    typedef RefBase<Cls, jobject> Base;
+    static jclass sClassRef; // global reference
 
 protected:
-    // Protected jobject constructor because outside code should be using
-    // Ref::From. Using Ref::From makes it very easy to see which code is using
-    // raw JNI types for future refactoring.
-    Ref(jobject instance) : Base(instance) {}
-
-    // Protected copy constructor so that there's no danger of assigning a
-    // temporary LocalRef/GlobalRef to a Ref, and potentially use the Ref
-    // after the source had been freed.
-    Ref(const Ref& ref) : Base(ref.mInstance) {}
+    JNIEnv* const mEnv;
 
 public:
-    MOZ_IMPLICIT Ref(decltype(nullptr)) : Base(nullptr) {}
+    static const char name[];
+
+    static jclass RawClassRef()
+    {
+        return sClassRef;
+    }
+
+    Context()
+        : Ref(nullptr)
+        , mEnv(Ref::FindEnv())
+    {}
+
+    Context(JNIEnv* env, Type instance)
+        : Ref(instance)
+        , mEnv(env)
+    {}
+
+    jclass ClassRef() const
+    {
+        if (!sClassRef) {
+            sClassRef = GetClassGlobalRef(mEnv, name);
+        }
+        return sClassRef;
+    }
+
+    JNIEnv* Env() const
+    {
+        return mEnv;
+    }
+
+    bool operator==(const Ref& other) const
+    {
+        // Treat two references of the same object as being the same.
+        return Ref::mInstance == other.mInstance || JNI_FALSE !=
+                mEnv->IsSameObject(Ref::mInstance, other.mInstance);
+    }
+
+    bool operator!=(const Ref& other) const
+    {
+        return !operator==(other);
+    }
+
+    bool operator==(decltype(nullptr)) const
+    {
+        return !Ref::mInstance;
+    }
+
+    bool operator!=(decltype(nullptr)) const
+    {
+        return !!Ref::mInstance;
+    }
+
+    Cls operator->() const
+    {
+        MOZ_ASSERT(Ref::mInstance, "Null jobject");
+        return Cls(*this);
+    }
 };
 
 
-template<class Cls, typename JNIType>
-RefBase<Cls, JNIType>::operator Ref<Object>() const
+template<class Cls, typename Type>
+class ObjectBase
 {
-    return Ref<Object>(Cls::mInstance);
-}
+protected:
+    const jni::Context<Cls, Type>& mCtx;
 
+    jclass ClassRef() const { return mCtx.ClassRef(); }
+    JNIEnv* Env() const { return mCtx.Env(); }
+    Type Instance() const { return mCtx.Get(); }
 
+public:
+    using Ref = jni::Ref<Cls, Type>;
+    using Context = jni::Context<Cls, Type>;
+    using LocalRef = jni::LocalRef<Cls>;
+    using GlobalRef = jni::GlobalRef<Cls>;
+    using Param = const Ref&;
+
+    static const bool isMultithreaded = true;
+
+    explicit ObjectBase(const Context& ctx) : mCtx(ctx) {}
+
+    Cls* operator->()
+    {
+        return static_cast<Cls*>(this);
+    }
+};
+
+// Binding for a plain jobject.
+class Object : public ObjectBase<Object, jobject>
+{
+public:
+    explicit Object(const Context& ctx) : ObjectBase<Object, jobject>(ctx) {}
+};
+
+// Binding for a built-in object reference other than jobject.
 template<typename T>
-class Ref<TypedObject<T>>
-        : public RefBase<TypedObject<T>, T>
+class TypedObject : public ObjectBase<TypedObject<T>, T>
 {
-    friend class RefBase<TypedObject<T>, T>;
-    friend class jni::LocalRef<TypedObject<T>>;
-    friend class jni::GlobalRef<TypedObject<T>>;
-
-    typedef RefBase<TypedObject<T>, T> Base;
-
-protected:
-    Ref(jobject instance) : Base(instance) {}
-
-    Ref(const Ref& ref) : Base(ref.mInstance) {}
-
 public:
-    MOZ_IMPLICIT Ref(decltype(nullptr)) : Base(nullptr) {}
+    explicit TypedObject(const Context<TypedObject<T>, T>& ctx)
+        : ObjectBase<TypedObject<T>, T>(ctx)
+    {}
 };
 
 
-namespace {
+// Define bindings for built-in types.
+using String = TypedObject<jstring>;
+using Class = TypedObject<jclass>;
+using Throwable = TypedObject<jthrowable>;
+
+using BooleanArray = TypedObject<jbooleanArray>;
+using ByteArray = TypedObject<jbyteArray>;
+using CharArray = TypedObject<jcharArray>;
+using ShortArray = TypedObject<jshortArray>;
+using IntArray = TypedObject<jintArray>;
+using LongArray = TypedObject<jlongArray>;
+using FloatArray = TypedObject<jfloatArray>;
+using DoubleArray = TypedObject<jdoubleArray>;
+using ObjectArray = TypedObject<jobjectArray>;
+
+
+namespace detail {
 
 // See explanation in LocalRef.
-template<class Cls> struct GenericObject { typedef Object Type; };
-template<> struct GenericObject<Object> { typedef struct {} Type; };
+template<class Cls> struct GenericObject { using Type = Object; };
+template<> struct GenericObject<Object>
+{
+    struct Type {
+        using Ref = jni::Ref<Type, jobject>;
+        using Context = jni::Context<Type, jobject>;
+    };
+};
+template<class Cls> struct GenericLocalRef
+{
+    template<class C> struct Type : jni::Object {};
+};
+template<> struct GenericLocalRef<Object>
+{
+    template<class C> using Type = jni::LocalRef<C>;
+};
 
 } // namespace
 
 template<class Cls>
-class LocalRef : public Ref<Cls>
+class LocalRef : public Cls::Context
 {
     template<class C> friend class LocalRef;
 
-private:
+    using Ctx = typename Cls::Context;
+    using Ref = typename Cls::Ref;
+    using JNIType = typename Ref::JNIType;
+
     // In order to be able to convert LocalRef<Object> to LocalRef<Cls>, we
     // need constructors and copy assignment operators that take in a
     // LocalRef<Object> argument. However, if Cls *is* Object, we would have
     // duplicated constructors and operators with LocalRef<Object> arguments. To
     // avoid this conflict, we use GenericObject, which is defined as Object for
     // LocalRef<non-Object> and defined as a dummy class for LocalRef<Object>.
-    typedef typename GenericObject<Cls>::Type GenericObject;
+    using GenericObject = typename detail::GenericObject<Cls>::Type;
 
-    JNIEnv* const mEnv;
+    // Similarly, GenericLocalRef is useed to convert LocalRef<Cls> to,
+    // LocalRef<Object>. It's defined as LocalRef<C> for Cls == Object,
+    // and defined as a dummy template class for Cls != Object.
+    template<class C> using GenericLocalRef
+            = typename detail::GenericLocalRef<Cls>::template Type<C>;
 
-    LocalRef(JNIEnv* env, jobject instance)
-        : Ref<Cls>(instance)
-        , mEnv(env)
-    {}
+    static JNIType NewLocalRef(JNIEnv* env, JNIType obj)
+    {
+        return JNIType(obj ? env->NewLocalRef(obj) : nullptr);
+    }
+
+    LocalRef(JNIEnv* env, JNIType instance) : Ctx(env, instance) {}
 
     LocalRef& swap(LocalRef& other)
     {
         auto instance = other.mInstance;
-        other.mInstance = Ref<Cls>::mInstance;
-        Ref<Cls>::mInstance = instance;
+        other.mInstance = Ctx::mInstance;
+        Ctx::mInstance = instance;
         return *this;
     }
 
@@ -285,79 +358,78 @@ public:
     // Construct a LocalRef from a raw JNI local reference. Unlike Ref::From,
     // LocalRef::Adopt returns a LocalRef that will delete the local reference
     // when going out of scope.
-    static LocalRef Adopt(jobject instance)
+    static LocalRef Adopt(JNIType instance)
     {
-        return LocalRef(GetJNIForThread(), instance);
+        return LocalRef(Ref::FindEnv(), instance);
     }
 
-    static LocalRef Adopt(JNIEnv* env, jobject instance)
+    static LocalRef Adopt(JNIEnv* env, JNIType instance)
     {
         return LocalRef(env, instance);
     }
 
     // Copy constructor.
     LocalRef(const LocalRef<Cls>& ref)
-        : Ref<Cls>(ref.mEnv->NewLocalRef(ref.mInstance))
-        , mEnv(ref.mEnv)
+        : Ctx(ref.mEnv, NewLocalRef(ref.mEnv, ref.mInstance))
     {}
 
     // Move constructor.
     LocalRef(LocalRef<Cls>&& ref)
-        : Ref<Cls>(ref.mInstance)
-        , mEnv(ref.mEnv)
+        : Ctx(ref.mEnv, ref.mInstance)
     {
         ref.mInstance = nullptr;
     }
 
-    explicit LocalRef(JNIEnv* env = GetJNIForThread())
-        : Ref<Cls>(nullptr)
-        , mEnv(env)
+    explicit LocalRef(JNIEnv* env = Ref::FindEnv())
+        : Ctx(env, nullptr)
     {}
 
     // Construct a LocalRef from any Ref,
     // which means creating a new local reference.
-    MOZ_IMPLICIT LocalRef(const Ref<Cls>& ref)
-        : Ref<Cls>(nullptr)
-        , mEnv(GetJNIForThread())
+    MOZ_IMPLICIT LocalRef(const Ref& ref)
+        : Ctx(Ref::FindEnv(), nullptr)
     {
-        Ref<Cls>::mInstance = mEnv->NewLocalRef(ref.mInstance);
+        Ctx::mInstance = NewLocalRef(Ctx::mEnv, ref.Get());
     }
+
+    LocalRef(JNIEnv* env, const Ref& ref)
+        : Ctx(env, NewLocalRef(env, ref.Get()))
+    {}
 
     // Move a LocalRef<Object> into a LocalRef<Cls> without
     // creating/deleting local references.
     MOZ_IMPLICIT LocalRef(LocalRef<GenericObject>&& ref)
-        : Ref<Cls>(ref.mInstance)
-        , mEnv(ref.mEnv)
+        : Ctx(ref.mEnv, JNIType(ref.mInstance))
+    {
+        ref.mInstance = nullptr;
+    }
+
+    template<class C>
+    MOZ_IMPLICIT LocalRef(GenericLocalRef<C>&& ref)
+        : Ctx(ref.mEnv, ref.mInstance)
     {
         ref.mInstance = nullptr;
     }
 
     // Implicitly converts nullptr to LocalRef.
     MOZ_IMPLICIT LocalRef(decltype(nullptr))
-        : Ref<Cls>(nullptr)
-        , mEnv(GetJNIForThread())
+        : Ctx(Ref::FindEnv(), nullptr)
     {}
 
     ~LocalRef()
     {
-        if (Ref<Cls>::mInstance) {
-            mEnv->DeleteLocalRef(Ref<Cls>::mInstance);
-            Ref<Cls>::mInstance = nullptr;
+        if (Ctx::mInstance) {
+            Ctx::mEnv->DeleteLocalRef(Ctx::mInstance);
+            Ctx::mInstance = nullptr;
         }
-    }
-
-    // Get the JNIEnv* associated with this local reference.
-    JNIEnv* Env() const
-    {
-        return mEnv;
     }
 
     // Get the raw JNI reference that can be used as a return value.
     // Returns the same JNI type (jobject, jstring, etc.) as the underlying Ref.
-    auto Forget() -> decltype(Ref<Cls>(nullptr).Get())
+    typename Ref::JNIType Forget()
     {
-        const auto obj = Ref<Cls>::Get();
-        Ref<Cls>::mInstance = nullptr;
+        const auto obj = Ctx::Get();
+        Ctx::mInstance = nullptr;
         return obj;
     }
 
@@ -366,95 +438,108 @@ public:
         return swap(ref);
     }
 
-    LocalRef<Cls>& operator=(const Ref<Cls>& ref)
+    LocalRef<Cls>& operator=(const Ref& ref)
     {
-        LocalRef<Cls> newRef(mEnv, ref.mInstance);
+        LocalRef<Cls> newRef(Ctx::mEnv, ref);
         return swap(newRef);
     }
 
     LocalRef<Cls>& operator=(LocalRef<GenericObject>&& ref)
     {
-        LocalRef<Cls> newRef(mozilla::Forward<LocalRef<GenericObject>>(ref));
+        LocalRef<Cls> newRef(mozilla::Move(ref));
+        return swap(newRef);
+    }
+
+    template<class C>
+    LocalRef<Cls>& operator=(GenericLocalRef<C>&& ref)
+    {
+        LocalRef<Cls> newRef(mozilla::Move(ref));
         return swap(newRef);
     }
 
     LocalRef<Cls>& operator=(decltype(nullptr))
     {
-        LocalRef<Cls> newRef(mEnv, nullptr);
+        LocalRef<Cls> newRef(Ctx::mEnv, nullptr);
         return swap(newRef);
     }
 };
 
 
 template<class Cls>
-class GlobalRef : public Ref<Cls>
+class GlobalRef : public Cls::Ref
 {
-private:
-    static jobject NewGlobalRef(JNIEnv* env, jobject instance)
+    using Ref = typename Cls::Ref;
+    using JNIType = typename Ref::JNIType;
+
+    static JNIType NewGlobalRef(JNIEnv* env, JNIType instance)
     {
-        if (!instance) {
-            return nullptr;
-        }
-        if (!env) {
-            env = GetJNIForThread();
-        }
-        return env->NewGlobalRef(instance);
+        return JNIType(instance ? env->NewGlobalRef(instance) : nullptr);
     }
 
     GlobalRef& swap(GlobalRef& other)
     {
         auto instance = other.mInstance;
-        other.mInstance = Ref<Cls>::mInstance;
-        Ref<Cls>::mInstance = instance;
+        other.mInstance = Ref::mInstance;
+        Ref::mInstance = instance;
         return *this;
     }
 
 public:
     GlobalRef()
-        : Ref<Cls>(nullptr)
+        : Ref(nullptr)
     {}
 
     // Copy constructor
     GlobalRef(const GlobalRef& ref)
-        : Ref<Cls>(ref.mInstance)
+        : Ref(NewGlobalRef(Ref::FindEnv(), ref.mInstance))
     {}
 
     // Move constructor
     GlobalRef(GlobalRef&& ref)
-        : Ref<Cls>(ref.mInstance)
+        : Ref(ref.mInstance)
     {
         ref.mInstance = nullptr;
     }
 
-    MOZ_IMPLICIT GlobalRef(const Ref<Cls>& ref)
-        : Ref<Cls>(NewGlobalRef(nullptr, ref.mInstance))
+    MOZ_IMPLICIT GlobalRef(const Ref& ref)
+        : Ref(NewGlobalRef(Ref::FindEnv(), ref.Get()))
     {}
 
-    GlobalRef(JNIEnv* env, const Ref<Cls>& ref)
-        : Ref<Cls>(NewGlobalRef(env, ref.mInstance))
+    GlobalRef(JNIEnv* env, const Ref& ref)
+        : Ref(NewGlobalRef(env, ref.Get()))
+    {}
+
+    MOZ_IMPLICIT GlobalRef(const LocalRef<Cls>& ref)
+        : Ref(NewGlobalRef(ref.Env(), ref.Get()))
     {}
 
     // Implicitly converts nullptr to GlobalRef.
     MOZ_IMPLICIT GlobalRef(decltype(nullptr))
-        : Ref<Cls>(nullptr)
+        : Ref(nullptr)
     {}
 
     ~GlobalRef()
     {
-        if (Ref<Cls>::mInstance) {
-            JNIEnv* const env = GetJNIForThread();
-            env->DeleteGlobalRef(Ref<Cls>::mInstance);
-            Ref<Cls>::mInstance = nullptr;
+        if (Ref::mInstance) {
+            Clear(Ref::FindEnv());
         }
     }
 
     // Get the raw JNI reference that can be used as a return value.
     // Returns the same JNI type (jobject, jstring, etc.) as the underlying Ref.
-    auto Forget() -> decltype(Ref<Cls>(nullptr).Get())
+    typename Ref::JNIType Forget()
     {
-        const auto obj = Ref<Cls>::Get();
-        Ref<Cls>::mInstance = nullptr;
+        const auto obj = Ref::Get();
+        Ref::mInstance = nullptr;
         return obj;
+    }
+
+    void Clear(JNIEnv* env)
+    {
+        if (Ref::mInstance) {
+            env->DeleteGlobalRef(Ref::mInstance);
+            Ref::mInstance = nullptr;
+        }
     }
 
     GlobalRef<Cls>& operator=(GlobalRef<Cls> ref)
@@ -462,7 +547,13 @@ public:
         return swap(ref);
     }
 
-    GlobalRef<Cls>& operator=(const Ref<Cls>& ref)
+    GlobalRef<Cls>& operator=(const Ref& ref)
+    {
+        GlobalRef<Cls> newRef(ref);
+        return swap(newRef);
+    }
+
+    GlobalRef<Cls>& operator=(const LocalRef<Cls>& ref)
     {
         GlobalRef<Cls> newRef(ref);
         return swap(newRef);
@@ -476,57 +567,76 @@ public:
 };
 
 
-// Ref specialization for jstring.
-template<>
-class Ref<String> : public RefBase<String, jstring>
+template<class Cls>
+class DependentRef : public Cls::Ref
 {
-    friend class RefBase<String, jstring>;
-    friend class jni::LocalRef<String>;
-    friend class jni::GlobalRef<String>;
-
-    typedef RefBase<TypedObject<jstring>, jstring> Base;
-
-protected:
-    Ref(jobject instance) : Base(instance) {}
-
-    Ref(const Ref& ref) : Base(ref.mInstance) {}
+    using Ref = typename Cls::Ref;
 
 public:
-    MOZ_IMPLICIT Ref(decltype(nullptr)) : Base(nullptr) {}
+    DependentRef(typename Ref::JNIType instance)
+        : Ref(instance)
+    {}
 
-    // Get the length of the jstring.
+    DependentRef(const DependentRef& ref)
+        : Ref(ref.Get())
+    {}
+};
+
+
+class StringParam;
+
+template<>
+class TypedObject<jstring> : public ObjectBase<TypedObject<jstring>, jstring>
+{
+    using Base = ObjectBase<TypedObject<jstring>, jstring>;
+
+public:
+    using Param = const StringParam&;
+
+    explicit TypedObject(const Context& ctx) : Base(ctx) {}
+
     size_t Length() const
     {
-        JNIEnv* const env = GetJNIForThread();
-        return env->GetStringLength(Get());
+        const size_t ret = Base::Env()->GetStringLength(Base::Instance());
+        MOZ_CATCH_JNI_EXCEPTION(Base::Env());
+        return ret;
+    }
+
+    nsString ToString() const
+    {
+        const jchar* const str = Base::Env()->GetStringChars(
+                Base::Instance(), nullptr);
+        const jsize len = Base::Env()->GetStringLength(Base::Instance());
+
+        nsString result(reinterpret_cast<const char16_t*>(str), len);
+        Base::Env()->ReleaseStringChars(Base::Instance(), str);
+        return result;
+    }
+
+    nsCString ToCString() const
+    {
+        return NS_ConvertUTF16toUTF8(ToString());
     }
 
     // Convert jstring to a nsString.
     operator nsString() const
     {
-        MOZ_ASSERT(Object::mInstance);
-
-        JNIEnv* const env = GetJNIForThread();
-        const jchar* const str = env->GetStringChars(Get(), nullptr);
-        const jsize len = env->GetStringLength(Get());
-
-        nsString result(reinterpret_cast<const char16_t*>(str), len);
-        env->ReleaseStringChars(Get(), str);
-        return result;
+        return ToString();
     }
 
     // Convert jstring to a nsCString.
     operator nsCString() const
     {
-        return NS_ConvertUTF16toUTF8(operator nsString());
+        return ToCString();
     }
 };
 
-
 // Define a custom parameter type for String,
 // which accepts both String::Ref and nsAString/nsACString
-class Param<String>::Type : public Ref<String>
+class StringParam : public String::Ref
 {
+    using Ref = String::Ref;
+
 private:
     // Not null if we should delete ref on destruction.
     JNIEnv* const mEnv;
@@ -536,41 +646,190 @@ private:
         const jstring result = env->NewString(
                 reinterpret_cast<const jchar*>(str.BeginReading()),
                 str.Length());
-        HandleUncaughtException(env);
+        MOZ_CATCH_JNI_EXCEPTION(env);
         return result;
     }
 
 public:
-    MOZ_IMPLICIT Type(const String::Ref& ref)
-        : Ref<String>(ref.Get())
+    MOZ_IMPLICIT StringParam(decltype(nullptr))
+        : Ref(nullptr)
         , mEnv(nullptr)
     {}
 
-    MOZ_IMPLICIT Type(const nsAString& str, JNIEnv* env = GetJNIForThread())
-        : Ref<String>(GetString(env, str))
+    MOZ_IMPLICIT StringParam(const Ref& ref)
+        : Ref(ref.Get())
+        , mEnv(nullptr)
+    {}
+
+    MOZ_IMPLICIT StringParam(const nsAString& str, JNIEnv* env = Ref::FindEnv())
+        : Ref(GetString(env, str))
         , mEnv(env)
     {}
 
-    MOZ_IMPLICIT Type(const char16_t* str, JNIEnv* env = GetJNIForThread())
-        : Ref<String>(GetString(env, nsDependentString(str)))
+    MOZ_IMPLICIT StringParam(const char16_t* str, JNIEnv* env = Ref::FindEnv())
+        : Ref(GetString(env, nsDependentString(str)))
         , mEnv(env)
     {}
 
-    MOZ_IMPLICIT Type(const nsACString& str, JNIEnv* env = GetJNIForThread())
-        : Ref<String>(GetString(env, NS_ConvertUTF8toUTF16(str)))
+    MOZ_IMPLICIT StringParam(const nsACString& str, JNIEnv* env = Ref::FindEnv())
+        : Ref(GetString(env, NS_ConvertUTF8toUTF16(str)))
         , mEnv(env)
     {}
 
-    MOZ_IMPLICIT Type(const char* str, JNIEnv* env = GetJNIForThread())
-        : Ref<String>(GetString(env, NS_ConvertUTF8toUTF16(str)))
+    MOZ_IMPLICIT StringParam(const char* str, JNIEnv* env = Ref::FindEnv())
+        : Ref(GetString(env, NS_ConvertUTF8toUTF16(str)))
         , mEnv(env)
     {}
 
-    ~Type()
+    ~StringParam()
     {
         if (mEnv) {
             mEnv->DeleteLocalRef(Get());
         }
+    }
+
+    operator String::LocalRef() const
+    {
+        // We can't return our existing ref because the returned
+        // LocalRef could be freed first, so we need a new local ref.
+        return String::LocalRef(mEnv ? mEnv : Ref::FindEnv(), *this);
+    }
+};
+
+
+namespace detail {
+    template<typename T> struct TypeAdapter;
+}
+
+// Ref specialization for arrays.
+template<typename JNIType, class ElementType>
+class ArrayRefBase : public ObjectBase<TypedObject<JNIType>, JNIType>
+{
+    using Base = ObjectBase<TypedObject<JNIType>, JNIType>;
+
+public:
+    explicit ArrayRefBase(const Context<TypedObject<JNIType>, JNIType>& ctx)
+        : Base(ctx)
+    {}
+
+    size_t Length() const
+    {
+        const size_t ret = Base::Env()->GetArrayLength(Base::Instance());
+        MOZ_CATCH_JNI_EXCEPTION(Base::Env());
+        return ret;
+    }
+
+    ElementType GetElement(size_t index) const
+    {
+        ElementType ret;
+        (Base::Env()->*detail::TypeAdapter<ElementType>::GetArray)(
+                Base::Instance(), jsize(index), 1, &ret);
+        MOZ_CATCH_JNI_EXCEPTION(Base::Env());
+        return ret;
+    }
+
+    nsTArray<ElementType> GetElements() const
+    {
+        static_assert(sizeof(ElementType) ==
+                sizeof(typename detail::TypeAdapter<ElementType>::JNIType),
+                "Size of native type must match size of JNI type");
+
+        const jsize len = size_t(Base::Env()->GetArrayLength(Base::Instance()));
+
+        nsTArray<ElementType> array((size_t(len)));
+        array.SetLength(size_t(len));
+        (Base::Env()->*detail::TypeAdapter<ElementType>::GetArray)(
+                Base::Instance(), 0, len, array.Elements());
+        return array;
+    }
+
+    ElementType operator[](size_t index) const
+    {
+        return GetElement(index);
+    }
+
+    operator nsTArray<ElementType>() const
+    {
+        return GetElements();
+    }
+};
+
+#define DEFINE_PRIMITIVE_ARRAY_REF(JNIType, ElementType) \
+    template<> \
+    class TypedObject<JNIType> : public ArrayRefBase<JNIType, ElementType> \
+    { \
+    public: \
+        explicit TypedObject(const Context& ctx) \
+            : ArrayRefBase<JNIType, ElementType>(ctx) \
+        {} \
+    }
+
+DEFINE_PRIMITIVE_ARRAY_REF(jbooleanArray, bool);
+DEFINE_PRIMITIVE_ARRAY_REF(jbyteArray,    int8_t);
+DEFINE_PRIMITIVE_ARRAY_REF(jcharArray,    char16_t);
+DEFINE_PRIMITIVE_ARRAY_REF(jshortArray,   int16_t);
+DEFINE_PRIMITIVE_ARRAY_REF(jintArray,     int32_t);
+DEFINE_PRIMITIVE_ARRAY_REF(jlongArray,    int64_t);
+DEFINE_PRIMITIVE_ARRAY_REF(jfloatArray,   float);
+DEFINE_PRIMITIVE_ARRAY_REF(jdoubleArray,  double);
+
+#undef DEFINE_PRIMITIVE_ARRAY_REF
+
+
+template<>
+class TypedObject<jobjectArray>
+    : public ObjectBase<TypedObject<jobjectArray>, jobjectArray>
+{
+    using Base = ObjectBase<TypedObject<jobjectArray>, jobjectArray>;
+
+public:
+    explicit TypedObject(const Context& ctx) : Base(ctx) {}
+
+    size_t Length() const
+    {
+        const size_t ret = Base::Env()->GetArrayLength(Base::Instance());
+        MOZ_CATCH_JNI_EXCEPTION(Base::Env());
+        return ret;
+    }
+
+    Object::LocalRef GetElement(size_t index) const
+    {
+        auto ret = Object::LocalRef::Adopt(
+                Base::Env(), Base::Env()->GetObjectArrayElement(
+                    Base::Instance(), jsize(index)));
+        MOZ_CATCH_JNI_EXCEPTION(Base::Env());
+        return ret;
+    }
+
+    nsTArray<Object::LocalRef> GetElements() const
+    {
+        const jsize len = size_t(Base::Env()->GetArrayLength(Base::Instance()));
+
+        nsTArray<Object::LocalRef> array((size_t(len)));
+        for (jsize i = 0; i < len; i++) {
+            array.AppendElement(Object::LocalRef::Adopt(
+                    Base::Env(), Base::Env()->GetObjectArrayElement(
+                        Base::Instance(), i)));
+            MOZ_CATCH_JNI_EXCEPTION(Base::Env());
+        }
+        return array;
+    }
+
+    Object::LocalRef operator[](size_t index) const
+    {
+        return GetElement(index);
+    }
+
+    operator nsTArray<Object::LocalRef>() const
+    {
+        return GetElements();
+    }
+
+    void SetElement(size_t index, Object::Param element) const
+    {
+        Base::Env()->SetObjectArrayElement(
+                Base::Instance(), jsize(index), element.Get());
+        MOZ_CATCH_JNI_EXCEPTION(Base::Env());
     }
 };
 

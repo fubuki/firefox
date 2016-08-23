@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -58,7 +59,7 @@ nsresult
 nsLineBreaker::FlushCurrentWord()
 {
   uint32_t length = mCurrentWord.Length();
-  nsAutoTArray<uint8_t,4000> breakState;
+  AutoTArray<uint8_t,4000> breakState;
   if (!breakState.AppendElements(length))
     return NS_ERROR_OUT_OF_MEMORY;
   
@@ -88,7 +89,7 @@ nsLineBreaker::FlushCurrentWord()
     }
   }
   if (autoHyphenate) {
-    nsRefPtr<nsHyphenator> hyphenator =
+    RefPtr<nsHyphenator> hyphenator =
       nsHyphenationManager::Instance()->GetHyphenator(mCurrentWordLanguage);
     if (hyphenator) {
       FindHyphenationPoints(hyphenator,
@@ -145,6 +146,13 @@ nsLineBreaker::FlushCurrentWord()
   return NS_OK;
 }
 
+// If the aFlags parameter to AppendText has all these bits set,
+// then we don't need to worry about finding break opportunities
+// in the appended text.
+#define NO_BREAKS_NEEDED_FLAGS (BREAK_SUPPRESS_INITIAL | \
+                                BREAK_SUPPRESS_INSIDE | \
+                                BREAK_SKIP_SETTING_NO_BREAKS)
+
 nsresult
 nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const char16_t* aText, uint32_t aLength,
                           uint32_t aFlags, nsILineBreakSink* aSink)
@@ -179,28 +187,30 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const char16_t* aText, 
       return rv;
   }
 
-  nsAutoTArray<uint8_t,4000> breakState;
+  AutoTArray<uint8_t,4000> breakState;
   if (aSink) {
     if (!breakState.AppendElements(aLength))
       return NS_ERROR_OUT_OF_MEMORY;
   }
-  
+
+  bool noCapitalizationNeeded = true;
   nsTArray<bool> capitalizationState;
   if (aSink && (aFlags & BREAK_NEED_CAPITALIZATION)) {
     if (!capitalizationState.AppendElements(aLength))
       return NS_ERROR_OUT_OF_MEMORY;
     memset(capitalizationState.Elements(), false, aLength*sizeof(bool));
+    noCapitalizationNeeded = false;
   }
 
   uint32_t start = offset;
   bool noBreaksNeeded = !aSink ||
-    (aFlags == (BREAK_SUPPRESS_INITIAL | BREAK_SUPPRESS_INSIDE | BREAK_SKIP_SETTING_NO_BREAKS) &&
+    ((aFlags & NO_BREAKS_NEEDED_FLAGS) == NO_BREAKS_NEEDED_FLAGS &&
      !mBreakHere && !mAfterBreakableSpace);
-  if (noBreaksNeeded) {
+  if (noBreaksNeeded && noCapitalizationNeeded) {
     // Skip to the space before the last word, since either the break data
     // here is not needed, or no breaks are set in the sink and there cannot
-    // be any breaks in this chunk; all we need is the context for the next
-    // chunk (if any)
+    // be any breaks in this chunk; and we don't need to do word-initial
+    // capitalization. All we need is the context for the next chunk (if any).
     offset = aLength;
     while (offset > start) {
       --offset;
@@ -211,7 +221,7 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const char16_t* aText, 
   uint32_t wordStart = offset;
   bool wordHasComplexChar = false;
 
-  nsRefPtr<nsHyphenator> hyphenator;
+  RefPtr<nsHyphenator> hyphenator;
   if ((aFlags & BREAK_USE_AUTO_HYPHENATION) &&
       !(aFlags & BREAK_SUPPRESS_INSIDE) &&
       aHyphenationLanguage) {
@@ -223,7 +233,7 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const char16_t* aText, 
     bool isSpace = IsSpace(ch);
     bool isBreakableSpace = isSpace && !(aFlags & BREAK_SUPPRESS_INSIDE);
 
-    if (aSink) {
+    if (aSink && !noBreaksNeeded) {
       breakState[offset] =
         mBreakHere || (mAfterBreakableSpace && !isBreakableSpace) ||
         (mWordBreak == nsILineBreaker::kWordBreak_BreakAll)  ?
@@ -252,7 +262,7 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const char16_t* aText, 
                                   breakState.Elements() + wordStart);
           }
         }
-        if (aFlags & BREAK_NEED_CAPITALIZATION) {
+        if (!noCapitalizationNeeded) {
           SetupCapitalization(aText + wordStart, offset - wordStart,
                               capitalizationState.Elements() + wordStart);
         }
@@ -284,10 +294,11 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const char16_t* aText, 
     }
   }
 
-  if (!noBreaksNeeded) {
-    // aSink must not be null
-    aSink->SetBreaks(start, offset - start, breakState.Elements() + start);
-    if (aFlags & BREAK_NEED_CAPITALIZATION) {
+  if (aSink) {
+    if (!noBreaksNeeded) {
+      aSink->SetBreaks(start, offset - start, breakState.Elements() + start);
+    }
+    if (!noCapitalizationNeeded) {
       aSink->SetCapitalization(start, offset - start,
                                capitalizationState.Elements() + start);
     }
@@ -302,7 +313,7 @@ nsLineBreaker::FindHyphenationPoints(nsHyphenator *aHyphenator,
                                      uint8_t *aBreakState)
 {
   nsDependentSubstring string(aTextStart, aTextLimit);
-  AutoFallibleTArray<bool,200> hyphens;
+  AutoTArray<bool,200> hyphens;
   if (NS_SUCCEEDED(aHyphenator->Hyphenate(string, hyphens))) {
     for (uint32_t i = 0; i + 1 < string.Length(); ++i) {
       if (hyphens[i]) {
@@ -357,7 +368,7 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const uint8_t* aText, u
       return rv;
   }
 
-  nsAutoTArray<uint8_t,4000> breakState;
+  AutoTArray<uint8_t,4000> breakState;
   if (aSink) {
     if (!breakState.AppendElements(aLength))
       return NS_ERROR_OUT_OF_MEMORY;
@@ -365,7 +376,7 @@ nsLineBreaker::AppendText(nsIAtom* aHyphenationLanguage, const uint8_t* aText, u
 
   uint32_t start = offset;
   bool noBreaksNeeded = !aSink ||
-    (aFlags == (BREAK_SUPPRESS_INITIAL | BREAK_SUPPRESS_INSIDE | BREAK_SKIP_SETTING_NO_BREAKS) &&
+    ((aFlags & NO_BREAKS_NEEDED_FLAGS) == NO_BREAKS_NEEDED_FLAGS &&
      !mBreakHere && !mAfterBreakableSpace);
   if (noBreaksNeeded) {
     // Skip to the space before the last word, since either the break data

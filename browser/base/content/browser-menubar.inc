@@ -11,12 +11,44 @@
                 style="border:0px;padding:0px;margin:0px;-moz-appearance:none">
             <menu id="file-menu" label="&fileMenu.label;"
                   accesskey="&fileMenu.accesskey;">
-              <menupopup id="menu_FilePopup">
+              <menupopup id="menu_FilePopup"
+                         onpopupshowing="updateUserContextUIVisibility();">
                 <menuitem id="menu_newNavigatorTab"
                           label="&tabCmd.label;"
                           command="cmd_newNavigatorTab"
                           key="key_newNavigatorTab"
                           accesskey="&tabCmd.accesskey;"/>
+                <menu id="menu_newUserContext"
+                      label="&newUserContext.label;"
+                      accesskey="&newUserContext.accesskey;"
+                      hidden="true">
+                  <menupopup>
+                    <menuitem id="menu_newUserContextTabPersonal"
+                              usercontextid="1"
+                              class="menuitem-iconic"
+                              label="&userContextPersonal.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextPersonal.accesskey;"/>
+                    <menuitem id="menu_newUserContextTabWork"
+                              usercontextid="2"
+                              class="menuitem-iconic"
+                              label="&userContextWork.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextWork.accesskey;"/>
+                    <menuitem id="menu_newUserContextTabBanking"
+                              usercontextid="3"
+                              class="menuitem-iconic"
+                              label="&userContextBanking.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextBanking.accesskey;"/>
+                    <menuitem id="menu_newUserContextTabShopping"
+                              usercontextid="4"
+                              class="menuitem-iconic"
+                              label="&userContextShopping.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextShopping.accesskey;"/>
+                  </menupopup>
+                </menu>
                 <menuitem id="menu_newNavigator"
                           label="&newNavigatorCmd.label;"
                           accesskey="&newNavigatorCmd.accesskey;"
@@ -28,12 +60,8 @@
                           command="Tools:PrivateBrowsing"
                           key="key_privatebrowsing"/>
 #ifdef E10S_TESTING_ONLY
-                <menuitem id="menu_newRemoteWindow"
-                          label="New e10s Window"
-                          hidden="true"
-                          command="Tools:RemoteWindow"/>
                 <menuitem id="menu_newNonRemoteWindow"
-                          label="New Non-e10s Window"
+                          label="&newNonRemoteWindow.label;"
                           hidden="true"
                           command="Tools:NonRemoteWindow"/>
 #endif
@@ -48,15 +76,6 @@
                           command="Browser:OpenFile"
                           key="openFileKb"
                           accesskey="&openFileCmd.accesskey;"/>
-#ifdef HAVE_SHELL_SERVICE
-#ifdef XP_WIN
-#ifdef MOZ_METRO
-                <menuitem id="menu_switchToMetro"
-                          label="&switchToMetroCmd2.label;"
-                          oncommand="SwitchToMetro()"/>
-#endif
-#endif
-#endif
                 <menuitem id="menu_close"
                           class="show-only-for-keyboard"
                           label="&closeCmd.label;"
@@ -107,11 +126,11 @@
                           oncommand="BrowserOffline.toggleOfflineStatus();"/>
                 <menuitem id="menu_FileQuitItem"
 #ifdef XP_WIN
-                          label="&quitApplicationCmdWin.label;"
-                          accesskey="&quitApplicationCmdWin.accesskey;"
+                          label="&quitApplicationCmdWin2.label;"
+                          accesskey="&quitApplicationCmdWin2.accesskey;"
 #else
 #ifdef XP_MACOSX
-                          label="&quitApplicationCmdMac.label;"
+                          label="&quitApplicationCmdMac2.label;"
 #else
                           label="&quitApplicationCmd.label;"
                           accesskey="&quitApplicationCmd.accesskey;"
@@ -223,6 +242,9 @@
                               key="key_gotoHistory"
                               observes="viewHistorySidebar"
                               label="&historyButton.label;"/>
+                    <menuitem id="menu_tabsSidebar"
+                              observes="viewTabsSidebar"
+                              label="&syncedTabs.sidebar.label;"/>
                     <!-- Service providers with sidebars are inserted between these two menuseperators -->
                     <menuseparator hidden="true"/>
                     <menuseparator class="social-provider-menu" hidden="true"/>
@@ -301,6 +323,9 @@
                           type="checkbox"
                           observes="View:FullScreen"/>
 #endif
+                <menuitem id="menu_readerModeItem"
+                          observes="View:ReaderView"
+                          hidden="true"/>
                 <menuitem id="menu_showAllTabs"
                           hidden="true"
                           accesskey="&showAllTabsCmd.accesskey;"
@@ -312,7 +337,9 @@
                           hidden="true"
                           label="&bidiSwitchPageDirectionItem.label;"
                           accesskey="&bidiSwitchPageDirectionItem.accesskey;"
-                          oncommand="SwitchDocumentDirection(window.content)"/>
+                          oncommand="gBrowser.selectedBrowser
+                                             .messageManager
+                                             .sendAsyncMessage('SwitchDocumentDirection');"/>
               </menupopup>
             </menu>
 
@@ -340,13 +367,11 @@
                           key="key_sanitize"
                           command="Tools:Sanitize"/>
                 <menuseparator id="sanitizeSeparator"/>
-#ifdef MOZ_SERVICES_SYNC
                 <menuitem id="sync-tabs-menuitem"
                           class="syncTabsMenuItem"
-                          label="&syncTabsMenu2.label;"
+                          label="&syncTabsMenu3.label;"
                           oncommand="BrowserOpenSyncTabs();"
-                          disabled="true"/>
-#endif
+                          hidden="true"/>
                 <menuitem id="historyRestoreLastSession"
                           label="&historyRestoreLastSession.label;"
                           command="Browser:RestoreLastSession"/>
@@ -439,13 +464,20 @@
                    onpopupshowing="if (!this.parentNode._placesView)
                                      new PlacesMenu(event, 'place:folder=TOOLBAR');"/>
       </menu>
+      <menu id="menu_unsortedBookmarks"
+            class="menu-iconic bookmark-item"
+            label="&otherBookmarksCmd.label;"
+            container="true">
+        <menupopup id="otherBookmarksFolderPopup"
+#ifndef XP_MACOSX
+                   placespopup="true"
+#endif
+                   context="placesContext"
+                   onpopupshowing="if (!this.parentNode._placesView)
+                                     new PlacesMenu(event, 'place:folder=UNFILED_BOOKMARKS');"/>
+      </menu>
       <menuseparator id="bookmarksMenuItemsSeparator"/>
       <!-- Bookmarks menu items -->
-      <menuseparator builder="end"
-                     class="hide-if-empty-places-result"/>
-      <menuitem id="menu_unsortedBookmarks"
-                label="&unsortedBookmarksCmd.label;"
-                oncommand="PlacesCommandHook.showPlacesOrganizer('UnfiledBookmarks');"/>
     </menupopup>
   </menu>
 
@@ -454,12 +486,10 @@
                   accesskey="&toolsMenu.accesskey;"
                   onpopupshowing="mirrorShow(this)">
               <menupopup id="menu_ToolsPopup"
-#ifdef MOZ_SERVICES_SYNC
 # We have to use setTimeout() here to avoid a flickering menu bar when opening
 # the Tools menu, see bug 970769. This can be removed once we got rid of the
 # event loop spinning in Weave.Status._authManager.
                          onpopupshowing="setTimeout(() => gSyncUI.updateUI());"
-#endif
                          >
               <menuitem id="menu_openDownloads"
                         label="&downloads.label;"
@@ -471,15 +501,11 @@
                         accesskey="&addons.accesskey;"
                         key="key_openAddons"
                         command="Tools:Addons"/>
-              <menuitem id="menu_openApps"
-                        label="&webapps.label;"
-                        accesskey="&webapps.accesskey;"
-                        oncommand="BrowserOpenApps();"/>
-#ifdef MOZ_SERVICES_SYNC
-              <!-- only one of sync-setup or sync-menu will be showing at once -->
+
+              <!-- only one of sync-setup, sync-syncnowitem or sync-reauthitem will be showing at once -->
               <menuitem id="sync-setup"
-                        label="&syncSetup.label;"
-                        accesskey="&syncSetup.accesskey;"
+                        label="&syncSignIn.label;"
+                        accesskey="&syncSignIn.accesskey;"
                         observes="sync-setup-state"
                         oncommand="gSyncUI.openSetup(null, 'menubar')"/>
               <menuitem id="sync-syncnowitem"
@@ -492,54 +518,14 @@
                         accesskey="&syncReAuthItem.accesskey;"
                         observes="sync-reauth-state"
                         oncommand="gSyncUI.openSignInAgainPage('menubar');"/>
-#endif
               <menuseparator id="devToolsSeparator"/>
               <menu id="webDeveloperMenu"
                     label="&webDeveloperMenu.label;"
                     accesskey="&webDeveloperMenu.accesskey;">
                 <menupopup id="menuWebDeveloperPopup">
-                  <menuitem id="menu_devToolbox"
-                            observes="devtoolsMenuBroadcaster_DevToolbox"
-                            accesskey="&devToolboxMenuItem.accesskey;"/>
-                  <menuseparator id="menu_devtools_separator"/>
-                  <menuitem id="menu_devToolbar"
-                            observes="devtoolsMenuBroadcaster_DevToolbar"
-                            accesskey="&devToolbarMenu.accesskey;"/>
-                  <menuitem id="menu_devAppMgr"
-                            observes="devtoolsMenuBroadcaster_DevAppMgr"
-                            accesskey="&devAppMgrMenu.accesskey;"/>
-                  <menuitem id="menu_webide"
-                            observes="devtoolsMenuBroadcaster_webide"
-                            accesskey="&webide.accesskey;"/>
-                  <menuitem id="menu_browserToolbox"
-                            observes="devtoolsMenuBroadcaster_BrowserToolbox"
-                            accesskey="&browserToolboxMenu.accesskey;"/>
-                  <menuitem id="menu_browserContentToolbox"
-                            observes="devtoolsMenuBroadcaster_BrowserContentToolbox"/>
-                  <menuitem id="menu_browserConsole"
-                            observes="devtoolsMenuBroadcaster_BrowserConsole"
-                            accesskey="&browserConsoleCmd.accesskey;"/>
-                  <menuitem id="menu_responsiveUI"
-                            observes="devtoolsMenuBroadcaster_ResponsiveUI"
-                            accesskey="&responsiveDesignTool.accesskey;"/>
-                  <menuitem id="menu_eyedropper"
-                            observes="devtoolsMenuBroadcaster_Eyedropper"
-                            accesskey="&eyedropper.accesskey;"/>
-                  <menuitem id="menu_scratchpad"
-                            observes="devtoolsMenuBroadcaster_Scratchpad"
-                            accesskey="&scratchpad.accesskey;"/>
                   <menuitem id="menu_pageSource"
                             observes="devtoolsMenuBroadcaster_PageSource"
                             accesskey="&pageSourceCmd.accesskey;"/>
-                  <menuitem id="javascriptConsole"
-                            observes="devtoolsMenuBroadcaster_ErrorConsole"
-                            accesskey="&errorConsoleCmd.accesskey;"/>
-                  <menuitem id="menu_devtools_connect"
-                            observes="devtoolsMenuBroadcaster_connect"/>
-                  <menuseparator id="devToolsEndSeparator"/>
-                  <menuitem id="getMoreDevtools"
-                            observes="devtoolsMenuBroadcaster_GetMoreTools"
-                            accesskey="&getMoreDevtoolsCmd.accesskey;"/>
                 </menupopup>
               </menu>
               <menuitem id="menu_pageInfo"

@@ -63,17 +63,19 @@ function dumpSdp(test) {
 }
 
 function waitForIceConnected(test, pc) {
-  if (pc.isIceConnected()) {
-    info(pc + ": ICE connection state log: " + pc.iceConnectionLog);
-    ok(true, pc + ": ICE is in connected state");
-    return Promise.resolve();
-  }
+  if (!pc.iceCheckingRestartExpected) {
+    if (pc.isIceConnected()) {
+      info(pc + ": ICE connection state log: " + pc.iceConnectionLog);
+      ok(true, pc + ": ICE is in connected state");
+      return Promise.resolve();
+    }
 
-  if (!pc.isIceConnectionPending()) {
-    dumpSdp(test);
-    var details = pc + ": ICE is already in bad state: " + pc.iceConnectionState;
-    ok(false, details);
-    return Promise.reject(new Error(details));
+    if (!pc.isIceConnectionPending()) {
+      dumpSdp(test);
+      var details = pc + ": ICE is already in bad state: " + pc.iceConnectionState;
+      ok(false, details);
+      return Promise.reject(new Error(details));
+    }
   }
 
   return pc.waitForIceConnected()
@@ -104,48 +106,42 @@ function waitForAnIceCandidate(pc) {
   });
 }
 
-function checkTrackStats(pc, audio, outbound) {
-  var stream = outbound ? pc._pc.getLocalStreams()[0] : pc._pc.getRemoteStreams()[0];
-  if (!stream) {
-    return Promise.resolve();
-  }
-  var track = audio ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
-  if (!track) {
-    return Promise.resolve();
-  }
+function checkTrackStats(pc, rtpSenderOrReceiver, outbound) {
+  var track = rtpSenderOrReceiver.track;
+  var audio = (track.kind == "audio");
   var msg = pc + " stats " + (outbound ? "outbound " : "inbound ") +
-      (audio ? "audio" : "video") + " rtp ";
+      (audio ? "audio" : "video") + " rtp track id " + track.id;
   return pc.getStats(track).then(stats => {
     ok(pc.hasStat(stats, {
       type: outbound ? "outboundrtp" : "inboundrtp",
       isRemote: false,
       mediaType: audio ? "audio" : "video"
-    }), msg + "1");
+    }), msg + " - found expected stats");
     ok(!pc.hasStat(stats, {
       type: outbound ? "inboundrtp" : "outboundrtp",
       isRemote: false
-    }), msg + "2");
+    }), msg + " - did not find extra stats with wrong direction");
     ok(!pc.hasStat(stats, {
       mediaType: audio ? "video" : "audio"
-    }), msg + "3");
+    }), msg + " - did not find extra stats with wrong media type");
   });
 }
 
-// checks all stats combinations inbound/outbound, audio/video
-var checkAllTrackStats = pc =>
-    Promise.all([0, 1, 2, 3].map(i => checkTrackStats(pc, i & 1, i & 2)));
+var checkAllTrackStats = pc => {
+  return Promise.all([].concat(
+    pc._pc.getSenders().map(sender => checkTrackStats(pc, sender, true)),
+    pc._pc.getReceivers().map(receiver => checkTrackStats(pc, receiver, false))));
+}
 
-var commandsPeerConnection = [
+// Commands run once at the beginning of each test, even when performing a
+// renegotiation test.
+var commandsPeerConnectionInitial = [
   function PC_SETUP_SIGNALING_CLIENT(test) {
-    if (test.steeplechase) {
-      setTimeout(() => {
-        ok(false, "PeerConnectionTest timed out");
-        test.teardown();
-      }, 30000);
+    if (test.testOptions.steeplechase) {
       test.setupSignalingClient();
       test.registerSignalingCallback("ice_candidate", function (message) {
         var pc = test.pcRemote ? test.pcRemote : test.pcLocal;
-        pc.storeOrAddIceCandidate(new mozRTCIceCandidate(message.ice_candidate));
+        pc.storeOrAddIceCandidate(new RTCIceCandidate(message.ice_candidate));
       });
       test.registerSignalingCallback("end_of_trickle_ice", function (message) {
         test.signalingMessagesFinished();
@@ -169,12 +165,12 @@ var commandsPeerConnection = [
     test.pcRemote.logSignalingState();
   },
 
-  function PC_LOCAL_GUM(test) {
-    return test.pcLocal.getAllUserMedia(test.pcLocal.constraints);
+  function PC_LOCAL_SETUP_ADDSTREAM_HANDLER(test) {
+    test.pcLocal.setupAddStreamEventHandler();
   },
 
-  function PC_REMOTE_GUM(test) {
-    return test.pcRemote.getAllUserMedia(test.pcRemote.constraints);
+  function PC_REMOTE_SETUP_ADDSTREAM_HANDLER(test) {
+    test.pcRemote.setupAddStreamEventHandler();
   },
 
   function PC_LOCAL_CHECK_INITIAL_SIGNALINGSTATE(test) {
@@ -197,22 +193,74 @@ var commandsPeerConnection = [
        "Initial remote ICE connection state is 'new'");
   },
 
+  function PC_LOCAL_CHECK_INITIAL_CAN_TRICKLE_SYNC(test) {
+    is(test.pcLocal._pc.canTrickleIceCandidates, null,
+       "Local trickle status should start out unknown");
+  },
+
+  function PC_REMOTE_CHECK_INITIAL_CAN_TRICKLE_SYNC(test) {
+    is(test.pcRemote._pc.canTrickleIceCandidates, null,
+       "Remote trickle status should start out unknown");
+  },
+];
+
+var commandsGetUserMedia = [
+  function PC_LOCAL_GUM(test) {
+    return test.pcLocal.getAllUserMedia(test.pcLocal.constraints);
+  },
+
+  function PC_REMOTE_GUM(test) {
+    return test.pcRemote.getAllUserMedia(test.pcRemote.constraints);
+  },
+];
+
+var commandsPeerConnectionOfferAnswer = [
   function PC_LOCAL_SETUP_ICE_HANDLER(test) {
     test.pcLocal.setupIceCandidateHandler(test);
-    if (test.steeplechase) {
-      test.pcLocal.endOfTrickleIce.then(() => {
-        send_message({"type": "end_of_trickle_ice"});
-      });
-    }
   },
 
   function PC_REMOTE_SETUP_ICE_HANDLER(test) {
     test.pcRemote.setupIceCandidateHandler(test);
-    if (test.steeplechase) {
-      test.pcRemote.endOfTrickleIce.then(() => {
-        send_message({"type": "end_of_trickle_ice"});
-      });
+  },
+
+  function PC_LOCAL_STEEPLECHASE_SIGNAL_EXPECTED_LOCAL_TRACKS(test) {
+    if (test.testOptions.steeplechase) {
+      send_message({"type": "local_expected_tracks",
+                    "expected_tracks": test.pcLocal.expectedLocalTrackInfoById});
     }
+  },
+
+  function PC_REMOTE_STEEPLECHASE_SIGNAL_EXPECTED_LOCAL_TRACKS(test) {
+    if (test.testOptions.steeplechase) {
+      send_message({"type": "remote_expected_tracks",
+                    "expected_tracks": test.pcRemote.expectedLocalTrackInfoById});
+    }
+  },
+
+  function PC_LOCAL_GET_EXPECTED_REMOTE_TRACKS(test) {
+    if (test.testOptions.steeplechase) {
+      return test.getSignalingMessage("remote_expected_tracks").then(
+          message => {
+            test.pcLocal.expectedRemoteTrackInfoById = message.expected_tracks;
+          });
+    }
+
+    // Deep copy, as similar to steeplechase as possible
+    test.pcLocal.expectedRemoteTrackInfoById =
+      JSON.parse(JSON.stringify(test.pcRemote.expectedLocalTrackInfoById));
+  },
+
+  function PC_REMOTE_GET_EXPECTED_REMOTE_TRACKS(test) {
+    if (test.testOptions.steeplechase) {
+      return test.getSignalingMessage("local_expected_tracks").then(
+          message => {
+            test.pcRemote.expectedRemoteTrackInfoById = message.expected_tracks;
+          });
+    }
+
+    // Deep copy, as similar to steeplechase as possible
+    test.pcRemote.expectedRemoteTrackInfoById =
+      JSON.parse(JSON.stringify(test.pcLocal.expectedLocalTrackInfoById));
   },
 
   function PC_LOCAL_CREATE_OFFER(test) {
@@ -223,7 +271,7 @@ var commandsPeerConnection = [
   },
 
   function PC_LOCAL_STEEPLECHASE_SIGNAL_OFFER(test) {
-    if (test.steeplechase) {
+    if (test.testOptions.steeplechase) {
       send_message({"type": "offer",
                     "offer": test.originalOffer,
                     "offer_constraints": test.pcLocal.constraints,
@@ -243,7 +291,7 @@ var commandsPeerConnection = [
   },
 
   function PC_REMOTE_GET_OFFER(test) {
-    if (!test.steeplechase) {
+    if (!test.testOptions.steeplechase) {
       test._local_offer = test.originalOffer;
       test._offer_constraints = test.pcLocal.constraints;
       test._offer_options = test.pcLocal.offerOptions;
@@ -252,7 +300,7 @@ var commandsPeerConnection = [
     return test.getSignalingMessage("offer")
       .then(message => {
         ok("offer" in message, "Got an offer message");
-        test._local_offer = new mozRTCSessionDescription(message.offer);
+        test._local_offer = new RTCSessionDescription(message.offer);
         test._offer_constraints = message.offer_constraints;
         test._offer_options = message.offer_options;
       });
@@ -266,16 +314,23 @@ var commandsPeerConnection = [
       });
   },
 
+  function PC_REMOTE_CHECK_CAN_TRICKLE_SYNC(test) {
+    is(test.pcRemote._pc.canTrickleIceCandidates, true,
+       "Remote thinks that local can trickle");
+  },
+
   function PC_LOCAL_SANE_LOCAL_SDP(test) {
-    test.pcLocal.verifySdp(test._local_offer, "offer",
-                           test._offer_constraints, test._offer_options,
-                           true);
+    test.pcLocal.localRequiresTrickleIce =
+      sdputils.verifySdp(test._local_offer, "offer",
+                         test._offer_constraints, test._offer_options,
+                         test.testOptions);
   },
 
   function PC_REMOTE_SANE_REMOTE_SDP(test) {
-    test.pcRemote.verifySdp(test._local_offer, "offer",
-                            test._offer_constraints, test._offer_options,
-                            false);
+    test.pcRemote.remoteRequiresTrickleIce =
+      sdputils.verifySdp(test._local_offer, "offer",
+                         test._offer_constraints, test._offer_options,
+                         test.testOptions);
   },
 
   function PC_REMOTE_CREATE_ANSWER(test) {
@@ -283,7 +338,7 @@ var commandsPeerConnection = [
       .then(answer => {
         is(test.pcRemote.signalingState, HAVE_REMOTE_OFFER,
            "Remote createAnswer does not change signaling state");
-        if (test.steeplechase) {
+        if (test.testOptions.steeplechase) {
           send_message({"type": "answer",
                         "answer": test.originalAnswer,
                         "answer_constraints": test.pcRemote.constraints});
@@ -291,46 +346,6 @@ var commandsPeerConnection = [
           test._answer_constraints = test.pcRemote.constraints;
         }
       });
-  },
-
-  function PC_REMOTE_CHECK_FOR_DUPLICATED_PORTS_IN_SDP(test) {
-    var re = /a=candidate.* (UDP|TCP) [\d]+ ([\d\.]+) ([\d]+) typ host/g;
-
-    var _sdpCandidatesIntoArray = sdp => {
-      var regexArray = [];
-      var resultArray = [];
-      while ((regexArray = re.exec(sdp)) !== null) {
-        info("regexArray: " + regexArray);
-        if ((regexArray[1] === "TCP") && (regexArray[3] === "9")) {
-          // As both sides can advertise TCP active connection on port 9 lets
-          // ignore them all together
-          info("Ignoring TCP candidate on port 9");
-          continue;
-        }
-        var triple = regexArray[1] + ":" + regexArray[2] + ":" + regexArray[3];
-        info("triple: " + triple);
-        if (resultArray.indexOf(triple) !== -1) {
-          dump("SDP: " + sdp.replace(/[\r]/g, '') + "\n");
-          ok(false, "This Transport:IP:Port " + triple + " appears twice in the SDP above!");
-        }
-        resultArray.push(triple);
-      }
-      return resultArray;
-    };
-
-    var offerTriples = _sdpCandidatesIntoArray(test._local_offer.sdp);
-    info("Offer ICE host candidates: " + JSON.stringify(offerTriples));
-
-    var answerTriples = _sdpCandidatesIntoArray(test.originalAnswer.sdp);
-    info("Answer ICE host candidates: " + JSON.stringify(answerTriples));
-
-    offerTriples.forEach(o => {
-      if (answerTriples.indexOf(o) !== -1) {
-        dump("SDP offer: " + test._local_offer.sdp.replace(/[\r]/g, '') + "\n");
-        dump("SDP answer: " + test.originalAnswer.sdp.replace(/[\r]/g, '') + "\n");
-        ok(false, "This IP:Port " + o + " appears in SDP offer and answer!");
-      }
-    });
   },
 
   function PC_REMOTE_SET_LOCAL_DESCRIPTION(test) {
@@ -342,7 +357,7 @@ var commandsPeerConnection = [
   },
 
   function PC_LOCAL_GET_ANSWER(test) {
-    if (!test.steeplechase) {
+    if (!test.testOptions.steeplechase) {
       test._remote_answer = test.originalAnswer;
       test._answer_constraints = test.pcRemote.constraints;
       return Promise.resolve();
@@ -350,27 +365,34 @@ var commandsPeerConnection = [
 
     return test.getSignalingMessage("answer").then(message => {
       ok("answer" in message, "Got an answer message");
-      test._remote_answer = new mozRTCSessionDescription(message.answer);
+      test._remote_answer = new RTCSessionDescription(message.answer);
       test._answer_constraints = message.answer_constraints;
     });
   },
 
   function PC_LOCAL_SET_REMOTE_DESCRIPTION(test) {
-    test.setRemoteDescription(test.pcLocal, test._remote_answer, STABLE)
+    return test.setRemoteDescription(test.pcLocal, test._remote_answer, STABLE)
       .then(() => {
         is(test.pcLocal.signalingState, STABLE,
            "signalingState after local setRemoteDescription is 'stable'");
       });
   },
   function PC_REMOTE_SANE_LOCAL_SDP(test) {
-    test.pcRemote.verifySdp(test._remote_answer, "answer",
-                            test._offer_constraints, test._offer_options,
-                            true);
+    test.pcRemote.localRequiresTrickleIce =
+      sdputils.verifySdp(test._remote_answer, "answer",
+                         test._offer_constraints, test._offer_options,
+                         test.testOptions);
   },
   function PC_LOCAL_SANE_REMOTE_SDP(test) {
-    test.pcLocal.verifySdp(test._remote_answer, "answer",
-                           test._offer_constraints, test._offer_options,
-                           false);
+    test.pcLocal.remoteRequiresTrickleIce =
+      sdputils.verifySdp(test._remote_answer, "answer",
+                         test._offer_constraints, test._offer_options,
+                         test.testOptions);
+  },
+
+  function PC_LOCAL_CHECK_CAN_TRICKLE_SYNC(test) {
+    is(test.pcLocal._pc.canTrickleIceCandidates, true,
+       "Local thinks that remote can trickle");
   },
 
   function PC_LOCAL_WAIT_FOR_ICE_CONNECTED(test) {
@@ -390,68 +412,68 @@ var commandsPeerConnection = [
   },
 
   function PC_LOCAL_CHECK_MEDIA_TRACKS(test) {
-    return test.pcLocal.checkMediaTracks(test._answer_constraints);
+    return test.pcLocal.checkMediaTracks();
   },
 
   function PC_REMOTE_CHECK_MEDIA_TRACKS(test) {
-    return test.pcRemote.checkMediaTracks(test._offer_constraints);
+    return test.pcRemote.checkMediaTracks();
   },
 
-  function PC_LOCAL_CHECK_MEDIA_FLOW_PRESENT(test) {
-    return test.pcLocal.checkMediaFlowPresent();
+  function PC_LOCAL_WAIT_FOR_MEDIA_FLOW(test) {
+    return test.pcLocal.waitForMediaFlow();
   },
 
-  function PC_REMOTE_CHECK_MEDIA_FLOW_PRESENT(test) {
-    return test.pcRemote.checkMediaFlowPresent();
+  function PC_REMOTE_WAIT_FOR_MEDIA_FLOW(test) {
+    return test.pcRemote.waitForMediaFlow();
   },
-/* TODO: re-enable when Bug 1095218 lands
-  function PC_LOCAL_CHECK_MSID(test) {
-    test.pcLocal.checkMsids();
-  },
-  function PC_REMOTE_CHECK_MSID(test) {
-    test.pcRemote.checkMsids();
-  },
-*/
+
   function PC_LOCAL_CHECK_STATS(test) {
-    return test.pcLocal.getStats(null).then(stats => {
-      test.pcLocal.checkStats(stats, test.steeplechase);
+    return test.pcLocal.getStats().then(stats => {
+      test.pcLocal.checkStats(stats, test.testOptions.steeplechase);
     });
   },
 
   function PC_REMOTE_CHECK_STATS(test) {
-    test.pcRemote.getStats(null).then(stats => {
-      test.pcRemote.checkStats(stats, test.steeplechase);
+    return test.pcRemote.getStats().then(stats => {
+      test.pcRemote.checkStats(stats, test.testOptions.steeplechase);
     });
   },
 
   function PC_LOCAL_CHECK_ICE_CONNECTION_TYPE(test) {
-    test.pcLocal.getStats(null).then(stats => {
+    return test.pcLocal.getStats().then(stats => {
       test.pcLocal.checkStatsIceConnectionType(stats);
     });
   },
 
   function PC_REMOTE_CHECK_ICE_CONNECTION_TYPE(test) {
-    test.pcRemote.getStats(null).then(stats => {
+    return test.pcRemote.getStats().then(stats => {
       test.pcRemote.checkStatsIceConnectionType(stats);
     });
   },
 
   function PC_LOCAL_CHECK_ICE_CONNECTIONS(test) {
-    test.pcLocal.getStats(null).then(stats => {
+    return test.pcLocal.getStats().then(stats => {
       test.pcLocal.checkStatsIceConnections(stats,
                                             test._offer_constraints,
                                             test._offer_options,
-                                            test._remote_answer);
+                                            test.testOptions);
     });
   },
 
   function PC_REMOTE_CHECK_ICE_CONNECTIONS(test) {
-    test.pcRemote.getStats(null).then(stats => {
+    return test.pcRemote.getStats().then(stats => {
       test.pcRemote.checkStatsIceConnections(stats,
                                              test._offer_constraints,
                                              test._offer_options,
-                                             test.originalAnswer);
+                                             test.testOptions);
     });
+  },
+
+  function PC_LOCAL_CHECK_MSID(test) {
+    return test.pcLocal.checkMsids();
+  },
+  function PC_REMOTE_CHECK_MSID(test) {
+    return test.pcRemote.checkMsids();
   },
 
   function PC_LOCAL_CHECK_STATS(test) {
@@ -459,5 +481,64 @@ var commandsPeerConnection = [
   },
   function PC_REMOTE_CHECK_STATS(test) {
     return checkAllTrackStats(test.pcRemote);
+  },
+  function PC_LOCAL_VERIFY_SDP_AFTER_END_OF_TRICKLE(test) {
+    if (test.pcLocal.endOfTrickleSdp) {
+      /* In case the endOfTrickleSdp promise is resolved already it will win the
+       * race because it gets evaluated first. But if endOfTrickleSdp is still
+       * pending the rejection will win the race. */
+      return Promise.race([
+        test.pcLocal.endOfTrickleSdp,
+        Promise.reject("No SDP")
+      ])
+      .then(sdp => sdputils.checkSdpAfterEndOfTrickle(sdp, test.testOptions, test.pcLocal.label),
+            () => info("pcLocal: Gathering is not complete yet, skipping post-gathering SDP check"));
+    }
+  },
+  function PC_REMOTE_VERIFY_SDP_AFTER_END_OF_TRICKLE(test) {
+    if (test.pcRemote.endOfTrickelSdp) {
+      /* In case the endOfTrickleSdp promise is resolved already it will win the
+       * race because it gets evaluated first. But if endOfTrickleSdp is still
+       * pending the rejection will win the race. */
+      return Promise.race([
+        test.pcRemote.endOfTrickleSdp,
+        Promise.reject("No SDP")
+      ])
+      .then(sdp => sdputils.checkSdpAfterEndOfTrickle(sdp, test.testOptions, test.pcRemote.label),
+            () => info("pcRemote: Gathering is not complete yet, skipping post-gathering SDP check"));
+    }
   }
 ];
+
+function PC_LOCAL_REMOVE_VP8_FROM_OFFER(test) {
+  isnot(test.originalOffer.sdp.search("H264/90000"), -1, "H.264 should be present in the SDP offer");
+  test.originalOffer.sdp = sdputils.removeVP8(test.originalOffer.sdp);
+  info("Updated H264 only offer: " + JSON.stringify(test.originalOffer));
+};
+
+function PC_LOCAL_REMOVE_BUNDLE_FROM_OFFER(test) {
+  test.originalOffer.sdp = sdputils.removeBundle(test.originalOffer.sdp);
+  info("Updated no bundle offer: " + JSON.stringify(test.originalOffer));
+};
+
+function PC_LOCAL_REMOVE_RTCPMUX_FROM_OFFER(test) {
+  test.originalOffer.sdp = sdputils.removeRtcpMux(test.originalOffer.sdp);
+  info("Updated no RTCP-Mux offer: " + JSON.stringify(test.originalOffer));
+};
+
+var addRenegotiation = (chain, commands, checks) => {
+  chain.append(commands);
+  chain.append(commandsPeerConnectionOfferAnswer);
+  if (checks) {
+    chain.append(checks);
+  }
+};
+
+var addRenegotiationAnswerer = (chain, commands, checks) => {
+  chain.append(function SWAP_PC_LOCAL_PC_REMOTE(test) {
+    var temp = test.pcLocal;
+    test.pcLocal = test.pcRemote;
+    test.pcRemote = temp;
+  });
+  addRenegotiation(chain, commands, checks);
+};

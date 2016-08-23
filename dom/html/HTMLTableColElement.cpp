@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,9 +24,9 @@ HTMLTableColElement::~HTMLTableColElement()
 }
 
 JSObject*
-HTMLTableColElement::WrapNode(JSContext *aCx)
+HTMLTableColElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLTableColElementBinding::Wrap(aCx, this);
+  return HTMLTableColElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_ELEMENT_CLONE(HTMLTableColElement)
@@ -110,7 +111,7 @@ HTMLTableColElement::MapAttributesIntoRule(const nsMappedAttributes* aAttributes
         textAlign->SetIntValue(value->GetEnumValue(), eCSSUnit_Enumerated);
     }
   }
-  if (aData->mSIDs & NS_STYLE_INHERIT_BIT(TextReset)) {
+  if (aData->mSIDs & NS_STYLE_INHERIT_BIT(Display)) {
     nsCSSValue* verticalAlign = aData->ValueForVerticalAlign();
     if (verticalAlign->GetUnit() == eCSSUnit_Null) {
       // valign: enum

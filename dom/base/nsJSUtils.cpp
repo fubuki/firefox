@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -35,10 +35,10 @@ using namespace mozilla::dom;
 
 bool
 nsJSUtils::GetCallingLocation(JSContext* aContext, nsACString& aFilename,
-                              uint32_t* aLineno)
+                              uint32_t* aLineno, uint32_t* aColumn)
 {
   JS::AutoFilename filename;
-  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno)) {
+  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno, aColumn)) {
     return false;
   }
 
@@ -48,10 +48,10 @@ nsJSUtils::GetCallingLocation(JSContext* aContext, nsACString& aFilename,
 
 bool
 nsJSUtils::GetCallingLocation(JSContext* aContext, nsAString& aFilename,
-                              uint32_t* aLineno)
+                              uint32_t* aLineno, uint32_t* aColumn)
 {
   JS::AutoFilename filename;
-  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno)) {
+  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno, aColumn)) {
     return false;
   }
 
@@ -83,54 +83,8 @@ nsJSUtils::GetCurrentlyRunningCodeInnerWindowID(JSContext *aContext)
   if (!aContext)
     return 0;
 
-  uint64_t innerWindowID = 0;
-
-  JSObject *jsGlobal = JS::CurrentGlobalOrNull(aContext);
-  if (jsGlobal) {
-    nsIScriptGlobalObject *scriptGlobal = GetStaticScriptGlobal(jsGlobal);
-    if (scriptGlobal) {
-      nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(scriptGlobal);
-      if (win)
-        innerWindowID = win->WindowID();
-    }
-  }
-
-  return innerWindowID;
-}
-
-void
-nsJSUtils::ReportPendingException(JSContext *aContext)
-{
-  if (JS_IsExceptionPending(aContext)) {
-    bool saved = JS_SaveFrameChain(aContext);
-    {
-      // JS_SaveFrameChain set the compartment of aContext to null, so we need
-      // to enter a compartment.  The question is, which one? We don't want to
-      // enter the original compartment of aContext (or the compartment of the
-      // current exception on aContext, for that matter) because when we
-      // JS_ReportPendingException the JS engine can try to duck-type the
-      // exception and produce a JSErrorReport.  It will then pass that
-      // JSErrorReport to the error reporter on aContext, which might expose
-      // information from it to script via onerror handlers.  So it's very
-      // important that the duck typing happen in the same compartment as the
-      // onerror handler.  In practice, that's the compartment of the window (or
-      // otherwise default global) of aContext, so use that here.
-      nsIScriptContext* scx = GetScriptContextFromJSContext(aContext);
-      JS::Rooted<JSObject*> scope(aContext);
-      scope = scx ? scx->GetWindowProxy() : nullptr;
-      if (!scope) {
-        // The SafeJSContext has no default object associated with it.
-        MOZ_ASSERT(NS_IsMainThread());
-        MOZ_ASSERT(aContext == nsContentUtils::GetSafeJSContext());
-        scope = xpc::UnprivilegedJunkScope(); // Usage approved by bholley
-      }
-      JSAutoCompartment ac(aContext, scope);
-      JS_ReportPendingException(aContext);
-    }
-    if (saved) {
-      JS_RestoreFrameChain(aContext);
-    }
-  }
+  nsGlobalWindow* win = xpc::CurrentWindowOrNull(aContext);
+  return win ? win->WindowID() : 0;
 }
 
 nsresult
@@ -143,7 +97,6 @@ nsJSUtils::CompileFunction(AutoJSAPI& jsapi,
                            const nsAString& aBody,
                            JSObject** aFunctionObject)
 {
-  MOZ_ASSERT(jsapi.OwnsErrorReporting());
   JSContext* cx = jsapi.cx();
   MOZ_ASSERT(js::GetEnterCompartmentDepth(cx) > 0);
   MOZ_ASSERT_IF(aScopeChain.length() != 0,
@@ -199,17 +152,18 @@ nsJSUtils::EvaluateString(JSContext* aCx,
   PROFILER_LABEL("nsJSUtils", "EvaluateString",
     js::ProfileEntry::Category::JS);
 
+  MOZ_ASSERT(JS::ContextOptionsRef(aCx).autoJSAPIOwnsErrorReporting(),
+             "Caller must own error reporting");
   MOZ_ASSERT_IF(aCompileOptions.versionSet,
                 aCompileOptions.version != JSVERSION_UNKNOWN);
   MOZ_ASSERT_IF(aEvaluateOptions.coerceToString, !aCompileOptions.noScriptRval);
-  MOZ_ASSERT_IF(!aEvaluateOptions.reportUncaught, !aCompileOptions.noScriptRval);
-  // Note that the above assert means that if aCompileOptions.noScriptRval then
-  // also aEvaluateOptions.reportUncaught.
   MOZ_ASSERT(aCx == nsContentUtils::GetCurrentJSContext());
   MOZ_ASSERT(aSrcBuf.get());
   MOZ_ASSERT(js::GetGlobalForObjectCrossCompartment(aEvaluationGlobal) ==
              aEvaluationGlobal);
   MOZ_ASSERT_IF(aOffThreadToken, aCompileOptions.noScriptRval);
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(nsContentUtils::IsInMicroTask());
 
   // Unfortunately, the JS engine actually compiles scripts with a return value
   // in a different, less efficient way.  Furthermore, it can't JIT them in many
@@ -223,13 +177,6 @@ nsJSUtils::EvaluateString(JSContext* aCx,
 
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
   NS_ENSURE_TRUE(ssm->ScriptAllowed(aEvaluationGlobal), NS_OK);
-
-  mozilla::Maybe<AutoDontReportUncaught> dontReport;
-  if (!aEvaluateOptions.reportUncaught) {
-    // We need to prevent AutoLastFrameCheck from reporting and clearing
-    // any pending exceptions.
-    dontReport.emplace(aCx);
-  }
 
   bool ok = true;
   // Scope the JSAutoCompartment so that we can later wrap the return value
@@ -274,24 +221,19 @@ nsJSUtils::EvaluateString(JSContext* aCx,
   }
 
   if (!ok) {
-    if (aEvaluateOptions.reportUncaught) {
-      ReportPendingException(aCx);
-      if (!aCompileOptions.noScriptRval) {
-        aRetValue.setUndefined();
-      }
+    if (JS_IsExceptionPending(aCx)) {
+      rv = NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW;
     } else {
-      rv = JS_IsExceptionPending(aCx) ? NS_ERROR_FAILURE
-                                      : NS_ERROR_OUT_OF_MEMORY;
-      JS::Rooted<JS::Value> exn(aCx);
-      JS_GetPendingException(aCx, &exn);
-      MOZ_ASSERT(!aCompileOptions.noScriptRval); // we asserted this on entry
-      aRetValue.set(exn);
-      JS_ClearPendingException(aCx);
+      rv = NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW_UNCATCHABLE;
+    }
+
+    if (!aCompileOptions.noScriptRval) {
+      aRetValue.setUndefined();
     }
   }
 
   // Wrap the return value into whatever compartment aCx was in.
-  if (!aCompileOptions.noScriptRval) {
+  if (ok && !aCompileOptions.noScriptRval) {
     if (!JS_WrapValue(aCx, aRetValue)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -358,6 +300,12 @@ nsJSUtils::GetScopeChainForElement(JSContext* aCx,
   return true;
 }
 
+/* static */
+void
+nsJSUtils::ResetTimeZone()
+{
+  JS::ResetTimeZone();
+}
 
 //
 // nsDOMJSUtils.h
@@ -371,3 +319,15 @@ JSObject* GetDefaultScopeFromJSContext(JSContext *cx)
   nsIScriptContext *scx = GetScriptContextFromJSContext(cx);
   return  scx ? scx->GetWindowProxy() : nullptr;
 }
+
+bool nsAutoJSString::init(const JS::Value &v)
+{
+  JSContext* cx = nsContentUtils::RootingCxForThread();
+  if (!init(nsContentUtils::RootingCxForThread(), v)) {
+    JS_ClearPendingException(cx);
+    return false;
+  }
+
+  return true;
+}
+

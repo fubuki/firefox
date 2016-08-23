@@ -4,10 +4,59 @@
 
 /*global intl_Collator: false, */
 
+/**
+ * A helper function implementing the logic for both String.prototype.padStart
+ * and String.prototype.padEnd as described in ES7 Draft March 29, 2016
+ */
+function String_pad(maxLength, fillString, padEnd=false) {
+
+    // Steps 1-2.
+    RequireObjectCoercible(this);
+    let str = ToString(this);
+
+    // Steps 3-4.
+    let intMaxLength = ToLength(maxLength);
+    let strLen = str.length;
+
+    // Step 5.
+    if (intMaxLength <= strLen)
+        return str;
+
+    // Steps 6-7.
+    let filler = fillString === undefined ? " " : ToString(fillString);
+
+    // Step 8.
+    if (filler === "")
+        return str;
+
+    // Step 9.
+    let fillLen = intMaxLength - strLen;
+
+    // Step 10.
+    let truncatedStringFiller = callFunction(String_repeat, filler,
+                                             fillLen / filler.length);
+
+    truncatedStringFiller += callFunction(String_substr, filler, 0,
+                                          fillLen % filler.length);
+
+    // Step 11.
+    if (padEnd === true)
+        return str + truncatedStringFiller;
+    return truncatedStringFiller + str;
+}
+
+function String_pad_start(maxLength, fillString=" ") {
+    return callFunction(String_pad, this, maxLength, fillString, false);
+}
+
+function String_pad_end(maxLength, fillString=" ") {
+    return callFunction(String_pad, this, maxLength, fillString, true);
+}
+
 /* ES6 Draft Oct 14, 2014 21.1.3.19 */
 function String_substring(start, end) {
     // Steps 1-3.
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var str = ToString(this);
 
     // Step 4.
@@ -44,14 +93,14 @@ function String_substring(start, end) {
 
 function String_static_substring(string, start, end) {
     if (arguments.length < 1)
-        ThrowError(JSMSG_MISSING_FUN_ARG, 0, 'String.substring');
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.substring');
     return callFunction(String_substring, string, start, end);
 }
 
 /* ES6 Draft Oct 14, 2014 B.2.3.1 */
 function String_substr(start, length) {
     // Steps 1-2.
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var str = ToString(this);
 
     // Steps 3-4.
@@ -68,7 +117,7 @@ function String_substr(start, length) {
         intStart = std_Math_max(intStart + size, 0);
 
     // Step 9.
-    var resultLength = std_Math_min(std_Math_max(end, 0), size - intStart)
+    var resultLength = std_Math_min(std_Math_max(end, 0), size - intStart);
 
     // Step 10.
     if (resultLength <= 0)
@@ -83,14 +132,14 @@ function String_substr(start, length) {
 
 function String_static_substr(string, start, length) {
     if (arguments.length < 1)
-        ThrowError(JSMSG_MISSING_FUN_ARG, 0, 'String.substr');
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.substr');
     return callFunction(String_substr, string, start, length);
 }
 
 /* ES6 Draft Oct 14, 2014 21.1.3.16 */
 function String_slice(start, end) {
     // Steps 1-3.
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var str = ToString(this);
 
     // Step 4.
@@ -120,14 +169,14 @@ function String_slice(start, end) {
 
 function String_static_slice(string, start, end) {
     if (arguments.length < 1)
-        ThrowError(JSMSG_MISSING_FUN_ARG, 0, 'String.slice');
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.slice');
     return callFunction(String_slice, string, start, end);
 }
 
 /* ES6 Draft September 5, 2013 21.1.3.3 */
 function String_codePointAt(pos) {
     // Steps 1-3.
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
 
     // Steps 4-5.
@@ -159,7 +208,7 @@ var collatorCache = new Record();
 /* ES6 20121122 draft 15.5.4.21. */
 function String_repeat(count) {
     // Steps 1-3.
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
 
     // Steps 4-5.
@@ -167,10 +216,10 @@ function String_repeat(count) {
 
     // Steps 6-7.
     if (n < 0)
-        ThrowError(JSMSG_NEGATIVE_REPETITION_COUNT); // a RangeError
+        ThrowRangeError(JSMSG_NEGATIVE_REPETITION_COUNT);
 
     if (!(n * S.length < (1 << 28)))
-        ThrowError(JSMSG_RESULTING_STRING_TOO_LARGE); // a RangeError
+        ThrowRangeError(JSMSG_RESULTING_STRING_TOO_LARGE);
 
     // Communicate |n|'s possible range to the compiler.
     n = n & ((1 << 28) - 1);
@@ -189,21 +238,14 @@ function String_repeat(count) {
     return T;
 }
 
-#define STRING_ITERATOR_SLOT_ITERATED_STRING 0
-#define STRING_ITERATOR_SLOT_NEXT_INDEX 1
-
 // ES6 draft specification, section 21.1.3.27, version 2013-09-27.
 function String_iterator() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
     var iterator = NewStringIterator();
-    UnsafeSetReservedSlot(iterator, STRING_ITERATOR_SLOT_ITERATED_STRING, S);
-    UnsafeSetReservedSlot(iterator, STRING_ITERATOR_SLOT_NEXT_INDEX, 0);
+    UnsafeSetReservedSlot(iterator, ITERATOR_SLOT_TARGET, S);
+    UnsafeSetReservedSlot(iterator, ITERATOR_SLOT_NEXT_INDEX, 0);
     return iterator;
-}
-
-function StringIteratorIdentity() {
-    return this;
 }
 
 function StringIteratorNext() {
@@ -212,11 +254,11 @@ function StringIteratorNext() {
                             "StringIteratorNext");
     }
 
-    var S = UnsafeGetStringFromReservedSlot(this, STRING_ITERATOR_SLOT_ITERATED_STRING);
+    var S = UnsafeGetStringFromReservedSlot(this, ITERATOR_SLOT_TARGET);
     // We know that JSString::MAX_LENGTH <= INT32_MAX (and assert this in
     // SelfHostring.cpp) so our current index can never be anything other than
     // an Int32Value.
-    var index = UnsafeGetInt32FromReservedSlot(this, STRING_ITERATOR_SLOT_NEXT_INDEX);
+    var index = UnsafeGetInt32FromReservedSlot(this, ITERATOR_SLOT_NEXT_INDEX);
     var size = S.length;
     var result = { value: undefined, done: false };
 
@@ -234,8 +276,8 @@ function StringIteratorNext() {
         }
     }
 
-    UnsafeSetReservedSlot(this, STRING_ITERATOR_SLOT_NEXT_INDEX, index + charCount);
-    result.value = callFunction(std_String_substring, S, index, index + charCount);
+    UnsafeSetReservedSlot(this, ITERATOR_SLOT_NEXT_INDEX, index + charCount);
+    result.value = callFunction(String_substring, S, index, index + charCount);
 
     return result;
 }
@@ -248,7 +290,7 @@ function StringIteratorNext() {
  */
 function String_localeCompare(that) {
     // Steps 1-3.
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
     var That = ToString(that);
 
@@ -290,21 +332,21 @@ function String_static_fromCodePoint(codePoints) {
 
         // Step 5d.
         if (nextCP !== ToInteger(nextCP) || Number_isNaN(nextCP))
-            ThrowError(JSMSG_NOT_A_CODEPOINT, ToString(nextCP));
+            ThrowRangeError(JSMSG_NOT_A_CODEPOINT, ToString(nextCP));
 
         // Step 5e.
         if (nextCP < 0 || nextCP > 0x10FFFF)
-            ThrowError(JSMSG_NOT_A_CODEPOINT, ToString(nextCP));
+            ThrowRangeError(JSMSG_NOT_A_CODEPOINT, ToString(nextCP));
 
         // Step 5f.
         // Inlined UTF-16 Encoding
         if (nextCP <= 0xFFFF) {
-            elements.push(nextCP);
+            callFunction(std_Array_push, elements, nextCP);
             continue;
         }
 
-        elements.push((((nextCP - 0x10000) / 0x400) | 0) + 0xD800);
-        elements.push((nextCP - 0x10000) % 0x400 + 0xDC00);
+        callFunction(std_Array_push, elements, (((nextCP - 0x10000) / 0x400) | 0) + 0xD800);
+        callFunction(std_Array_push, elements, (nextCP - 0x10000) % 0x400 + 0xDC00);
     }
 
     // Step 6.
@@ -373,63 +415,67 @@ function String_static_raw(callSite, ...substitutions) {
  */
 function String_static_localeCompare(str1, str2) {
     if (arguments.length < 1)
-        ThrowError(JSMSG_MISSING_FUN_ARG, 0, "String.localeCompare");
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, "String.localeCompare");
     var locales = arguments.length > 2 ? arguments[2] : undefined;
     var options = arguments.length > 3 ? arguments[3] : undefined;
+#if EXPOSE_INTL_API
     return callFunction(String_localeCompare, str1, str2, locales, options);
+#else
+    return callFunction(std_String_localeCompare, str1, str2, locales, options);
+#endif
 }
 
 // ES6 draft 2014-04-27 B.2.3.3
 function String_big() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<big>" + ToString(this) + "</big>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.4
 function String_blink() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<blink>" + ToString(this) + "</blink>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.5
 function String_bold() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<b>" + ToString(this) + "</b>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.6
 function String_fixed() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<tt>" + ToString(this) + "</tt>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.9
 function String_italics() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<i>" + ToString(this) + "</i>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.11
 function String_small() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<small>" + ToString(this) + "</small>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.12
 function String_strike() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<strike>" + ToString(this) + "</strike>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.13
 function String_sub() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<sub>" + ToString(this) + "</sub>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.14
 function String_sup() {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     return "<sup>" + ToString(this) + "</sup>";
 }
 
@@ -440,41 +486,172 @@ function EscapeAttributeValue(v) {
     var chunkStart = 0;
     for (var i = 0; i < inputLen; i++) {
         if (inputStr[i] === '"') {
-            outputStr += callFunction(std_String_substring, inputStr, chunkStart, i) + '&quot;';
+            outputStr += callFunction(String_substring, inputStr, chunkStart, i) + '&quot;';
             chunkStart = i + 1;
         }
     }
     if (chunkStart === 0)
         return inputStr;
     if (chunkStart < inputLen)
-        outputStr += callFunction(std_String_substring, inputStr, chunkStart);
+        outputStr += callFunction(String_substring, inputStr, chunkStart);
     return outputStr;
 }
 
 // ES6 draft 2014-04-27 B.2.3.2
 function String_anchor(name) {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
     return '<a name="' + EscapeAttributeValue(name) + '">' + S + "</a>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.7
 function String_fontcolor(color) {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
     return '<font color="' + EscapeAttributeValue(color) + '">' + S + "</font>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.8
 function String_fontsize(size) {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
     return '<font size="' + EscapeAttributeValue(size) + '">' + S + "</font>";
 }
 
 // ES6 draft 2014-04-27 B.2.3.10
 function String_link(url) {
-    CheckObjectCoercible(this);
+    RequireObjectCoercible(this);
     var S = ToString(this);
     return '<a href="' + EscapeAttributeValue(url) + '">' + S + "</a>";
+}
+
+function String_static_match(string, regexp) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.match');
+    return callFunction(std_String_match, string, regexp);
+}
+
+function String_static_replace(string, find, replacement) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.replace');
+    return callFunction(std_String_replace, string, find, replacement);
+}
+
+function String_static_search(string, regexp) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.search');
+    return callFunction(std_String_search, string, regexp);
+}
+
+function String_static_split(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.split');
+    var seperator = arguments.length > 1 ? arguments[1] : undefined;
+    var limit = arguments.length > 2 ? arguments[2] : undefined;
+    return callFunction(std_String_split, string, seperator, limit);
+}
+
+function String_static_toLowerCase(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.toLowerCase');
+    return callFunction(std_String_toLowerCase, string);
+}
+
+function String_static_toUpperCase(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.toUpperCase');
+    return callFunction(std_String_toUpperCase, string);
+}
+
+function String_static_charAt(string, pos) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.charAt');
+    return callFunction(std_String_charAt, string, pos);
+}
+
+function String_static_charCodeAt(string, pos) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.charCodeAt');
+    return callFunction(std_String_charCodeAt, string, pos);
+}
+
+function String_static_includes(string, searchString) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.includes');
+    var position = arguments.length > 2 ? arguments[2] : undefined;
+    return callFunction(std_String_includes, string, searchString, position);
+}
+
+function String_static_indexOf(string, searchString) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.indexOf');
+    var position = arguments.length > 2 ? arguments[2] : undefined;
+    return callFunction(std_String_indexOf, string, searchString, position);
+}
+
+function String_static_lastIndexOf(string, searchString) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.lastIndexOf');
+    var position = arguments.length > 2 ? arguments[2] : undefined;
+    return callFunction(std_String_lastIndexOf, string, searchString, position);
+}
+
+function String_static_startsWith(string, searchString) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.startsWith');
+    var position = arguments.length > 2 ? arguments[2] : undefined;
+    return callFunction(std_String_startsWith, string, searchString, position);
+}
+
+function String_static_endsWith(string, searchString) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.endsWith');
+    var endPosition = arguments.length > 2 ? arguments[2] : undefined;
+    return callFunction(std_String_endsWith, string, searchString, endPosition);
+}
+
+function String_static_trim(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.trim');
+    return callFunction(std_String_trim, string);
+}
+
+function String_static_trimLeft(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.trimLeft');
+    return callFunction(std_String_trimLeft, string);
+}
+
+function String_static_trimRight(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.trimRight');
+    return callFunction(std_String_trimRight, string);
+}
+
+function String_static_toLocaleLowerCase(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.toLocaleLowerCase');
+    return callFunction(std_String_toLocaleLowerCase, string);
+}
+
+function String_static_toLocaleUpperCase(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.toLocaleUpperCase');
+    return callFunction(std_String_toLocaleUpperCase, string);
+}
+
+#if EXPOSE_INTL_API
+function String_static_normalize(string) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.normalize');
+    var form = arguments.length > 1 ? arguments[1] : undefined;
+    return callFunction(std_String_normalize, string, form);
+}
+#endif
+
+function String_static_concat(string, arg1) {
+    if (arguments.length < 1)
+        ThrowTypeError(JSMSG_MISSING_FUN_ARG, 0, 'String.concat');
+    var args = callFunction(std_Array_slice, arguments, 1);
+    return callFunction(std_Function_apply, std_String_concat, string, args);
 }

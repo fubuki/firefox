@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,6 +22,8 @@ namespace dom {
 
 class GlobalObject;
 class DOMMatrix;
+class DOMPoint;
+struct DOMPointInit;
 
 class DOMMatrixReadOnly : public nsWrapperCache
 {
@@ -39,6 +42,9 @@ public:
       mMatrix3D = new gfx::Matrix4x4(*other.mMatrix3D);
     }
   }
+
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(DOMMatrixReadOnly)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(DOMMatrixReadOnly)
 
 #define GetMatrixMember(entry2D, entry3D, default) \
 { \
@@ -130,16 +136,15 @@ protected:
   nsAutoPtr<gfx::Matrix>    mMatrix2D;
   nsAutoPtr<gfx::Matrix4x4> mMatrix3D;
 
-  ~DOMMatrixReadOnly()
-  {
-  }
+  virtual ~DOMMatrixReadOnly() {}
+
 private:
   DOMMatrixReadOnly() = delete;
   DOMMatrixReadOnly(const DOMMatrixReadOnly&) = delete;
   DOMMatrixReadOnly& operator=(const DOMMatrixReadOnly&) = delete;
 };
 
-class DOMMatrix MOZ_FINAL : public DOMMatrixReadOnly
+class DOMMatrix : public DOMMatrixReadOnly
 {
 public:
   explicit DOMMatrix(nsISupports* aParent)
@@ -149,9 +154,6 @@ public:
   DOMMatrix(nsISupports* aParent, const DOMMatrixReadOnly& other)
     : DOMMatrixReadOnly(aParent, other)
   {}
-
-  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(DOMMatrix)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(DOMMatrix)
 
   static already_AddRefed<DOMMatrix>
   Constructor(const GlobalObject& aGlobal, ErrorResult& aRv);
@@ -167,7 +169,7 @@ public:
   Constructor(const GlobalObject& aGlobal, const Sequence<double>& aNumberSequence, ErrorResult& aRv);
 
   nsISupports* GetParentObject() const { return mParent; }
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 #define Set2DMatrixMember(entry2D, entry3D) \
 { \
@@ -244,13 +246,13 @@ public:
   DOMMatrix* SkewYSelf(double aSy);
   DOMMatrix* InvertSelf();
   DOMMatrix* SetMatrixValue(const nsAString& aTransformList, ErrorResult& aRv);
-private:
+protected:
   void Ensure3DMatrix();
 
-  ~DOMMatrix() {}
+  virtual ~DOMMatrix() {}
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif /*MOZILLA_DOM_DOMMATRIX_H_*/

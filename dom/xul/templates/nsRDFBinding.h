@@ -61,7 +61,7 @@ private:
  * a collection of <binding> descriptors. This object is refcounted by
  * nsBindingValues objects and the query processor.
  */
-class RDFBindingSet MOZ_FINAL
+class RDFBindingSet final
 {
 private:
     // Private destructor, to discourage deletion outside of Release():
@@ -160,7 +160,7 @@ class nsBindingValues
 protected:
 
     // the binding set
-    nsRefPtr<RDFBindingSet> mBindings;
+    RefPtr<RDFBindingSet> mBindings;
 
     /*
      * A set of values for variable bindings. To look up a binding value,

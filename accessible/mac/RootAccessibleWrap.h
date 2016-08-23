@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* For documentation of the accessibility architecture, 
+/* For documentation of the accessibility architecture,
  * see http://lxr.mozilla.org/seamonkey/source/accessible/accessible-docs.html
  */
 
@@ -15,17 +15,14 @@
 namespace mozilla {
 namespace a11y {
 
-struct objc_class;
-
 class RootAccessibleWrap : public RootAccessible
 {
 public:
-  RootAccessibleWrap(nsIDocument* aDocument, nsIContent* aRootContent,
-                     nsIPresShell* aPresShell);
+  RootAccessibleWrap(nsIDocument* aDocument, nsIPresShell* aPresShell);
   virtual ~RootAccessibleWrap();
 
     Class GetNativeType ();
-    
+
     // let's our native accessible get in touch with the
     // native cocoa view that is our accessible parent.
     void GetNativeWidget (void **aOutView);

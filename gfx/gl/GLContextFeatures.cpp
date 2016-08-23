@@ -3,7 +3,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
 #include "GLContext.h"
 #include "nsPrintfCString.h"
 
@@ -16,7 +15,7 @@ namespace gl {
 
 const size_t kMAX_EXTENSION_GROUP_SIZE = 5;
 
-MOZ_BEGIN_ENUM_CLASS(GLVersion, uint32_t)
+enum class GLVersion : uint32_t {
     NONE  = 0,   // Feature is not supported natively by GL
     GL1_2 = 120,
     GL1_3 = 130,
@@ -30,14 +29,14 @@ MOZ_BEGIN_ENUM_CLASS(GLVersion, uint32_t)
     GL4_1 = 410,
     GL4_2 = 420,
     GL4_3 = 430,
-MOZ_END_ENUM_CLASS(GLVersion)
+};
 
-MOZ_BEGIN_ENUM_CLASS(GLESVersion, uint32_t)
+enum class GLESVersion : uint32_t {
     NONE  = 0,   // Feature is not support natively by GL ES
     ES2   = 200,
     ES3   = 300,
     ES3_1 = 310,
-MOZ_END_ENUM_CLASS(GLESVersion)
+};
 
 // ARB_ES2_compatibility is natively supported in OpenGL 4.1.
 static const GLVersion kGLCoreVersionForES2Compat = GLVersion::GL4_1;
@@ -211,34 +210,53 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
+        // Check for just the blit framebuffer blit part of
+        // ARB_framebuffer_object
         "framebuffer_blit",
         GLVersion::GL3,
         GLESVersion::ES3,
-        GLContext::Extension_None,
+        GLContext::ARB_framebuffer_object,
         {
-            GLContext::EXT_framebuffer_blit,
             GLContext::ANGLE_framebuffer_blit,
+            GLContext::EXT_framebuffer_blit,
+            GLContext::NV_framebuffer_blit,
             GLContext::Extensions_End
         }
     },
     {
+        // Check for just the multisample renderbuffer part of
+        // ARB_framebuffer_object
         "framebuffer_multisample",
         GLVersion::GL3,
         GLESVersion::ES3,
-        GLContext::Extension_None,
+        GLContext::ARB_framebuffer_object,
         {
-            GLContext::EXT_framebuffer_multisample,
             GLContext::ANGLE_framebuffer_multisample,
+            GLContext::APPLE_framebuffer_multisample,
+            GLContext::EXT_framebuffer_multisample,
+            GLContext::EXT_multisampled_render_to_texture,
             GLContext::Extensions_End
         }
     },
     {
+        // ARB_framebuffer_object support
         "framebuffer_object",
         GLVersion::GL3,
-        GLESVersion::ES2,
+        GLESVersion::ES3,
         GLContext::ARB_framebuffer_object,
         {
+            GLContext::Extensions_End
+        }
+    },
+    {
+        // EXT_framebuffer_object/OES_framebuffer_object support
+        "framebuffer_object_EXT_OES",
+        GLVersion::GL3,
+        GLESVersion::ES2,
+        GLContext::Extension_None,
+        {
             GLContext::EXT_framebuffer_object,
+            GLContext::OES_framebuffer_object,
             GLContext::Extensions_End
         }
     },
@@ -262,6 +280,18 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
+        "get_query_object_i64v",
+        GLVersion::GL3_3,
+        GLESVersion::NONE,
+        GLContext::ARB_timer_query,
+        {
+            GLContext::ANGLE_timer_query,
+            GLContext::EXT_disjoint_timer_query,
+            GLContext::EXT_timer_query,
+            GLContext::Extensions_End
+        }
+    },
+    {
         "get_query_object_iv",
         GLVersion::GL2,
         GLESVersion::NONE,
@@ -273,6 +303,16 @@ static const FeatureInfo sFeatureInfoArr[] = {
          * XXX_get_query_object_iv only provide GetQueryObjectiv provided by
          * ARB_occlusion_query (added by OpenGL 2.0).
          */
+    },
+    {
+        "get_string_indexed",
+        GLVersion::GL3,
+        GLESVersion::ES3,
+        GLContext::Extension_None,
+        {
+            GLContext::Extensions_End
+        }
+        // glGetStringi
     },
     {
         "gpu_shader4",
@@ -310,6 +350,15 @@ static const FeatureInfo sFeatureInfoArr[] = {
          * ANGLE_instanced_arrays and NV_instanced_arrays forbid this, but GLES3
          * has no such restriction.
          */
+    },
+    {
+        "internalformat_query",
+        GLVersion::GL4_2,
+        GLESVersion::ES3,
+        GLContext::ARB_internalformat_query,
+        {
+            GLContext::Extensions_End
+        }
     },
     {
         "invalidate_framebuffer",
@@ -384,19 +433,55 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
+        "query_counter",
+        GLVersion::GL3_3,
+        GLESVersion::NONE,
+        GLContext::ARB_timer_query,
+        {
+            GLContext::ANGLE_timer_query,
+            GLContext::EXT_disjoint_timer_query,
+            // EXT_timer_query does NOT support GL_TIMESTAMP retrieval with
+            // QueryCounter.
+            GLContext::Extensions_End
+        }
+    },
+    {
         "query_objects",
         GLVersion::GL2,
         GLESVersion::ES3,
         GLContext::Extension_None,
         {
+            GLContext::ANGLE_timer_query,
+            GLContext::EXT_disjoint_timer_query,
             GLContext::EXT_occlusion_query_boolean,
             GLContext::Extensions_End
         }
         /*
          * XXX_query_objects only provide entry points commonly supported by
-         * ARB_occlusion_query (added in OpenGL 2.0) and EXT_occlusion_query_boolean
-         * (added in OpenGL ES 3.0)
+         * ARB_occlusion_query (added in OpenGL 2.0), EXT_occlusion_query_boolean
+         * (added in OpenGL ES 3.0), and ARB_timer_query (added in OpenGL 3.3)
          */
+    },
+    {
+        "query_time_elapsed",
+        GLVersion::GL3_3,
+        GLESVersion::NONE,
+        GLContext::ARB_timer_query,
+        {
+            GLContext::ANGLE_timer_query,
+            GLContext::EXT_disjoint_timer_query,
+            GLContext::EXT_timer_query,
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "read_buffer",
+        GLVersion::GL2,
+        GLESVersion::ES3,
+        GLContext::Extension_None,
+        {
+            GLContext::Extensions_End
+        }
     },
     {
         "renderbuffer_color_float",
@@ -432,12 +517,24 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
-        "sRGB",
+        "sRGB_framebuffer",
         GLVersion::GL3,
+        GLESVersion::ES3,
+        GLContext::ARB_framebuffer_sRGB,
+        {
+            GLContext::EXT_framebuffer_sRGB,
+            GLContext::EXT_sRGB_write_control,
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "sRGB_texture",
+        GLVersion::GL2_1,
         GLESVersion::ES3,
         GLContext::Extension_None,
         {
             GLContext::EXT_sRGB,
+            GLContext::EXT_texture_sRGB,
             GLContext::Extensions_End
         }
     },
@@ -451,12 +548,46 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
+        "seamless_cube_map_opt_in",
+        GLVersion::GL3_2,
+        GLESVersion::NONE,
+        GLContext::ARB_seamless_cube_map,
+        {
+            GLContext::Extensions_End
+        }
+    },
+    {
+        // Do we have separate DRAW and READ framebuffer bind points?
+        "split_framebuffer",
+        GLVersion::GL3,
+        GLESVersion::ES3,
+        GLContext::ARB_framebuffer_object,
+        {
+            GLContext::ANGLE_framebuffer_blit,
+            GLContext::APPLE_framebuffer_multisample,
+            GLContext::EXT_framebuffer_blit,
+            GLContext::NV_framebuffer_blit,
+            GLContext::Extensions_End
+        }
+    },
+    {
         "standard_derivatives",
         GLVersion::GL2,
         GLESVersion::ES3,
         GLContext::Extension_None,
         {
             GLContext::OES_standard_derivatives,
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "sync",
+        GLVersion::GL3_2,
+        GLESVersion::ES3,
+        GLContext::Extension_None,
+        {
+            GLContext::ARB_sync,
+            GLContext::APPLE_sync,
             GLContext::Extensions_End
         }
     },
@@ -560,6 +691,15 @@ static const FeatureInfo sFeatureInfoArr[] = {
         }
     },
     {
+        "texture_rg",
+        GLVersion::GL3,
+        GLESVersion::ES3,
+        GLContext::ARB_texture_rg,
+        {
+            GLContext::Extensions_End
+        }
+    },
+    {
         "texture_storage",
         GLVersion::GL4_2,
         GLESVersion::ES3,
@@ -570,6 +710,15 @@ static const FeatureInfo sFeatureInfoArr[] = {
              * doesn't guarantee glTexStorage3D, which is required for
              * WebGL 2.
              */
+            GLContext::Extensions_End
+        }
+    },
+    {
+        "texture_swizzle",
+        GLVersion::GL3_3,
+        GLESVersion::ES3,
+        GLContext::ARB_texture_swizzle,
+        {
             GLContext::Extensions_End
         }
     },
@@ -634,11 +783,10 @@ ProfileVersionForFeature(GLFeature feature, ContextProfile profile)
 
     const FeatureInfo& featureInfo = GetFeatureInfo(feature);
 
-    if (profile == ContextProfile::OpenGLES) {
-        return (uint32_t) featureInfo.mOpenGLESVersion;
-    }
+    if (profile == ContextProfile::OpenGLES)
+        return (uint32_t)featureInfo.mOpenGLESVersion;
 
-    return (uint32_t) featureInfo.mOpenGLVersion;
+    return (uint32_t)featureInfo.mOpenGLVersion;
 }
 
 bool
@@ -672,72 +820,58 @@ GLContext::GetFeatureName(GLFeature feature)
     return GetFeatureInfo(feature).mName;
 }
 
-static bool
-CanReadSRGBFromFBOTexture(GLContext* gl)
-{
-    if (!gl->WorkAroundDriverBugs())
-        return true;
-
-#ifdef XP_MACOSX
-    // Bug 843668:
-    // MacOSX 10.6 reports to support EXT_framebuffer_sRGB and
-    // EXT_texture_sRGB but fails to convert from sRGB to linear
-    // when writing to an sRGB texture attached to an FBO.
-    if (!nsCocoaFeatures::OnLionOrLater()) {
-        return false;
-    }
-#endif // XP_MACOSX
-    return true;
-}
-
 void
 GLContext::InitFeatures()
 {
-    for (size_t feature_index = 0; feature_index < size_t(GLFeature::EnumMax); feature_index++)
-    {
-        GLFeature feature = GLFeature(feature_index);
+    for (size_t featureId = 0; featureId < size_t(GLFeature::EnumMax); featureId++) {
+        GLFeature feature = GLFeature(featureId);
 
         if (IsFeaturePartOfProfileVersion(feature, mProfile, mVersion)) {
-            mAvailableFeatures[feature_index] = true;
+            mAvailableFeatures[featureId] = true;
             continue;
         }
 
-        mAvailableFeatures[feature_index] = false;
+        mAvailableFeatures[featureId] = false;
 
         const FeatureInfo& featureInfo = GetFeatureInfo(feature);
 
-        if (IsExtensionSupported(featureInfo.mARBExtensionWithoutARBSuffix))
-        {
-            mAvailableFeatures[feature_index] = true;
+        if (IsExtensionSupported(featureInfo.mARBExtensionWithoutARBSuffix)) {
+            mAvailableFeatures[featureId] = true;
             continue;
         }
 
-        for (size_t j = 0; true; j++)
-        {
-            MOZ_ASSERT(j < kMAX_EXTENSION_GROUP_SIZE, "kMAX_EXTENSION_GROUP_SIZE too small");
+        for (size_t j = 0; true; j++) {
+            MOZ_ASSERT(j < kMAX_EXTENSION_GROUP_SIZE,
+                       "kMAX_EXTENSION_GROUP_SIZE too small");
 
-            if (featureInfo.mExtensions[j] == GLContext::Extensions_End) {
+            if (featureInfo.mExtensions[j] == GLContext::Extensions_End)
                 break;
-            }
 
             if (IsExtensionSupported(featureInfo.mExtensions[j])) {
-                mAvailableFeatures[feature_index] = true;
+                mAvailableFeatures[featureId] = true;
                 break;
             }
         }
     }
 
-    // Bug 843668: Work around limitation of the feature system.
-    // For sRGB support under OpenGL to match OpenGL ES spec, check for both
-    // EXT_texture_sRGB and EXT_framebuffer_sRGB is required.
-    const bool aresRGBExtensionsAvailable =
-        IsExtensionSupported(EXT_texture_sRGB) &&
-        (IsExtensionSupported(ARB_framebuffer_sRGB) ||
-         IsExtensionSupported(EXT_framebuffer_sRGB));
+    if (ShouldDumpExts()) {
+        for (size_t featureId = 0; featureId < size_t(GLFeature::EnumMax); featureId++) {
+            GLFeature feature = GLFeature(featureId);
+            printf_stderr("[%s] Feature::%s\n",
+                          IsSupported(feature) ? "enabled" : "disabled",
+                          GetFeatureName(feature));
+        }
+    }
 
-    mAvailableFeatures[size_t(GLFeature::sRGB)] =
-        aresRGBExtensionsAvailable &&
-        CanReadSRGBFromFBOTexture(this);
+    if (WorkAroundDriverBugs()) {
+#ifdef XP_MACOSX
+        // MacOSX 10.6 reports to support EXT_framebuffer_sRGB and EXT_texture_sRGB but
+        // fails to convert from sRGB to linear when reading from an sRGB texture attached
+        // to an FBO. (bug 843668)
+        if (!nsCocoaFeatures::OnLionOrLater())
+            MarkUnsupported(GLFeature::sRGB_framebuffer);
+#endif // XP_MACOSX
+    }
 }
 
 void
@@ -747,20 +881,19 @@ GLContext::MarkUnsupported(GLFeature feature)
 
     const FeatureInfo& featureInfo = GetFeatureInfo(feature);
 
-    for (size_t i = 0; true; i++)
-    {
+    for (size_t i = 0; true; i++) {
         MOZ_ASSERT(i < kMAX_EXTENSION_GROUP_SIZE, "kMAX_EXTENSION_GROUP_SIZE too small");
 
-        if (featureInfo.mExtensions[i] == GLContext::Extensions_End) {
+        if (featureInfo.mExtensions[i] == GLContext::Extensions_End)
             break;
-        }
 
         MarkExtensionUnsupported(featureInfo.mExtensions[i]);
     }
 
     MOZ_ASSERT(!IsSupported(feature), "GLContext::MarkUnsupported has failed!");
 
-    NS_WARNING(nsPrintfCString("%s marked as unsupported", GetFeatureName(feature)).get());
+    NS_WARNING(nsPrintfCString("%s marked as unsupported",
+                               GetFeatureName(feature)).get());
 }
 
 } /* namespace gl */

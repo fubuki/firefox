@@ -60,16 +60,16 @@ public: // new functions
                                         FontCacheSizes* aSizes) const;
 
 #ifdef USE_SKIA
-    virtual mozilla::TemporaryRef<mozilla::gfx::GlyphRenderingOptions>
-        GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams = nullptr) MOZ_OVERRIDE;
+    virtual already_AddRefed<mozilla::gfx::GlyphRenderingOptions>
+        GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams = nullptr) override;
 #endif
 
 protected:
-    virtual bool ShapeText(gfxContext      *aContext,
+    virtual bool ShapeText(DrawTarget      *aDrawTarget,
                            const char16_t *aText,
                            uint32_t         aOffset,
                            uint32_t         aLength,
-                           int32_t          aScript,
+                           Script           aScript,
                            bool             aVertical,
                            gfxShapedText   *aShapedText);
 

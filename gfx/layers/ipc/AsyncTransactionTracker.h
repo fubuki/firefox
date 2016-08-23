@@ -22,6 +22,46 @@ class TextureClient;
 class AsyncTransactionTrackersHolder;
 
 /**
+ * Object that lets you wait for one or more async transactions to complete.
+ */
+class AsyncTransactionWaiter
+{
+public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AsyncTransactionWaiter)
+
+  AsyncTransactionWaiter()
+    : mCompletedMonitor("AsyncTransactionWaiter")
+    , mWaitCount(0)
+  {}
+
+  void IncrementWaitCount()
+  {
+    MonitorAutoLock lock(mCompletedMonitor);
+    ++mWaitCount;
+  }
+  void DecrementWaitCount()
+  {
+    MonitorAutoLock lock(mCompletedMonitor);
+    MOZ_ASSERT(mWaitCount > 0);
+    --mWaitCount;
+    if (mWaitCount == 0) {
+      mCompletedMonitor.Notify();
+    }
+  }
+
+  /**
+   * Wait until asynchronous transactions complete.
+   */
+  void WaitComplete();
+
+private:
+  ~AsyncTransactionWaiter() {}
+
+  Monitor mCompletedMonitor;
+  uint32_t mWaitCount;
+};
+
+/**
  * AsyncTransactionTracker tracks asynchronous transaction.
  * It is typically used for asynchronous layer transaction handling.
  */
@@ -31,17 +71,7 @@ class AsyncTransactionTracker
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(AsyncTransactionTracker)
 
-  AsyncTransactionTracker();
-
-  Monitor& GetReentrantMonitor()
-  {
-    return mCompletedMonitor;
-  }
-
-  /**
-   * Wait until asynchronous transaction complete.
-   */
-  void WaitComplete();
+  explicit AsyncTransactionTracker(AsyncTransactionWaiter* aWaiter = nullptr);
 
   /**
    * Notify async transaction complete.
@@ -78,37 +108,28 @@ protected:
 
   static void Initialize()
   {
-    if (!sLock) {
-      sLock = new Mutex("AsyncTransactionTracker::sLock");
-    }
   }
 
   static void Finalize()
   {
-    if (sLock) {
-      delete sLock;
-      sLock = nullptr;
-    }
   }
 
   static uint64_t GetNextSerial()
   {
-    MOZ_ASSERT(sLock);
-    MutexAutoLock lock(*sLock);
-    ++sSerialCounter;
-    return sSerialCounter;
+    return ++sSerialCounter;
   }
 
   uint64_t mSerial;
-  Monitor mCompletedMonitor;
-  bool    mCompleted;
+  RefPtr<AsyncTransactionWaiter> mWaiter;
+#ifdef DEBUG
+  bool mCompleted;
+#endif
 
   /**
    * gecko does not provide atomic operation for uint64_t.
    * Ensure atomicity by using Mutex.
    */
-  static uint64_t sSerialCounter;
-  static Mutex* sLock;
+  static Atomic<uint64_t> sSerialCounter;
 };
 
 class AsyncTransactionTrackersHolder
@@ -153,10 +174,7 @@ protected:
 
   static uint64_t GetNextSerial()
   {
-    MOZ_ASSERT(sHolderLock);
-    MutexAutoLock lock(*sHolderLock);
-    ++sSerialCounter;
-    return sSerialCounter;
+    return ++sSerialCounter;
   }
 
   void TransactionCompletetedInternal(uint64_t aTransactionId);
@@ -170,51 +188,19 @@ protected:
   uint64_t mSerial;
 
   bool mIsTrackersHolderDestroyed;
-  std::map<uint64_t, RefPtr<AsyncTransactionTracker> > mAsyncTransactionTrackeres;
+  std::map<uint64_t, RefPtr<AsyncTransactionTracker> > mAsyncTransactionTrackers;
 
   /**
    * gecko does not provide atomic operation for uint64_t.
    * Ensure atomicity by using Mutex.
    */
-  static uint64_t sSerialCounter;
+  static Atomic<uint64_t> sSerialCounter;
   static Mutex* sHolderLock;
 
   /**
    * Map of all living AsyncTransactionTrackersHolder instances
    */
   static std::map<uint64_t, AsyncTransactionTrackersHolder*> sTrackersHolders;
-};
-
-/**
- * FenceDeliveryTracker puts off releasing a Fence until a transaction complete.
- */
-class FenceDeliveryTracker : public AsyncTransactionTracker {
-public:
-  explicit FenceDeliveryTracker(FenceHandle& aFenceHandle)
-    : mFenceHandle(aFenceHandle)
-  {
-    MOZ_COUNT_CTOR(FenceDeliveryTracker);
-  }
-
-protected:
-  ~FenceDeliveryTracker()
-  {
-    MOZ_COUNT_DTOR(FenceDeliveryTracker);
-  }
-
-public:
-  virtual void Complete() MOZ_OVERRIDE
-  {
-    mFenceHandle = FenceHandle();
-  }
-
-  virtual void Cancel() MOZ_OVERRIDE
-  {
-    mFenceHandle = FenceHandle();
-  }
-
-private:
-  FenceHandle mFenceHandle;
 };
 
 } // namespace layers

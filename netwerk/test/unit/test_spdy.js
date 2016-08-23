@@ -1,10 +1,6 @@
 // test spdy/3.1
 
-var Ci = Components.interfaces;
-var Cc = Components.classes;
-var Cu = Components.utils;
-
-Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/NetUtil.jsm");
 
 // Generate a small and a large post with known pre-calculated md5 sums
 function generateContent(size) {
@@ -25,6 +21,7 @@ var md5s = ['f1b708bba17f1ce948dc979f4d7092bc',
 
 var bigListenerData = generateContent(128 * 1024);
 var bigListenerMD5 = '8f607cfdd2c87d6a7eedb657dafbd836';
+var hugeListenerData = generateContent(800 * 1024);
 
 function checkIsSpdy(request) {
   try {
@@ -49,12 +46,10 @@ SpdyCheckListener.prototype = {
 
   onStartRequest: function testOnStartRequest(request, ctx) {
     this.onStartRequestFired = true;
-
     if (!Components.isSuccessCode(request.status))
       do_throw("Channel should have a success code! (" + request.status + ")");
-    if (!(request instanceof Components.interfaces.nsIHttpChannel))
-      do_throw("Expecting an HTTP channel");
 
+    do_check_true(request instanceof Components.interfaces.nsIHttpChannel);
     do_check_eq(request.responseStatus, 200);
     do_check_eq(request.requestSucceeded, true);
   },
@@ -68,8 +63,9 @@ SpdyCheckListener.prototype = {
 
   onStopRequest: function testOnStopRequest(request, ctx, status) {
     do_check_true(this.onStartRequestFired);
-    do_check_true(this.onDataAvailableFired);
+    do_check_true(Components.isSuccessCode(status));
     do_check_true(this.isSpdyConnection);
+    do_check_true(this.onDataAvailableFired);
 
     run_next_test();
     do_test_finished();
@@ -139,8 +135,8 @@ SpdyPushListener.prototype = new SpdyCheckListener();
 SpdyPushListener.prototype.onDataAvailable = function(request, ctx, stream, off, cnt) {
   this.onDataAvailableFired = true;
   this.isSpdyConnection = checkIsSpdy(request);
-  if (ctx.originalURI.spec == "https://localhost:4443/push.js" ||
-      ctx.originalURI.spec == "https://localhost:4443/push2.js") {
+  if (request.originalURI.spec == "https://localhost:" + serverPort + "/push.js" ||
+      request.originalURI.spec == "https://localhost:" + serverPort + "/push2.js") {
     do_check_eq(request.getResponseHeader("pushed"), "yes");
   }
   read_stream(stream, cnt);
@@ -156,9 +152,6 @@ SpdyBigListener.prototype.onDataAvailable = function(request, ctx, stream, off, 
   this.onDataAvailableFired = true;
   this.isSpdyConnection = checkIsSpdy(request);
   this.buffer = this.buffer.concat(read_stream(stream, cnt));
-  // We know the server should send us the same data as our big post will be,
-  // so the md5 should be the same
-  do_check_eq(bigListenerMD5, request.getResponseHeader("X-Expected-MD5"));
 };
 
 SpdyBigListener.prototype.onStopRequest = function(request, ctx, status) {
@@ -167,7 +160,14 @@ SpdyBigListener.prototype.onStopRequest = function(request, ctx, status) {
   do_check_true(this.isSpdyConnection);
 
   // Don't want to flood output, so don't use do_check_eq
-  do_check_true(this.buffer == bigListenerData);
+  if (request.originalURI.spec == "https://localhost:" + serverPort + "/big") {
+    // We know the server should send us the same data as our big post will be,
+    // so the md5 should be the same
+    do_check_eq(bigListenerMD5, request.getResponseHeader("X-Expected-MD5"));
+    do_check_true(this.buffer == bigListenerData);
+  } else {
+    do_check_true(this.buffer == hugeListenerData);
+  }
 
   run_next_test();
   do_test_finished();
@@ -189,24 +189,15 @@ SpdyPostListener.prototype.onDataAvailable = function(request, ctx, stream, off,
 };
 
 function makeChan(url) {
-  var ios = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
-  var chan = ios.newChannel2(url,
-                             null,
-                             null,
-                             null,      // aLoadingNode
-                             Services.scriptSecurityManager.getSystemPrincipal(),
-                             null,      // aTriggeringPrincipal
-                             Ci.nsILoadInfo.SEC_NORMAL,
-                             Ci.nsIContentPolicy.TYPE_OTHER).QueryInterface(Ci.nsIHttpChannel);
-
-  return chan;
+  return NetUtil.newChannel({uri: url, loadUsingSystemPrincipal: true})
+                .QueryInterface(Ci.nsIHttpChannel);
 }
 
 // Make sure we make a spdy connection and both us and the server mark it as such
 function test_spdy_basic() {
-  var chan = makeChan("https://localhost:4443/");
+  var chan = makeChan("https://localhost:" + serverPort + "/");
   var listener = new SpdyCheckListener();
-  chan.asyncOpen(listener, null);
+  chan.asyncOpen2(listener);
 }
 
 // Support for making sure XHR works over SPDY
@@ -225,64 +216,100 @@ function checkXhr(xhr) {
 function test_spdy_xhr() {
   var req = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"]
             .createInstance(Ci.nsIXMLHttpRequest);
-  req.open("GET", "https://localhost:4443/", true);
+  req.open("GET", "https://localhost:" + serverPort + "/", true);
   req.addEventListener("readystatechange", function (evt) { checkXhr(req); },
                        false);
   req.send(null);
 }
 
+var concurrent_channels = [];
+
+var SpdyConcurrentListener = function() {};
+
+SpdyConcurrentListener.prototype = new SpdyCheckListener();
+SpdyConcurrentListener.prototype.count = 0;
+SpdyConcurrentListener.prototype.target = 0;
+
+SpdyConcurrentListener.prototype.onStopRequest = function(request, ctx, status) {
+  this.count++;
+  do_check_true(this.isSpdyConnection);
+  if (this.count == this.target) {
+    run_next_test();
+    do_test_finished();
+  }
+};
+
+function test_spdy_concurrent() {
+  var concurrent_listener = new SpdyConcurrentListener();
+  concurrent_listener.target = 201;
+  for (var i = 0; i < concurrent_listener.target; i++) {
+    concurrent_channels[i] = makeChan("https://localhost:" + serverPort + "/750ms");
+    concurrent_channels[i].loadFlags = Ci.nsIRequest.LOAD_BYPASS_CACHE;
+    concurrent_channels[i].asyncOpen2(concurrent_listener);
+  }
+}
+
 // Test to make sure we get multiplexing right
 function test_spdy_multiplex() {
-  var chan1 = makeChan("https://localhost:4443/multiplex1");
-  var chan2 = makeChan("https://localhost:4443/multiplex2");
+  var chan1 = makeChan("https://localhost:" + serverPort + "/multiplex1");
+  var chan2 = makeChan("https://localhost:" + serverPort + "/multiplex2");
   var listener1 = new SpdyMultiplexListener();
   var listener2 = new SpdyMultiplexListener();
-  chan1.asyncOpen(listener1, null);
-  chan2.asyncOpen(listener2, null);
+  chan1.asyncOpen2(listener1);
+  chan2.asyncOpen2(listener2);
 }
 
 // Test to make sure we gateway non-standard headers properly
 function test_spdy_header() {
-  var chan = makeChan("https://localhost:4443/header");
+  var chan = makeChan("https://localhost:" + serverPort + "/header");
   var hvalue = "Headers are fun";
   var listener = new SpdyHeaderListener(hvalue);
   chan.setRequestHeader("X-Test-Header", hvalue, false);
-  chan.asyncOpen(listener, null);
+  chan.asyncOpen2(listener);
 }
 
 function test_spdy_push1() {
-  var chan = makeChan("https://localhost:4443/push");
+  var chan = makeChan("https://localhost:" + serverPort + "/push");
   chan.loadGroup = loadGroup;
   var listener = new SpdyPushListener();
-  chan.asyncOpen(listener, chan);
+  chan.asyncOpen2(listener);
 }
 
 function test_spdy_push2() {
-  var chan = makeChan("https://localhost:4443/push.js");
+  var chan = makeChan("https://localhost:" + serverPort + "/push.js");
   chan.loadGroup = loadGroup;
   var listener = new SpdyPushListener();
-  chan.asyncOpen(listener, chan);
+  chan.asyncOpen2(listener);
 }
 
 function test_spdy_push3() {
-  var chan = makeChan("https://localhost:4443/push2");
+  var chan = makeChan("https://localhost:" + serverPort + "/push2");
   chan.loadGroup = loadGroup;
   var listener = new SpdyPushListener();
-  chan.asyncOpen(listener, chan);
+  chan.asyncOpen2(listener);
 }
 
 function test_spdy_push4() {
-  var chan = makeChan("https://localhost:4443/push2.js");
+  var chan = makeChan("https://localhost:" + serverPort + "/push2.js");
   chan.loadGroup = loadGroup;
   var listener = new SpdyPushListener();
-  chan.asyncOpen(listener, chan);
+  chan.asyncOpen2(listener);
 }
 
 // Make sure we handle GETs that cover more than 2 frames properly
 function test_spdy_big() {
-  var chan = makeChan("https://localhost:4443/big");
+  var chan = makeChan("https://localhost:" + serverPort + "/big");
   var listener = new SpdyBigListener();
-  chan.asyncOpen(listener, null);
+  chan.asyncOpen2(listener);
+}
+
+// Make sure we handle big GETs with suspend/resume
+function test_spdy_big_and_slow() {
+  var chan = makeChan("https://localhost:" + serverPort + "/huge");
+  var listener = new SpdyBigListener();
+  chan.asyncOpen2(listener);
+  chan.suspend();
+  do_timeout(750, chan.resume);
 }
 
 // Support for doing a POST
@@ -296,21 +323,27 @@ function do_post(content, chan, listener) {
 
   chan.requestMethod = "POST";
 
-  chan.asyncOpen(listener, null);
+  chan.asyncOpen2(listener);
 }
 
 // Make sure we can do a simple POST
 function test_spdy_post() {
-  var chan = makeChan("https://localhost:4443/post");
+  var chan = makeChan("https://localhost:" + serverPort + "/post");
   var listener = new SpdyPostListener(md5s[0]);
   do_post(posts[0], chan, listener);
 }
 
 // Make sure we can do a POST that covers more than 2 frames
 function test_spdy_post_big() {
-  var chan = makeChan("https://localhost:4443/post");
+  var chan = makeChan("https://localhost:" + serverPort + "/post");
   var listener = new SpdyPostListener(md5s[1]);
   do_post(posts[1], chan, listener);
+}
+
+function test_complete() {
+  resetPrefs();
+  do_test_finished();
+  do_timeout(0,run_next_test);
 }
 
 // hack - the header test resets the multiplex object on the server,
@@ -320,6 +353,7 @@ function test_spdy_post_big() {
 // a stalled stream when a SETTINGS frame arrives
 var tests = [ test_spdy_post_big
             , test_spdy_basic
+            , test_spdy_concurrent
             , test_spdy_push1
             , test_spdy_push2
             , test_spdy_push3
@@ -328,7 +362,10 @@ var tests = [ test_spdy_post_big
             , test_spdy_header
             , test_spdy_multiplex
             , test_spdy_big
+            , test_spdy_big_and_slow
             , test_spdy_post
+            // cleanup
+            , test_complete
             ];
 var current_test = 0;
 
@@ -371,6 +408,7 @@ CertOverrideListener.prototype = {
     var cos = Cc["@mozilla.org/security/certoverride;1"].
               getService(Ci.nsICertOverrideService);
     cos.rememberValidityOverride(this.host, this.port, cert, this.bits, false);
+    dump("Certificate Override in place\n");
     return true;
   },
 };
@@ -397,8 +435,8 @@ var prefs;
 var spdypref;
 var spdy3pref;
 var spdypush;
-
 var loadGroup;
+var serverPort;
 
 function resetPrefs() {
   prefs.setBoolPref("network.http.spdy.enabled", spdypref);
@@ -407,18 +445,22 @@ function resetPrefs() {
 }
 
 function run_test() {
+  var env = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment);
+  serverPort = env.get("MOZSPDY_PORT");
+  do_check_neq(serverPort, null);
+  dump("using port " + serverPort + "\n");
+
   // Set to allow the cert presented by our SPDY server
   do_get_profile();
-  var prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
-  var oldPref = prefs.getIntPref("network.http.speculative-parallel-limit");
+  prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
+  var oldParallel = prefs.getIntPref("network.http.speculative-parallel-limit");
   prefs.setIntPref("network.http.speculative-parallel-limit", 0);
 
-  addCertOverride("localhost", 4443,
+  addCertOverride("localhost", serverPort,
                   Ci.nsICertOverrideService.ERROR_UNTRUSTED |
                   Ci.nsICertOverrideService.ERROR_MISMATCH |
                   Ci.nsICertOverrideService.ERROR_TIME);
-
-  prefs.setIntPref("network.http.speculative-parallel-limit", oldPref);
+  prefs.setIntPref("network.http.speculative-parallel-limit", oldParallel);
 
   // Enable all versions of spdy to see that we auto negotiate spdy/3.1
   spdypref = prefs.getBoolPref("network.http.spdy.enabled");
@@ -430,6 +472,5 @@ function run_test() {
 
   loadGroup = Cc["@mozilla.org/network/load-group;1"].createInstance(Ci.nsILoadGroup);
 
-  // And make go!
   run_next_test();
 }

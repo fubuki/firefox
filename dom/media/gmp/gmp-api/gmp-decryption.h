@@ -19,6 +19,16 @@
 
 #include "gmp-platform.h"
 
+class GMPStringList {
+public:
+  virtual uint32_t Size() const = 0;
+
+  virtual void StringAt(uint32_t aIndex,
+                        const char** aOutString, uint32_t* aOutLength) const = 0;
+
+  virtual ~GMPStringList() { }
+};
+
 class GMPEncryptedBufferMetadata {
 public:
   // Key ID to identify the decryption key.
@@ -41,6 +51,10 @@ public:
   virtual const uint32_t* CipherBytes() const = 0;
 
   virtual ~GMPEncryptedBufferMetadata() {}
+
+  // The set of MediaKeySession IDs associated with this decryption key in
+  // the current stream.
+  virtual const GMPStringList* SessionIds() const = 0;
 };
 
 class GMPBuffer {
@@ -80,10 +94,12 @@ enum GMPMediaKeyStatus {
   kGMPUsable = 0,
   kGMPExpired = 1,
   kGMPOutputDownscaled = 2,
-  kGMPOutputNotAllowed = 3,
+  kGMPOutputRestricted = 3,
   kGMPInternalError = 4,
-  kGMPUnknown = 5,
-  kGMPMediaKeyStatusInvalid = 6 // Must always be last.
+  kGMPUnknown = 5, // Removes key from MediaKeyStatusMap
+  kGMPReleased = 6,
+  kGMPStatusPending = 7,
+  kGMPMediaKeyStatusInvalid = 8 // Must always be last.
 };
 
 // Time in milliseconds, as offset from epoch, 1 Jan 1970.
@@ -99,7 +115,7 @@ typedef int64_t GMPTimestamp;
 //
 // Note: Gecko does not currently support the caps changing at runtime.
 // Set them once per plugin initialization, during the startup of
-// the GMPdecryptor.
+// the GMPDecryptor.
 
 // Capability; CDM can decrypt encrypted buffers and return still
 // compressed buffers back to Gecko for decompression there.
@@ -110,6 +126,10 @@ typedef int64_t GMPTimestamp;
 // and return decompressed samples to Gecko for playback.
 #define GMP_EME_CAP_DECRYPT_AND_DECODE_AUDIO (uint64_t(1) << 2)
 #define GMP_EME_CAP_DECRYPT_AND_DECODE_VIDEO (uint64_t(1) << 3)
+
+// Capability; CDM can decrypt and then decode and render encrypted buffers
+#define GMP_EME_CAP_RENDER_AUDIO (uint64_t(1) << 4)
+#define GMP_EME_CAP_RENDER_VIDEO (uint64_t(1) << 5)
 
 // Callbacks to be called from the CDM. Threadsafe.
 class GMPDecryptorCallback {
@@ -224,7 +244,9 @@ enum GMPSessionType {
   kGMPSessionInvalid = 2 // Must always be last.
 };
 
-#define GMP_API_DECRYPTOR "eme-decrypt-v6"
+// Gecko supports the current GMPDecryptor version, and the previous.
+#define GMP_API_DECRYPTOR "eme-decrypt-v8"
+#define GMP_API_DECRYPTOR_BACKWARDS_COMPAT "eme-decrypt-v7"
 
 // API exposed by plugin library to manage decryption sessions.
 // When the Host requests this by calling GMPGetAPIFunc().

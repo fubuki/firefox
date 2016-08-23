@@ -55,6 +55,10 @@
  *     }
  *   };
  *
+ * Additionally, the class AutoCleanLinkedList<T> is a LinkedList<T> that will
+ * remove and delete each element still within itself upon destruction. Note
+ * that because each element is deleted, elements must have been allocated
+ * using |new|.
  */
 
 #ifndef mozilla_LinkedList_h
@@ -295,13 +299,38 @@ private:
   LinkedListElement<T> sentinel;
 
 public:
+  class Iterator {
+    T* mCurrent;
+
+  public:
+    explicit Iterator(T* aCurrent) : mCurrent(aCurrent) {}
+
+    T* operator *() const {
+      return mCurrent;
+    }
+
+    const Iterator& operator++() {
+      mCurrent = mCurrent->getNext();
+      return *this;
+    }
+
+    bool operator!=(Iterator& aOther) const {
+      return mCurrent != aOther.mCurrent;
+    }
+  };
+
   LinkedList() : sentinel(LinkedListElement<T>::NODE_KIND_SENTINEL) { }
 
   LinkedList(LinkedList<T>&& aOther)
     : sentinel(mozilla::Move(aOther.sentinel))
   { }
 
-  ~LinkedList() { MOZ_ASSERT(isEmpty()); }
+  ~LinkedList() {
+    MOZ_ASSERT(isEmpty(),
+               "failing this assertion means this LinkedList's creator is "
+               "buggy: it should have removed all this list's elements before "
+               "the list's destruction");
+  }
 
   /*
    * Add aElem to the front of the list.
@@ -377,6 +406,18 @@ public:
     while (popFirst()) {
       continue;
     }
+  }
+
+  /*
+   * Allow range-based iteration:
+   *
+   *     for (MyElementType* elt : myList) { ... }
+   */
+  Iterator begin() {
+    return Iterator(getFirst());
+  }
+  Iterator end() {
+    return Iterator(nullptr);
   }
 
   /*
@@ -476,6 +517,18 @@ private:
 
   LinkedList& operator=(const LinkedList<T>& aOther) = delete;
   LinkedList(const LinkedList<T>& aOther) = delete;
+};
+
+template <typename T>
+class AutoCleanLinkedList : public LinkedList<T>
+{
+public:
+  ~AutoCleanLinkedList()
+  {
+    while (T* element = this->popFirst()) {
+      delete element;
+    }
+  }
 };
 
 } /* namespace mozilla */

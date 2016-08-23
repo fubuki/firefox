@@ -12,6 +12,7 @@
 #include "nsTArray.h"
 
 #include "mozilla/dom/XMLDocument.h"
+#include "mozilla/StyleSheetHandle.h"
 #include "nsForwardReference.h"
 #include "nsIContent.h"
 #include "nsIDOMXULCommandDispatcher.h"
@@ -21,6 +22,7 @@
 #include "nsIXULDocument.h"
 #include "nsScriptLoader.h"
 #include "nsIStreamListener.h"
+#include "nsIStreamLoader.h"
 #include "nsICSSLoaderObserver.h"
 #include "nsIXULStore.h"
 
@@ -35,7 +37,6 @@ class nsPIWindowRoot;
 #if 0 // XXXbe save me, scc (need NSCAP_FORWARD_DECL(nsXULPrototypeScript))
 class nsIObjectInputStream;
 class nsIObjectOutputStream;
-class nsIXULPrototypeScript;
 #else
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
@@ -43,8 +44,6 @@ class nsIXULPrototypeScript;
 #endif
 #include "nsURIHashKey.h"
 #include "nsInterfaceHashtable.h"
-
-struct PRLogModuleInfo;
 
 class nsRefMapEntry : public nsStringHashKey
 {
@@ -76,7 +75,7 @@ public:
   bool RemoveElement(mozilla::dom::Element* aElement);
 
 private:
-  nsSmallVoidArray mRefContentList;
+  nsTArray<mozilla::dom::Element*> mRefContentList;
 };
 
 /**
@@ -86,12 +85,12 @@ private:
 namespace mozilla {
 namespace dom {
 
-class XULDocument MOZ_FINAL : public XMLDocument,
-                              public nsIXULDocument,
-                              public nsIDOMXULDocument,
-                              public nsIStreamLoaderObserver,
-                              public nsICSSLoaderObserver,
-                              public nsIOffThreadScriptReceiver
+class XULDocument final : public XMLDocument,
+                          public nsIXULDocument,
+                          public nsIDOMXULDocument,
+                          public nsIStreamLoaderObserver,
+                          public nsICSSLoaderObserver,
+                          public nsIOffThreadScriptReceiver
 {
 public:
     XULDocument();
@@ -101,9 +100,9 @@ public:
     NS_DECL_NSISTREAMLOADEROBSERVER
 
     // nsIDocument interface
-    virtual void Reset(nsIChannel* aChannel, nsILoadGroup* aLoadGroup) MOZ_OVERRIDE;
+    virtual void Reset(nsIChannel* aChannel, nsILoadGroup* aLoadGroup) override;
     virtual void ResetToURI(nsIURI *aURI, nsILoadGroup* aLoadGroup,
-                            nsIPrincipal* aPrincipal) MOZ_OVERRIDE;
+                            nsIPrincipal* aPrincipal) override;
 
     virtual nsresult StartDocumentLoad(const char* aCommand,
                                        nsIChannel *channel,
@@ -111,11 +110,11 @@ public:
                                        nsISupports* aContainer,
                                        nsIStreamListener **aDocListener,
                                        bool aReset = true,
-                                       nsIContentSink* aSink = nullptr) MOZ_OVERRIDE;
+                                       nsIContentSink* aSink = nullptr) override;
 
-    virtual void SetContentType(const nsAString& aContentType) MOZ_OVERRIDE;
+    virtual void SetContentType(const nsAString& aContentType) override;
 
-    virtual void EndLoad() MOZ_OVERRIDE;
+    virtual void EndLoad() override;
 
     // nsIMutationObserver interface
     NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
@@ -126,19 +125,19 @@ public:
 
     // nsIXULDocument interface
     virtual void GetElementsForID(const nsAString& aID,
-                                  nsCOMArray<nsIContent>& aElements) MOZ_OVERRIDE;
+                                  nsCOMArray<nsIContent>& aElements) override;
 
-    NS_IMETHOD AddSubtreeToDocument(nsIContent* aContent) MOZ_OVERRIDE;
-    NS_IMETHOD RemoveSubtreeFromDocument(nsIContent* aContent) MOZ_OVERRIDE;
+    NS_IMETHOD AddSubtreeToDocument(nsIContent* aContent) override;
+    NS_IMETHOD RemoveSubtreeFromDocument(nsIContent* aContent) override;
     NS_IMETHOD SetTemplateBuilderFor(nsIContent* aContent,
-                                     nsIXULTemplateBuilder* aBuilder) MOZ_OVERRIDE;
+                                     nsIXULTemplateBuilder* aBuilder) override;
     NS_IMETHOD GetTemplateBuilderFor(nsIContent* aContent,
-                                     nsIXULTemplateBuilder** aResult) MOZ_OVERRIDE;
-    NS_IMETHOD OnPrototypeLoadDone(bool aResumeWalk) MOZ_OVERRIDE;
-    bool OnDocumentParserError() MOZ_OVERRIDE;
+                                     nsIXULTemplateBuilder** aResult) override;
+    NS_IMETHOD OnPrototypeLoadDone(bool aResumeWalk) override;
+    bool OnDocumentParserError() override;
 
     // nsINode interface overrides
-    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+    virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
     // nsIDOMNode interface
     NS_FORWARD_NSIDOMNODE_TO_NSINODE
@@ -157,27 +156,27 @@ public:
     using nsIDocument::GetLocation;
 
     // nsDocument interface overrides
-    virtual Element* GetElementById(const nsAString & elementId) MOZ_OVERRIDE;
+    virtual Element* GetElementById(const nsAString & elementId) override;
 
     // nsIDOMXULDocument interface
     NS_DECL_NSIDOMXULDOCUMENT
 
     // nsICSSLoaderObserver
-    NS_IMETHOD StyleSheetLoaded(CSSStyleSheet* aSheet,
+    NS_IMETHOD StyleSheetLoaded(mozilla::StyleSheetHandle aSheet,
                                 bool aWasAlternate,
-                                nsresult aStatus) MOZ_OVERRIDE;
+                                nsresult aStatus) override;
 
-    virtual void EndUpdate(nsUpdateType aUpdateType) MOZ_OVERRIDE;
+    virtual void EndUpdate(nsUpdateType aUpdateType) override;
 
-    virtual bool IsDocumentRightToLeft() MOZ_OVERRIDE;
+    virtual bool IsDocumentRightToLeft() override;
 
-    virtual void ResetDocumentDirection() MOZ_OVERRIDE;
+    virtual void ResetDocumentDirection() override;
 
-    virtual int GetDocumentLWTheme() MOZ_OVERRIDE;
+    virtual int GetDocumentLWTheme() override;
 
-    virtual void ResetDocumentLWTheme() MOZ_OVERRIDE { mDocLWTheme = Doc_Theme_Uninitialized; }
+    virtual void ResetDocumentLWTheme() override { mDocLWTheme = Doc_Theme_Uninitialized; }
 
-    NS_IMETHOD OnScriptCompileComplete(JSScript* aScript, nsresult aStatus) MOZ_OVERRIDE;
+    NS_IMETHOD OnScriptCompileComplete(JSScript* aScript, nsresult aStatus) override;
 
     static bool
     MatchAttribute(nsIContent* aContent,
@@ -232,7 +231,7 @@ protected:
     friend nsresult
     (::NS_NewXULDocument(nsIXULDocument** aResult));
 
-    nsresult Init(void) MOZ_OVERRIDE;
+    nsresult Init(void) override;
     nsresult StartLayout(void);
 
     nsresult
@@ -295,12 +294,18 @@ protected:
     static nsIRDFResource* kNC_attribute;
     static nsIRDFResource* kNC_value;
 
-    static PRLogModuleInfo* gXULLog;
+    static LazyLogModule gXULLog;
 
     nsresult
     Persist(nsIContent* aElement, int32_t aNameSpaceID, nsIAtom* aAttribute);
+    // Just like Persist but ignores the return value so we can use it
+    // as a runnable method.
+    void DoPersist(nsIContent* aElement, int32_t aNameSpaceID, nsIAtom* aAttribute)
+    {
+        Persist(aElement, aNameSpaceID, aAttribute);
+    }
 
-    virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
+    virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
     // IMPORTANT: The ownership implicit in the following member
     // variables has been explicitly checked and set using nsCOMPtr
@@ -338,7 +343,7 @@ protected:
      * An array of style sheets, that will be added (preserving order) to the
      * document after all of them are loaded (in DoneWalking).
      */
-    nsTArray<nsRefPtr<CSSStyleSheet>> mOverlaySheets;
+    nsTArray<StyleSheetHandle::RefPtr> mOverlaySheets;
 
     nsCOMPtr<nsIDOMXULCommandDispatcher>     mCommandDispatcher; // [OWNER] of the focus tracker
 
@@ -512,7 +517,7 @@ protected:
     {
     protected:
         XULDocument* mDocument;              // [WEAK]
-        nsRefPtr<Element> mObservesElement; // [OWNER]
+        RefPtr<Element> mObservesElement; // [OWNER]
         bool mResolved;
 
     public:
@@ -526,8 +531,8 @@ protected:
 
         virtual ~BroadcasterHookup();
 
-        virtual Phase GetPhase() MOZ_OVERRIDE { return eHookup; }
-        virtual Result Resolve() MOZ_OVERRIDE;
+        virtual Phase GetPhase() override { return eHookup; }
+        virtual Result Resolve() override;
     };
 
     friend class BroadcasterHookup;
@@ -551,8 +556,8 @@ protected:
 
         virtual ~OverlayForwardReference();
 
-        virtual Phase GetPhase() MOZ_OVERRIDE { return eConstruction; }
-        virtual Result Resolve() MOZ_OVERRIDE;
+        virtual Phase GetPhase() override { return eConstruction; }
+        virtual Result Resolve() override;
     };
 
     friend class OverlayForwardReference;
@@ -566,8 +571,8 @@ protected:
         explicit TemplateBuilderHookup(nsIContent* aElement)
             : mElement(aElement) {}
 
-        virtual Phase GetPhase() MOZ_OVERRIDE { return eHookup; }
-        virtual Result Resolve() MOZ_OVERRIDE;
+        virtual Phase GetPhase() override { return eHookup; }
+        virtual Result Resolve() override;
     };
 
     friend class TemplateBuilderHookup;
@@ -605,19 +610,19 @@ protected:
      * The current prototype that we are walking to construct the
      * content model.
      */
-    nsRefPtr<nsXULPrototypeDocument> mCurrentPrototype;
+    RefPtr<nsXULPrototypeDocument> mCurrentPrototype;
 
     /**
      * The master document (outermost, .xul) prototype, from which
      * all subdocuments get their security principals.
      */
-    nsRefPtr<nsXULPrototypeDocument> mMasterPrototype;
+    RefPtr<nsXULPrototypeDocument> mMasterPrototype;
 
     /**
      * Owning references to all of the prototype documents that were
      * used to construct this document.
      */
-    nsTArray< nsRefPtr<nsXULPrototypeDocument> > mPrototypes;
+    nsTArray< RefPtr<nsXULPrototypeDocument> > mPrototypes;
 
     /**
      * Prepare to walk the current prototype.
@@ -684,8 +689,8 @@ protected:
 
     class CachedChromeStreamListener : public nsIStreamListener {
     protected:
-        XULDocument* mDocument;
-        bool         mProtoLoaded;
+        RefPtr<XULDocument> mDocument;
+        bool mProtoLoaded;
 
         virtual ~CachedChromeStreamListener();
 
@@ -703,8 +708,8 @@ protected:
 
     class ParserObserver : public nsIRequestObserver {
     protected:
-        nsRefPtr<XULDocument> mDocument;
-        nsRefPtr<nsXULPrototypeDocument> mPrototype;
+        RefPtr<XULDocument> mDocument;
+        RefPtr<nsXULPrototypeDocument> mPrototype;
         virtual ~ParserObserver();
 
     public:

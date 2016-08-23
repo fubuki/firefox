@@ -7,190 +7,291 @@
  * Tests for the sub-dialog infrastructure, not for actual sub-dialog functionality.
  */
 
-let gTeardownAfterClose = false;
 const gDialogURL = getRootDirectory(gTestPath) + "subdialog.xul";
+const gDialogURL2 = getRootDirectory(gTestPath) + "subdialog2.xul";
 
-function test() {
-  waitForExplicitFinish();
-  open_preferences((win) => {
-    Task.spawn(function () {
-      for (let test of gTests) {
-        info("STARTING TEST: " + test.desc);
-        try {
-          yield test.run();
-        } finally {
-          if (test.teardown) {
-            yield test.teardown();
-          }
-        }
+function* open_subdialog_and_test_generic_start_state(browser, domcontentloadedFn, url = gDialogURL) {
+  let domcontentloadedFnStr = domcontentloadedFn ?
+    "(" + domcontentloadedFn.toString() + ")()" :
+    "";
+  return ContentTask.spawn(browser, {url, domcontentloadedFnStr}, function*(args) {
+    let {url, domcontentloadedFnStr} = args;
+    let rv = { acceptCount: 0 };
+    let win = content.window;
+    let subdialog = win.gSubDialog;
+    subdialog.open(url, null, rv);
+
+    info("waiting for subdialog DOMFrameContentLoaded");
+    yield ContentTaskUtils.waitForEvent(win, "DOMFrameContentLoaded", true);
+    let result;
+    if (domcontentloadedFnStr) {
+      result = eval(domcontentloadedFnStr);
+    }
+
+    info("waiting for subdialog load");
+    yield ContentTaskUtils.waitForEvent(subdialog._frame, "load");
+    info("subdialog window is loaded");
+
+    let expectedStyleSheetURLs = subdialog._injectedStyleSheets.slice(0);
+    for (let styleSheet of subdialog._frame.contentDocument.styleSheets) {
+      let index = expectedStyleSheetURLs.indexOf(styleSheet.href);
+      if (index >= 0) {
+        expectedStyleSheetURLs.splice(index, 1);
       }
-    });
+    }
+
+    Assert.ok(!!subdialog._frame.contentWindow, "The dialog should be non-null");
+    Assert.notEqual(subdialog._frame.contentWindow.location.toString(), "about:blank",
+      "Subdialog URL should not be about:blank");
+    Assert.equal(win.getComputedStyle(subdialog._overlay, "").visibility, "visible",
+      "Overlay should be visible");
+    Assert.equal(expectedStyleSheetURLs.length, 0,
+      "No stylesheets that were expected are missing");
+    return result;
   });
 }
 
-let gTests = [{
-  desc: "Check titlebar, focus, return value, title changes, and accepting",
-  run: function* () {
-    let rv = { acceptCount: 0 };
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, rv,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
-    let dialog = yield dialogPromise;
+function* close_subdialog_and_test_generic_end_state(browser, closingFn, closingButton, acceptCount, options) {
+  let dialogclosingPromise = ContentTask.spawn(browser, {closingButton, acceptCount}, function*(expectations) {
+    let win = content.window;
+    let subdialog = win.gSubDialog;
+    let frame = subdialog._frame;
+    info("waiting for dialogclosing");
+    let closingEvent =
+      yield ContentTaskUtils.waitForEvent(frame.contentWindow, "dialogclosing");
+    let actualAcceptCount = frame.contentWindow.arguments &&
+                            frame.contentWindow.arguments[0].acceptCount;
 
-    // Check focus is in the textbox
-    ise(dialog.document.activeElement.value, "Default text", "Textbox with correct text is focused");
+    info("waiting for about:blank load");
+    yield ContentTaskUtils.waitForEvent(frame, "load");
 
-    // Titlebar
-    ise(content.document.getElementById("dialogTitle").textContent, "Sample sub-dialog",
-       "Dialog title should be correct initially");
-    let receivedEvent = waitForEvent(gBrowser.selectedBrowser, "DOMTitleChanged");
+    Assert.notEqual(win.getComputedStyle(subdialog._overlay, "").visibility, "visible",
+      "overlay is not visible");
+    Assert.equal(frame.getAttribute("style"), "", "inline styles should be cleared");
+    Assert.equal(frame.contentWindow.location.href.toString(), "about:blank",
+      "sub-dialog should be unloaded");
+    Assert.equal(closingEvent.detail.button, expectations.closingButton,
+      "closing event should indicate button was '" + expectations.closingButton + "'");
+    Assert.equal(actualAcceptCount, expectations.acceptCount,
+      "should be 1 if accepted, 0 if canceled, undefined if closed w/out button");
+  });
+
+  if (options && options.runClosingFnOutsideOfContentTask) {
+    yield closingFn();
+  } else {
+    ContentTask.spawn(browser, null, closingFn);
+  }
+
+  yield dialogclosingPromise;
+}
+
+let tab;
+
+add_task(function* test_initialize() {
+  tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "about:preferences");
+});
+
+add_task(function* check_titlebar_focus_returnval_titlechanges_accepting() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
+
+  let domtitlechangedPromise = BrowserTestUtils.waitForEvent(tab.linkedBrowser, "DOMTitleChanged");
+  yield ContentTask.spawn(tab.linkedBrowser, null, function*() {
+    let dialog = content.window.gSubDialog._frame.contentWindow;
+    let dialogTitleElement = content.document.getElementById("dialogTitle");
+    Assert.equal(dialogTitleElement.textContent, "Sample sub-dialog",
+       "Title should be correct initially");
+    Assert.equal(dialog.document.activeElement.value, "Default text",
+       "Textbox with correct text is focused");
     dialog.document.title = "Updated title";
-    // Wait for the title change listener
-    yield receivedEvent;
-    ise(content.document.getElementById("dialogTitle").textContent, "Updated title",
-       "Dialog title should be updated with changes");
+  });
 
-    let closingPromise = promiseDialogClosing(dialog);
+  info("waiting for DOMTitleChanged event");
+  yield domtitlechangedPromise;
 
-    // Accept the dialog
-    dialog.document.documentElement.acceptDialog();
-    let closingEvent = yield closingPromise;
-    ise(closingEvent.detail.button, "accept", "closing event should indicate button was 'accept'");
+  ContentTask.spawn(tab.linkedBrowser, null, function*() {
+    let dialogTitleElement = content.document.getElementById("dialogTitle");
+    Assert.equal(dialogTitleElement.textContent, "Updated title",
+      "subdialog should have updated title");
+  });
 
-    yield deferredClose.promise;
-    ise(rv.acceptCount, 1, "return value should have been updated");
-  },
-},
-{
-  desc: "Check canceling the dialog",
-  run: function* () {
-    let rv = { acceptCount: 0 };
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, rv,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
-    let dialog = yield dialogPromise;
+  // Accept the dialog
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentDocument.documentElement.acceptDialog(); },
+    "accept", 1);
+});
 
-    let closingPromise = promiseDialogClosing(dialog);
+add_task(function* check_canceling_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-    info("cancelling the dialog");
-    dialog.document.documentElement.cancelDialog();
+  info("canceling the dialog");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentDocument.documentElement.cancelDialog(); },
+    "cancel", 0);
+});
 
-    let closingEvent = yield closingPromise;
-    ise(closingEvent.detail.button, "cancel", "closing event should indicate button was 'accept'");
+add_task(function* check_reopening_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
+  info("opening another dialog which will close the first");
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser, "", gDialogURL2);
+  info("closing as normal");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentDocument.documentElement.acceptDialog(); },
+    "accept", 1);
+});
 
-    yield deferredClose.promise;
-    ise(rv.acceptCount, 0, "return value should NOT have been updated");
-  },
-},
-{
-  desc: "Check window.close on the dialog",
-  run: function* () {
-    let rv = { acceptCount: 0 };
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, rv,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
-    let dialog = yield dialogPromise;
+add_task(function* check_opening_while_closing() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
+  info("closing");
+  content.window.gSubDialog.close();
+  info("reopening immediately after calling .close()");
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentDocument.documentElement.acceptDialog(); },
+    "accept", 1);
 
-    let closingPromise = promiseDialogClosing(dialog);
-    info("window.close called on the dialog");
-    dialog.window.close();
+});
 
-    let closingEvent = yield closingPromise;
-    ise(closingEvent.detail.button, null, "closing event should indicate no button was clicked");
+add_task(function* window_close_on_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-    yield deferredClose.promise;
-    ise(rv.acceptCount, 0, "return value should NOT have been updated");
-  },
-},
-{
-  desc: "Check clicking the close button on the dialog",
-  run: function* () {
-    let rv = { acceptCount: 0 };
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, rv,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
-    let dialog = yield dialogPromise;
+  info("canceling the dialog");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentWindow.window.close(); },
+    null, 0);
+});
 
-    yield EventUtils.synthesizeMouseAtCenter(content.document.getElementById("dialogClose"), {},
-                                             content.window);
+add_task(function* click_close_button_on_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-    yield deferredClose.promise;
-    ise(rv.acceptCount, 0, "return value should NOT have been updated");
-  },
-},
-{
-  desc: "Hitting escape in the dialog",
-  run: function* () {
-    let rv = { acceptCount: 0 };
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, rv,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
-    let dialog = yield dialogPromise;
+  info("canceling the dialog");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { return BrowserTestUtils.synthesizeMouseAtCenter("#dialogClose", {}, tab.linkedBrowser); },
+    null, 0, {runClosingFnOutsideOfContentTask: true});
+});
 
-    EventUtils.synthesizeKey("VK_ESCAPE", {}, content.window);
+add_task(function* back_navigation_on_subdialog_should_close_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-    yield deferredClose.promise;
-    ise(rv.acceptCount, 0, "return value should NOT have been updated");
-  },
-},
-{
-  desc: "Check that width and height from the sub-dialog are used to size the <browser>",
-  run: function* () {
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, null,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
-    let dialog = yield dialogPromise;
+  info("canceling the dialog");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.goBack(); },
+    null, undefined);
+});
 
-    ise(content.gSubDialog._frame.style.width, "32em", "Width should be set on the frame from the dialog");
-    ise(content.gSubDialog._frame.style.height, "40em", "Height should be set on the frame from the dialog");
+add_task(function* back_navigation_on_browser_tab_should_close_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-    content.gSubDialog.close();
-    yield deferredClose.promise;
-  },
-},
-{
-  desc: "Check that scrollWidth and scrollHeight from the sub-dialog are used to size the <browser>",
-  run: function* () {
-    let deferredClose = Promise.defer();
-    let dialogPromise = openAndLoadSubDialog(gDialogURL, null, null,
-                                             (aEvent) => dialogClosingCallback(deferredClose, aEvent));
+  info("canceling the dialog");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { tab.linkedBrowser.goBack(); },
+    null, undefined, {runClosingFnOutsideOfContentTask: true});
+});
 
-    content.addEventListener("DOMFrameContentLoaded", function frameLoaded() {
-      content.removeEventListener("DOMFrameContentLoaded", frameLoaded);
-      content.gSubDialog._frame.contentDocument.documentElement.style.height = "";
-      content.gSubDialog._frame.contentDocument.documentElement.style.width = "";
-    });
+add_task(function* escape_should_close_dialog() {
+  todo(false, "BrowserTestUtils.sendChar('VK_ESCAPE') triggers " +
+              "'can't access dead object' on `navigator` in this test. " +
+              "See bug 1238065.")
+  return;
 
-    let dialog = yield dialogPromise;
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-    ok(content.gSubDialog._frame.style.width.endsWith("px"),
-       "Width should be set to a px value of the scrollWidth from the dialog");
-    ok(content.gSubDialog._frame.style.height.endsWith("px"),
-       "Height should be set to a px value of the scrollHeight from the dialog");
+  info("canceling the dialog");
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { return BrowserTestUtils.sendChar("VK_ESCAPE", tab.linkedBrowser); },
+    null, undefined, {runClosingFnOutsideOfContentTask: true});
+});
 
-    gTeardownAfterClose = true;
-    content.gSubDialog.close();
-    yield deferredClose.promise;
-  },
-}];
+add_task(function* correct_width_and_height_should_be_used_for_dialog() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser);
 
-function promiseDialogClosing(dialog) {
-  return waitForEvent(dialog, "dialogclosing");
-}
+  yield ContentTask.spawn(tab.linkedBrowser, null, function*() {
+    let frameStyle = content.window.gSubDialog._frame.style;
+    Assert.equal(frameStyle.width, "32em",
+      "Width should be set on the frame from the dialog");
+    Assert.equal(frameStyle.height, "5em",
+      "Height should be set on the frame from the dialog");
+  });
 
-function dialogClosingCallback(aPromise, aEvent) {
-  // Wait for the close handler to unload the page
-  waitForEvent(content.gSubDialog._frame, "load", 4000).then((aEvt) => {
-    info("Load event happened: " + !(aEvt instanceof Error));
-    is_element_hidden(content.gSubDialog._overlay, "Overlay is not visible");
-    ise(content.gSubDialog._frame.getAttribute("style"), "",
-        "Check that inline styles were cleared");
-    ise(content.gSubDialog._frame.contentWindow.location.toString(), "about:blank",
-       "Check the sub-dialog was unloaded");
-    if (gTeardownAfterClose) {
-      content.close();
-      finish();
-    }
-    aPromise.resolve();
-  }, Cu.reportError);
-}
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentWindow.window.close(); },
+    null, 0);
+});
+
+add_task(function* wrapped_text_in_dialog_should_have_expected_scrollHeight() {
+  let oldHeight = yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser, function domcontentloadedFn() {
+    let frame = content.window.gSubDialog._frame;
+    let doc = frame.contentDocument;
+    let oldHeight = doc.documentElement.scrollHeight;
+    doc.documentElement.style.removeProperty("height");
+    doc.getElementById("desc").textContent = `
+      Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque
+      laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
+      architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas
+      sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione
+      laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
+      architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas
+      sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione
+      laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
+      architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas
+      sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione
+      voluptatem sequi nesciunt.`
+    return oldHeight;
+  });
+
+  yield ContentTask.spawn(tab.linkedBrowser, oldHeight, function*(oldHeight) {
+    let frame = content.window.gSubDialog._frame;
+    let docEl = frame.contentDocument.documentElement;
+    Assert.equal(frame.style.width, "32em",
+      "Width should be set on the frame from the dialog");
+    Assert.ok(docEl.scrollHeight > oldHeight,
+      "Content height increased (from " + oldHeight + " to " + docEl.scrollHeight + ").");
+    Assert.equal(frame.style.height, docEl.scrollHeight + "px",
+      "Height on the frame should be higher now");
+  });
+
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentWindow.window.close(); },
+    null, 0);
+});
+
+add_task(function* dialog_too_tall_should_get_reduced_in_height() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser, function domcontentloadedFn() {
+    let frame = content.window.gSubDialog._frame;
+    frame.contentDocument.documentElement.style.height = '100000px';
+  });
+
+  yield ContentTask.spawn(tab.linkedBrowser, null, function*() {
+    let frame = content.window.gSubDialog._frame;
+    Assert.equal(frame.style.width, "32em", "Width should be set on the frame from the dialog");
+    Assert.ok(parseInt(frame.style.height, 10) < content.window.innerHeight,
+       "Height on the frame should be smaller than window's innerHeight");
+  });
+
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentWindow.window.close(); },
+    null, 0);
+});
+
+add_task(function* scrollWidth_and_scrollHeight_from_subdialog_should_size_the_browser() {
+  yield open_subdialog_and_test_generic_start_state(tab.linkedBrowser, function domcontentloadedFn() {
+    let frame = content.window.gSubDialog._frame;
+    frame.contentDocument.documentElement.style.removeProperty("height");
+    frame.contentDocument.documentElement.style.removeProperty("width");
+  });
+
+  yield ContentTask.spawn(tab.linkedBrowser, null, function*() {
+    let frame = content.window.gSubDialog._frame;
+    Assert.ok(frame.style.width.endsWith("px"),
+       "Width (" + frame.style.width + ") should be set to a px value of the scrollWidth from the dialog");
+    Assert.ok(frame.style.height.endsWith("px"),
+       "Height (" + frame.style.height + ") should be set to a px value of the scrollHeight from the dialog");
+  });
+
+  yield close_subdialog_and_test_generic_end_state(tab.linkedBrowser,
+    function() { content.window.gSubDialog._frame.contentWindow.window.close(); },
+    null, 0);
+});
+
+add_task(function* test_shutdown() {
+  gBrowser.removeTab(tab);
+});

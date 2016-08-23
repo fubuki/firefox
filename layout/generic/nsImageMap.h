@@ -21,8 +21,8 @@ class nsIFrame;
 class nsIContent;
 struct nsRect;
 
-class nsImageMap MOZ_FINAL : public nsStubMutationObserver,
-                             public nsIDOMEventListener
+class nsImageMap final : public nsStubMutationObserver,
+                         public nsIDOMEventListener
 {
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::ColorPattern ColorPattern;
@@ -90,7 +90,7 @@ protected:
 
   nsImageFrame* mImageFrame;  // the frame that owns us
   nsCOMPtr<nsIContent> mMap;
-  nsAutoTArray<Area*, 8> mAreas; // almost always has some entries
+  AutoTArray<Area*, 8> mAreas; // almost always has some entries
   bool mContainsBlockContents;
 };
 

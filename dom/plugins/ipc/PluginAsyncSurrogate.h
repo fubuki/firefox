@@ -21,6 +21,7 @@
 namespace mozilla {
 namespace plugins {
 
+struct ParentNPObject;
 class PluginInstanceParent;
 class PluginModuleParent;
 
@@ -42,6 +43,7 @@ public:
   void NPP_Print(NPPrint* aPrintInfo);
   int16_t NPP_HandleEvent(void* aEvent);
   int32_t NPP_WriteReady(NPStream* aStream);
+  NPError NPP_DestroyStream(NPStream* aStream, NPReason aReason);
   void OnInstanceCreated(PluginInstanceParent* aInstance);
   static bool Create(PluginModuleParent* aParent, NPMIMEType aPluginType,
                      NPP aInstance, uint16_t aMode, int16_t aArgc,
@@ -49,6 +51,8 @@ public:
   static const NPClass* GetClass() { return &sNPClass; }
   static void NP_GetEntryPoints(NPPluginFuncs* aFuncs);
   static PluginAsyncSurrogate* Cast(NPP aInstance);
+  static void NotifyDestroyPending(NPP aInstance);
+  void NotifyDestroyPending();
 
   virtual PluginAsyncSurrogate*
   GetAsyncSurrogate() { return this; }
@@ -56,14 +60,15 @@ public:
   virtual PluginInstanceParent*
   GetInstance() { return nullptr; }
 
-  NPP GetNPP() { return mInstance; }
+  NPP GetNPP();
 
   bool GetPropertyHelper(NPObject* aObject, NPIdentifier aName,
                          bool* aHasProperty, bool* aHasMethod,
                          NPVariant* aResult);
 
-  PluginModuleParent*
-  GetParent() { return mParent; }
+  PluginModuleParent* GetParent() { return mParent; }
+
+  bool IsDestroyPending() const { return mDestroyPending; }
 
   bool SetAcceptingCalls(bool aAccept)
   {
@@ -79,6 +84,7 @@ public:
   void AsyncCallArriving();
 
   void NotifyAsyncInitFailed();
+  void DestroyAsyncStream(NPStream* aStream);
 
 private:
   explicit PluginAsyncSurrogate(PluginModuleParent* aParent);
@@ -97,6 +103,8 @@ private:
   static void NPP_Print(NPP aInstance, NPPrint* aPrintInfo);
   static int16_t NPP_HandleEvent(NPP aInstance, void* aEvent);
   static int32_t NPP_WriteReady(NPP aInstance, NPStream* aStream);
+  static NPError NPP_DestroyStream(NPP aInstance, NPStream* aStream,
+                                   NPReason aReason);
 
   static NPObject* ScriptableAllocate(NPP aInstance, NPClass* aClass);
   static void ScriptableInvalidate(NPObject* aObject);
@@ -117,6 +125,7 @@ private:
                                   uint32_t* aCount);
   static bool ScriptableConstruct(NPObject* aObject, const NPVariant* aArgs,
                                   uint32_t aArgCount, NPVariant* aResult);
+  static nsNPAPIPluginStreamListener* GetStreamListener(NPStream* aStream);
 
 private:
   struct PendingNewStreamCall
@@ -132,7 +141,7 @@ private:
   PluginModuleParent*             mParent;
   // These values are used to construct the plugin instance
   nsCString                       mMimeType;
-  NPP                             mInstance;
+  mozilla::WeakPtr<nsNPAPIPluginInstance> mInstance;
   uint16_t                        mMode;
   InfallibleTArray<nsCString>     mNames;
   InfallibleTArray<nsCString>     mValues;
@@ -146,6 +155,7 @@ private:
   bool      mInstantiated;
   bool      mAsyncSetWindow;
   bool      mInitCancelled;
+  bool      mDestroyPending;
   int32_t   mAsyncCallsInFlight;
 
   static const NPClass sNPClass;
@@ -158,8 +168,8 @@ struct AsyncNPObject : NPObject
 
   NPObject* GetRealObject();
 
-  nsRefPtr<PluginAsyncSurrogate>  mSurrogate;
-  NPObject*                       mRealObject;
+  RefPtr<PluginAsyncSurrogate>  mSurrogate;
+  ParentNPObject*                 mRealObject;
 };
 
 class MOZ_STACK_CLASS PushSurrogateAcceptCalls

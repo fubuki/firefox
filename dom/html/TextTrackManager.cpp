@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set tw=80 expandtab softtabstop=2 ts=2 sw=2: */
-
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +13,7 @@
 #include "mozilla/dom/Event.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "nsComponentManagerUtils.h"
+#include "nsVariant.h"
 #include "nsVideoFrame.h"
 #include "nsIFrame.h"
 #include "nsTArrayHelpers.h"
@@ -96,7 +96,7 @@ TextTrackManager::TextTrackManager(HTMLMediaElement *aMediaElement)
 
   NS_ENSURE_TRUE_VOID(parentObject);
 
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(parentObject);
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(parentObject);
   mNewCues = new TextTrackCueList(window);
   mTextTracks = new TextTrackList(window, this);
   mPendingTextTracks = new TextTrackList(window, this);
@@ -129,7 +129,7 @@ TextTrackManager::AddTextTrack(TextTrackKind aKind, const nsAString& aLabel,
   if (!mMediaElement || !mTextTracks) {
     return nullptr;
   }
-  nsRefPtr<TextTrack> ttrack =
+  RefPtr<TextTrack> ttrack =
     mTextTracks->AddTextTrack(aKind, aLabel, aLanguage, aMode, aReadyState,
                               aTextTrackSource, CompareTextTracks(mMediaElement));
   AddCues(ttrack);
@@ -211,19 +211,18 @@ TextTrackManager::UpdateCueDisplay()
     return;
   }
 
-  nsTArray<nsRefPtr<TextTrackCue> > activeCues;
+  nsTArray<RefPtr<TextTrackCue> > activeCues;
   mTextTracks->UpdateAndGetShowingCues(activeCues);
 
   if (activeCues.Length() > 0) {
-    nsCOMPtr<nsIWritableVariant> jsCues =
-      do_CreateInstance("@mozilla.org/variant;1");
+    RefPtr<nsVariantCC> jsCues = new nsVariantCC();
 
     jsCues->SetAsArray(nsIDataType::VTYPE_INTERFACE,
                        &NS_GET_IID(nsIDOMEventTarget),
                        activeCues.Length(),
                        static_cast<void*>(activeCues.Elements()));
 
-    nsPIDOMWindow* window = mMediaElement->OwnerDoc()->GetWindow();
+    nsPIDOMWindowInner* window = mMediaElement->OwnerDoc()->GetInnerWindow();
     if (window) {
       sParserWrapper->ProcessCues(window, jsCues, overlay);
     }

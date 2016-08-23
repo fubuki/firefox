@@ -96,6 +96,77 @@ FloatToAudioSample<int16_t>(float aValue)
   return int16_t(clamped);
 }
 
+template <typename T> T UInt8bitToAudioSample(uint8_t aValue);
+
+template <> inline float
+UInt8bitToAudioSample<float>(uint8_t aValue)
+{
+  return aValue * (static_cast<float>(2) / UINT8_MAX) - static_cast<float>(1);
+}
+template <> inline int16_t
+UInt8bitToAudioSample<int16_t>(uint8_t aValue)
+{
+  return (int16_t(aValue) << 8) + aValue + INT16_MIN;
+}
+
+template <typename T> T IntegerToAudioSample(int16_t aValue);
+
+template <> inline float
+IntegerToAudioSample<float>(int16_t aValue)
+{
+  return aValue / 32768.0f;
+}
+template <> inline int16_t
+IntegerToAudioSample<int16_t>(int16_t aValue)
+{
+  return aValue;
+}
+
+template <typename T> T Int24bitToAudioSample(int32_t aValue);
+
+template <> inline float
+Int24bitToAudioSample<float>(int32_t aValue)
+{
+  return aValue / static_cast<float>(1 << 23);
+}
+template <> inline int16_t
+Int24bitToAudioSample<int16_t>(int32_t aValue)
+{
+  return aValue / 256;
+}
+
+template<typename SrcT, typename DstT>
+inline void
+ConvertAudioSample(SrcT aIn, DstT& aOut);
+
+template<>
+inline void
+ConvertAudioSample(int16_t aIn, int16_t & aOut)
+{
+  aOut = aIn;
+}
+
+template<>
+inline void
+ConvertAudioSample(int16_t aIn, float& aOut)
+{
+  aOut = AudioSampleToFloat(aIn);
+}
+
+template<>
+inline void
+ConvertAudioSample(float aIn, float& aOut)
+{
+  aOut = aIn;
+}
+
+template<>
+inline void
+ConvertAudioSample(float aIn, int16_t& aOut)
+{
+  aOut = FloatToAudioSample<int16_t>(aIn);
+}
+
 // Sample buffer conversion
 
 template <typename From, typename To> inline void

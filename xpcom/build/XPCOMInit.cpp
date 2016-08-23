@@ -1,13 +1,15 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim:set ts=4 sw=4 sts=4 ci et: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "base/basictypes.h"
 
+#include "mozilla/AbstractThread.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Poison.h"
+#include "mozilla/SharedThreadPool.h"
 #include "mozilla/XPCOM.h"
 #include "nsXULAppAPI.h"
 
@@ -15,7 +17,7 @@
 #include "nsXPCOMCIDInternal.h"
 
 #include "mozilla/layers/ImageBridgeChild.h"
-#include "mozilla/layers/CompositorParent.h"
+#include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/AsyncTransactionTracker.h"
 #include "mozilla/layers/SharedBufferManagerChild.h"
 
@@ -93,6 +95,7 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 #include "SpecialSystemDirectory.h"
 
 #if defined(XP_WIN)
+#include "mozilla/WindowsVersion.h"
 #include "nsWindowsRegKey.h"
 #endif
 
@@ -135,12 +138,14 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 
 #include "mozilla/ipc/GeckoChildProcessHost.h"
 
-#ifdef MOZ_VISUAL_EVENT_TRACER
-#include "mozilla/VisualEventTracer.h"
-#endif
-
 #include "ogg/ogg.h"
 #if defined(MOZ_VPX) && !defined(MOZ_VPX_NO_MEM_REPORTING)
+#if defined(HAVE_STDINT_H)
+// mozilla-config.h defines HAVE_STDINT_H, and then it's defined *again* in
+// vpx_config.h (which we include via vpx_mem.h, below). This redefinition
+// triggers a build warning on MSVC, so we have to #undef it first.
+#undef HAVE_STDINT_H
+#endif
 #include "vpx_mem/vpx_mem.h"
 #endif
 #ifdef MOZ_WEBM
@@ -150,15 +155,17 @@ extern nsresult nsStringInputStreamConstructor(nsISupports*, REFNSIID, void**);
 #include "GeckoProfiler.h"
 
 #include "jsapi.h"
+#include "js/Initialization.h"
 
 #include "gfxPlatform.h"
+
+#if EXPOSE_INTL_API
+#include "unicode/putil.h"
+#endif
 
 using namespace mozilla;
 using base::AtExitManager;
 using mozilla::ipc::BrowserProcessSubThread;
-#ifdef MOZ_VISUAL_EVENT_TRACER
-using mozilla::eventtracer::VisualEventTracer;
-#endif
 
 namespace {
 
@@ -210,11 +217,8 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsBinaryInputStream)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsStorageStream)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsVersionComparatorImpl)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsScriptableBase64Encoder)
-#ifdef MOZ_VISUAL_EVENT_TRACER
-NS_GENERIC_FACTORY_CONSTRUCTOR(VisualEventTracer)
-#endif
 
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsVariant)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsVariantCC)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHashPropertyBagCC)
 
@@ -278,8 +282,6 @@ char16_t* gGREBinPath = nullptr;
 
 static NS_DEFINE_CID(kComponentManagerCID, NS_COMPONENTMANAGER_CID);
 static NS_DEFINE_CID(kINIParserFactoryCID, NS_INIPARSERFACTORY_CID);
-static NS_DEFINE_CID(kSimpleUnicharStreamFactoryCID,
-                     NS_SIMPLE_UNICHAR_STREAM_FACTORY_CID);
 
 NS_DEFINE_NAMED_CID(NS_CHROMEREGISTRY_CID);
 NS_DEFINE_NAMED_CID(NS_CHROMEPROTOCOLHANDLER_CID);
@@ -300,14 +302,6 @@ CreateINIParserFactory(const mozilla::Module& aModule,
   return f.forget();
 }
 
-static already_AddRefed<nsIFactory>
-CreateUnicharStreamFactory(const mozilla::Module& aModule,
-                           const mozilla::Module::CIDEntry& aEntry)
-{
-  return already_AddRefed<nsIFactory>(
-           nsSimpleUnicharStreamFactory::GetInstance());
-}
-
 #define COMPONENT(NAME, Ctor) static NS_DEFINE_CID(kNS_##NAME##_CID, NS_##NAME##_CID);
 #include "XPCOMModule.inc"
 #undef COMPONENT
@@ -316,7 +310,6 @@ CreateUnicharStreamFactory(const mozilla::Module& aModule,
 const mozilla::Module::CIDEntry kXPCOMCIDEntries[] = {
   { &kComponentManagerCID, true, nullptr, nsComponentManagerImpl::Create },
   { &kINIParserFactoryCID, false, CreateINIParserFactory },
-  { &kSimpleUnicharStreamFactoryCID, false, CreateUnicharStreamFactory },
 #include "XPCOMModule.inc"
   { &kNS_CHROMEREGISTRY_CID, false, nullptr, nsChromeRegistryConstructor },
   { &kNS_CHROMEPROTOCOLHANDLER_CID, false, nullptr, nsChromeProtocolHandlerConstructor },
@@ -341,12 +334,12 @@ const mozilla::Module kXPCOMModule = {
 };
 
 // gDebug will be freed during shutdown.
-static nsIDebug* gDebug = nullptr;
+static nsIDebug2* gDebug = nullptr;
 
 EXPORT_XPCOM_API(nsresult)
-NS_GetDebug(nsIDebug** aResult)
+NS_GetDebug(nsIDebug2** aResult)
 {
-  return nsDebugImpl::Create(nullptr,  NS_GET_IID(nsIDebug), (void**)aResult);
+  return nsDebugImpl::Create(nullptr,  NS_GET_IID(nsIDebug2), (void**)aResult);
 }
 
 EXPORT_XPCOM_API(nsresult)
@@ -356,7 +349,7 @@ NS_InitXPCOM(nsIServiceManager** aResult,
   return NS_InitXPCOM2(aResult, aBinDirectory, nullptr);
 }
 
-class ICUReporter MOZ_FINAL
+class ICUReporter final
   : public nsIMemoryReporter
   , public CountingAllocatorBase<ICUReporter>
 {
@@ -381,7 +374,7 @@ public:
 private:
   NS_IMETHODIMP
   CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData,
-                 bool aAnonymize) MOZ_OVERRIDE
+                 bool aAnonymize) override
   {
     return MOZ_COLLECT_REPORT(
       "explicit/icu", KIND_HEAP, UNITS_BYTES, MemoryAllocated(),
@@ -396,7 +389,7 @@ NS_IMPL_ISUPPORTS(ICUReporter, nsIMemoryReporter)
 /* static */ template<> Atomic<size_t>
 CountingAllocatorBase<ICUReporter>::sAmount(0);
 
-class OggReporter MOZ_FINAL
+class OggReporter final
   : public nsIMemoryReporter
   , public CountingAllocatorBase<OggReporter>
 {
@@ -406,7 +399,7 @@ public:
 private:
   NS_IMETHODIMP
   CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData,
-                 bool aAnonymize) MOZ_OVERRIDE
+                 bool aAnonymize) override
   {
     return MOZ_COLLECT_REPORT(
       "explicit/media/libogg", KIND_HEAP, UNITS_BYTES, MemoryAllocated(),
@@ -422,7 +415,7 @@ NS_IMPL_ISUPPORTS(OggReporter, nsIMemoryReporter)
 CountingAllocatorBase<OggReporter>::sAmount(0);
 
 #ifdef MOZ_VPX
-class VPXReporter MOZ_FINAL
+class VPXReporter final
   : public nsIMemoryReporter
   , public CountingAllocatorBase<VPXReporter>
 {
@@ -432,7 +425,7 @@ public:
 private:
   NS_IMETHODIMP
   CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData,
-                 bool aAnonymize) MOZ_OVERRIDE
+                 bool aAnonymize) override
   {
     return MOZ_COLLECT_REPORT(
       "explicit/media/libvpx", KIND_HEAP, UNITS_BYTES, MemoryAllocated(),
@@ -449,7 +442,7 @@ CountingAllocatorBase<VPXReporter>::sAmount(0);
 #endif /* MOZ_VPX */
 
 #ifdef MOZ_WEBM
-class NesteggReporter MOZ_FINAL
+class NesteggReporter final
   : public nsIMemoryReporter
   , public CountingAllocatorBase<NesteggReporter>
 {
@@ -459,7 +452,7 @@ public:
 private:
   NS_IMETHODIMP
   CollectReports(nsIHandleReportCallback* aHandleReport, nsISupports* aData,
-                 bool aAnonymize) MOZ_OVERRIDE
+                 bool aAnonymize) override
   {
     return MOZ_COLLECT_REPORT(
       "explicit/media/libnestegg", KIND_HEAP, UNITS_BYTES, MemoryAllocated(),
@@ -475,6 +468,13 @@ NS_IMPL_ISUPPORTS(NesteggReporter, nsIMemoryReporter)
 CountingAllocatorBase<NesteggReporter>::sAmount(0);
 #endif /* MOZ_WEBM */
 
+static double
+TimeSinceProcessCreation()
+{
+  bool ignore;
+  return (TimeStamp::Now() - TimeStamp::ProcessCreation(ignore)).ToMilliseconds();
+}
+
 // Note that on OSX, aBinDirectory will point to .app/Contents/Resources/browser
 EXPORT_XPCOM_API(nsresult)
 NS_InitXPCOM2(nsIServiceManager** aResult,
@@ -489,6 +489,12 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   sInitialized = true;
 
   mozPoisonValueInit();
+
+  NS_LogInit();
+
+  mozilla::LogModule::Init();
+
+  JS_SetCurrentEmbedderTimeFunction(TimeSinceProcessCreation);
 
   char aLocal;
   profiler_init(&aLocal);
@@ -512,8 +518,6 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   ::umask(nsSystemInfo::gUserUmask);
 #endif
 
-  NS_LogInit();
-
   // Set up chromium libs
   NS_ASSERTION(!sExitManager && !sMessageLoop, "Bad logic!");
 
@@ -521,15 +525,19 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
     sExitManager = new AtExitManager();
   }
 
-  if (!MessageLoop::current()) {
-    sMessageLoop = new MessageLoopForUI(MessageLoop::TYPE_MOZILLA_UI);
+  MessageLoop* messageLoop = MessageLoop::current();
+  if (!messageLoop) {
+    sMessageLoop = new MessageLoopForUI(MessageLoop::TYPE_MOZILLA_PARENT);
     sMessageLoop->set_thread_name("Gecko");
     // Set experimental values for main thread hangs:
-    // 512ms for transient hangs and 8192ms for permanent hangs
-    sMessageLoop->set_hang_timeouts(512, 8192);
+    // 128ms for transient hangs and 8192ms for permanent hangs
+    sMessageLoop->set_hang_timeouts(128, 8192);
+  } else if (messageLoop->type() == MessageLoop::TYPE_MOZILLA_CHILD) {
+    messageLoop->set_thread_name("Gecko_Child");
+    messageLoop->set_hang_timeouts(128, 8192);
   }
 
-  if (XRE_GetProcessType() == GeckoProcessType_Default &&
+  if (XRE_IsParentProcess() &&
       !BrowserProcessSubThread::GetMessageLoop(BrowserProcessSubThread::IO)) {
     UniquePtr<BrowserProcessSubThread> ioThread = MakeUnique<BrowserProcessSubThread>(BrowserProcessSubThread::IO);
 
@@ -684,9 +692,21 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   nestegg_set_halloc_func(NesteggReporter::CountingFreeingRealloc);
 #endif
 
+#if EXPOSE_INTL_API && defined(MOZ_ICU_DATA_ARCHIVE)
+  nsCOMPtr<nsIFile> greDir;
+  nsDirectoryService::gService->Get(NS_GRE_DIR,
+                                    NS_GET_IID(nsIFile),
+                                    getter_AddRefs(greDir));
+  MOZ_ASSERT(greDir);
+  nsAutoCString nativeGREPath;
+  greDir->GetNativePath(nativeGREPath);
+  u_setDataDirectory(nativeGREPath.get());
+#endif
+
   // Initialize the JS engine.
-  if (!JS_Init()) {
-    NS_RUNTIMEABORT("JS_Init failed");
+  const char* jsInitFailureReason = JS_InitWithFailureDiagnostic();
+  if (jsInitFailureReason) {
+    NS_RUNTIMEABORT(jsInitFailureReason);
   }
 
   rv = nsComponentManagerImpl::gComponentManager->Init();
@@ -708,6 +728,12 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   // to the directory service.
   nsDirectoryService::gService->RegisterCategoryProviders();
 
+  // Init SharedThreadPool (which needs the service manager).
+  SharedThreadPool::InitStatics();
+
+  // Init AbstractThread.
+  AbstractThread::InitStatics();
+
   // Force layout to spin up so that nsContentUtils is available for cx stack
   // munging.
   nsCOMPtr<nsISupports> componentLoader =
@@ -727,7 +753,7 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   // We only want the SystemMemoryReporter running in one process, because it
   // profiles the entire system.  The main process is the obvious place for
   // it.
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     mozilla::SystemMemoryReporter::Init();
   }
 
@@ -751,10 +777,6 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
     loop->thread_name().c_str(),
     loop->transient_hang_timeout(),
     loop->permanent_hang_timeout());
-
-#ifdef MOZ_VISUAL_EVENT_TRACER
-  mozilla::eventtracer::Init();
-#endif
 
   return NS_OK;
 }
@@ -825,11 +847,12 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
       return NS_ERROR_UNEXPECTED;
     }
 
-    nsRefPtr<nsObserverService> observerService;
+    RefPtr<nsObserverService> observerService;
     CallGetService("@mozilla.org/observer-service;1",
                    (nsObserverService**)getter_AddRefs(observerService));
 
     if (observerService) {
+      mozilla::KillClearOnShutdown(ShutdownPhase::WillShutdown);
       observerService->NotifyObservers(nullptr,
                                        NS_XPCOM_WILL_SHUTDOWN_OBSERVER_ID,
                                        nullptr);
@@ -837,6 +860,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
       nsCOMPtr<nsIServiceManager> mgr;
       rv = NS_GetServiceManager(getter_AddRefs(mgr));
       if (NS_SUCCEEDED(rv)) {
+        mozilla::KillClearOnShutdown(ShutdownPhase::Shutdown);
         observerService->NotifyObservers(mgr, NS_XPCOM_SHUTDOWN_OBSERVER_ID,
                                          nullptr);
       }
@@ -849,9 +873,12 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
 
     mozilla::scache::StartupCache::DeleteSingleton();
     if (observerService)
+    {
+      mozilla::KillClearOnShutdown(ShutdownPhase::ShutdownThreads);
       observerService->NotifyObservers(nullptr,
                                        NS_XPCOM_SHUTDOWN_THREADS_OBSERVER_ID,
                                        nullptr);
+    }
 
     gXPCOMThreadsShutDown = true;
     NS_ProcessPendingEvents(thread);
@@ -879,6 +906,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
     // We save the "xpcom-shutdown-loaders" observers to notify after
     // the observerservice is gone.
     if (observerService) {
+      mozilla::KillClearOnShutdown(ShutdownPhase::ShutdownLoaders);
       observerService->EnumerateObservers(NS_XPCOM_SHUTDOWN_LOADERS_OBSERVER_ID,
                                           getter_AddRefs(moduleLoaders));
 
@@ -889,7 +917,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   // Free ClearOnShutdown()'ed smart pointers.  This needs to happen *after*
   // we've finished notifying observers of XPCOM shutdown, because shutdown
   // observers themselves might call ClearOnShutdown().
-  mozilla::KillClearOnShutdown();
+  mozilla::KillClearOnShutdown(ShutdownPhase::ShutdownFinal);
 
   // XPCOM is officially in shutdown mode NOW
   // Set this only after the observers have been notified as this
@@ -911,7 +939,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   // Release the directory service
   NS_IF_RELEASE(nsDirectoryService::gService);
 
-  NS_Free(gGREBinPath);
+  free(gGREBinPath);
   gGREBinPath = nullptr;
 
   if (moduleLoaders) {
@@ -954,18 +982,6 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
   NS_ShutdownLocalFile();
 #ifdef XP_UNIX
   NS_ShutdownNativeCharsetUtils();
-#endif
-
-#if defined(XP_WIN)
-  // This exit(0) call is intended to be temporary, to get shutdown leak
-  // checking working on Linux.
-  // On Windows XP debug, there are intermittent failures in
-  // dom/media/tests/mochitest/test_peerConnection_basicH264Video.html
-  // if we don't exit early in a child process. See bug 1073310.
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
-      NS_WARNING("Exiting child process early!");
-      exit(0);
-  }
 #endif
 
   // Shutdown xpcom. This will release all loaders and cause others holding
@@ -1037,22 +1053,18 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
 
   BackgroundHangMonitor::Shutdown();
 
-#ifdef MOZ_VISUAL_EVENT_TRACER
-  eventtracer::Shutdown();
-#endif
-
   profiler_shutdown();
 
   NS_LogTerm();
 
 #if defined(MOZ_WIDGET_GONK)
-  // This exit(0) call is intended to be temporary, to get shutdown leak
-  // checking working on Linux.
+  // This _exit(0) call is intended to be temporary, to get shutdown leak
+  // checking working on non-B2G platforms.
   // On debug B2G, the child process crashes very late.  Instead, just
   // give up so at least we exit cleanly. See bug 1071866.
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
       NS_WARNING("Exiting child process early!");
-      exit(0);
+      _exit(0);
   }
 #endif
 

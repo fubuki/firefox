@@ -30,39 +30,39 @@ public:
   GMPPlaneImpl* GetPlane(GMPPlaneType aType);
 
   // GMPVideoFrame
-  virtual GMPVideoFrameFormat GetFrameFormat() MOZ_OVERRIDE;
-  virtual void Destroy() MOZ_OVERRIDE;
+  GMPVideoFrameFormat GetFrameFormat() override;
+  void Destroy() override;
 
   // GMPVideoi420Frame
-  virtual GMPErr CreateEmptyFrame(int32_t aWidth,
-                                  int32_t aHeight,
-                                  int32_t aStride_y,
-                                  int32_t aStride_u,
-                                  int32_t aStride_v) MOZ_OVERRIDE;
-  virtual GMPErr CreateFrame(int32_t aSize_y, const uint8_t* aBuffer_y,
-                             int32_t aSize_u, const uint8_t* aBuffer_u,
-                             int32_t aSize_v, const uint8_t* aBuffer_v,
-                             int32_t aWidth,
-                             int32_t aHeight,
-                             int32_t aStride_y,
-                             int32_t aStride_u,
-                             int32_t aStride_v) MOZ_OVERRIDE;
-  virtual GMPErr CopyFrame(const GMPVideoi420Frame& aFrame) MOZ_OVERRIDE;
-  virtual void SwapFrame(GMPVideoi420Frame* aFrame) MOZ_OVERRIDE;
-  virtual uint8_t* Buffer(GMPPlaneType aType) MOZ_OVERRIDE;
-  virtual const uint8_t* Buffer(GMPPlaneType aType) const MOZ_OVERRIDE;
-  virtual int32_t AllocatedSize(GMPPlaneType aType) const MOZ_OVERRIDE;
-  virtual int32_t Stride(GMPPlaneType aType) const MOZ_OVERRIDE;
-  virtual GMPErr SetWidth(int32_t aWidth) MOZ_OVERRIDE;
-  virtual GMPErr SetHeight(int32_t aHeight) MOZ_OVERRIDE;
-  virtual int32_t Width() const MOZ_OVERRIDE;
-  virtual int32_t Height() const MOZ_OVERRIDE;
-  virtual void SetTimestamp(uint64_t aTimestamp) MOZ_OVERRIDE;
-  virtual uint64_t Timestamp() const MOZ_OVERRIDE;
-  virtual void SetDuration(uint64_t aDuration) MOZ_OVERRIDE;
-  virtual uint64_t Duration() const MOZ_OVERRIDE;
-  virtual bool IsZeroSize() const MOZ_OVERRIDE;
-  virtual void ResetSize() MOZ_OVERRIDE;
+  GMPErr CreateEmptyFrame(int32_t aWidth,
+                          int32_t aHeight,
+                          int32_t aStride_y,
+                          int32_t aStride_u,
+                          int32_t aStride_v) override;
+  GMPErr CreateFrame(int32_t aSize_y, const uint8_t* aBuffer_y,
+                     int32_t aSize_u, const uint8_t* aBuffer_u,
+                     int32_t aSize_v, const uint8_t* aBuffer_v,
+                     int32_t aWidth,
+                     int32_t aHeight,
+                     int32_t aStride_y,
+                     int32_t aStride_u,
+                     int32_t aStride_v) override;
+  GMPErr CopyFrame(const GMPVideoi420Frame& aFrame) override;
+  void SwapFrame(GMPVideoi420Frame* aFrame) override;
+  uint8_t* Buffer(GMPPlaneType aType) override;
+  const uint8_t* Buffer(GMPPlaneType aType) const override;
+  int32_t AllocatedSize(GMPPlaneType aType) const override;
+  int32_t Stride(GMPPlaneType aType) const override;
+  GMPErr SetWidth(int32_t aWidth) override;
+  GMPErr SetHeight(int32_t aHeight) override;
+  int32_t Width() const override;
+  int32_t Height() const override;
+  void SetTimestamp(uint64_t aTimestamp) override;
+  uint64_t Timestamp() const override;
+  void SetDuration(uint64_t aDuration) override;
+  uint64_t Duration() const override;
+  bool IsZeroSize() const override;
+  void ResetSize() override;
 
 private:
   bool CheckDimensions(int32_t aWidth, int32_t aHeight,

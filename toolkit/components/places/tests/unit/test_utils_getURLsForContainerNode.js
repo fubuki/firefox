@@ -148,7 +148,7 @@ function() {
 ];
 
 /**
- * Executes a query and checks number of uri nodes in the first container in 
+ * Executes a query and checks number of uri nodes in the first container in
  * query's results.  To correctly test a container ensure that the query will
  * return only your container in the first level.
  *
@@ -169,11 +169,12 @@ function check_uri_nodes(aQuery, aOptions, aExpectedURINodes) {
   root.containerOpen = false;
 }
 
-function run_test() {
-  tests.forEach(function(aTest) {
-                  remove_all_bookmarks();
-                  aTest();
-                });
+add_task(function* () {
+  for (let test of tests) {
+    yield PlacesUtils.bookmarks.eraseEverything();
+    test();
+  }
+
   // Cleanup.
-  remove_all_bookmarks();
-}
+  yield PlacesUtils.bookmarks.eraseEverything();
+});

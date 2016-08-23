@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -67,7 +68,7 @@ public:
   }
 
   bool SetCapacity(uint32_t aSize) {
-    return mItems.SetCapacity(aSize);
+    return mItems.SetCapacity(aSize, fallible);
   }
 
   void Compact() {
@@ -98,7 +99,7 @@ protected:
    * increased, in which case the list will be left unmodified.
    */
   bool SetLength(uint32_t aNumberOfItems) {
-    return mItems.SetLength(aNumberOfItems);
+    return mItems.SetLength(aNumberOfItems, fallible);
   }
 
 private:
@@ -117,23 +118,23 @@ private:
     if (aIndex >= mItems.Length()) {
       aIndex = mItems.Length();
     }
-    return !!mItems.InsertElementAt(aIndex, aPoint);
+    return !!mItems.InsertElementAt(aIndex, aPoint, fallible);
   }
 
   void ReplaceItem(uint32_t aIndex, const SVGPoint &aPoint) {
-    NS_ABORT_IF_FALSE(aIndex < mItems.Length(),
-                      "DOM wrapper caller should have raised INDEX_SIZE_ERR");
+    MOZ_ASSERT(aIndex < mItems.Length(),
+               "DOM wrapper caller should have raised INDEX_SIZE_ERR");
     mItems[aIndex] = aPoint;
   }
 
   void RemoveItem(uint32_t aIndex) {
-    NS_ABORT_IF_FALSE(aIndex < mItems.Length(),
-                      "DOM wrapper caller should have raised INDEX_SIZE_ERR");
+    MOZ_ASSERT(aIndex < mItems.Length(),
+               "DOM wrapper caller should have raised INDEX_SIZE_ERR");
     mItems.RemoveElementAt(aIndex);
   }
 
   bool AppendItem(SVGPoint aPoint) {
-    return !!mItems.AppendElement(aPoint);
+    return !!mItems.AppendElement(aPoint, fallible);
   }
 
 protected:
@@ -181,7 +182,7 @@ public:
    */
   bool IsIdentity() const {
     if (!mElement) {
-      NS_ABORT_IF_FALSE(IsEmpty(), "target element propagation failure");
+      MOZ_ASSERT(IsEmpty(), "target element propagation failure");
       return true;
     } 
     return false;

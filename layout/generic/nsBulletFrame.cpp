@@ -41,7 +41,7 @@ using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
 
-NS_DECLARE_FRAME_PROPERTY(FontSizeInflationProperty, nullptr)
+NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(FontSizeInflationProperty, float)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsBulletFrame)
 
@@ -128,7 +128,7 @@ nsBulletFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
     }
 
     if (needNewRequest) {
-      nsRefPtr<imgRequestProxy> newRequestClone;
+      RefPtr<imgRequestProxy> newRequestClone;
       newRequest->Clone(mListener, getter_AddRefs(newRequestClone));
 
       // Deregister the old request. We wait until after Clone is done in case
@@ -186,7 +186,7 @@ public:
   int32_t mOrdinal;
 };
 
-class nsDisplayBullet MOZ_FINAL : public nsDisplayItem {
+class nsDisplayBullet final : public nsDisplayItem {
 public:
   nsDisplayBullet(nsDisplayListBuilder* aBuilder, nsBulletFrame* aFrame) :
     nsDisplayItem(aBuilder, aFrame) {
@@ -199,34 +199,34 @@ public:
 #endif
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) MOZ_OVERRIDE
+                           bool* aSnap) override
   {
     *aSnap = false;
     return mFrame->GetVisualOverflowRectRelativeToSelf() + ToReferenceFrame();
   }
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState,
-                       nsTArray<nsIFrame*> *aOutFrames) MOZ_OVERRIDE {
+                       nsTArray<nsIFrame*> *aOutFrames) override {
     aOutFrames->AppendElement(mFrame);
   }
   virtual void Paint(nsDisplayListBuilder* aBuilder,
-                     nsRenderingContext* aCtx) MOZ_OVERRIDE;
+                     nsRenderingContext* aCtx) override;
   NS_DISPLAY_DECL_NAME("Bullet", TYPE_BULLET)
 
-  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE
+  virtual nsRect GetComponentAlphaBounds(nsDisplayListBuilder* aBuilder) override
   {
     bool snap;
     return GetBounds(aBuilder, &snap);
   }
 
-  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) MOZ_OVERRIDE
+  virtual nsDisplayItemGeometry* AllocateGeometry(nsDisplayListBuilder* aBuilder) override
   {
     return new nsDisplayBulletGeometry(this, aBuilder);
   }
 
   virtual void ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
                                          const nsDisplayItemGeometry* aGeometry,
-                                         nsRegion *aInvalidRegion) MOZ_OVERRIDE
+                                         nsRegion *aInvalidRegion) override
   {
     const nsDisplayBulletGeometry* geometry = static_cast<const nsDisplayBulletGeometry*>(aGeometry);
     nsBulletFrame* f = static_cast<nsBulletFrame*>(mFrame);
@@ -304,7 +304,6 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
     }
   }
 
-  nsRefPtr<nsFontMetrics> fm;
   ColorPattern color(ToDeviceColor(
                        nsLayoutUtils::GetColor(this, eCSSProperty_color)));
 
@@ -410,23 +409,29 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
   default:
     {
       aRenderingContext.ThebesContext()->SetColor(
-                          nsLayoutUtils::GetColor(this, eCSSProperty_color));
+        Color::FromABGR(nsLayoutUtils::GetColor(this, eCSSProperty_color)));
 
-      nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
-                                            GetFontSizeInflation());
+      RefPtr<nsFontMetrics> fm =
+        nsLayoutUtils::GetFontMetricsForFrame(this, GetFontSizeInflation());
       nsAutoString text;
       GetListItemText(text);
       WritingMode wm = GetWritingMode();
       nscoord ascent = wm.IsLineInverted()
                          ? fm->MaxDescent() : fm->MaxAscent();
       aPt.MoveBy(padding.left, padding.top);
+      gfxContext *ctx = aRenderingContext.ThebesContext();
       if (wm.IsVertical()) {
-        // XXX what about baseline snapping?
-        aPt.x += (wm.IsVerticalLR() ? ascent
-                                    : mRect.width - ascent);
+        if (wm.IsVerticalLR()) {
+          aPt.x = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineX(
+                                   this, ctx, aPt.x, ascent));
+        } else {
+          aPt.x = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineX(
+                                   this, ctx, aPt.x + mRect.width,
+                                   -ascent));
+        }
       } else {
         aPt.y = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineY(
-                this, aRenderingContext.ThebesContext(), aPt.y, ascent));
+                                 this, ctx, aPt.y, ascent));
       }
       nsPresContext* presContext = PresContext();
       if (!presContext->BidiEnabled() && HasRTLChars(text)) {
@@ -509,27 +514,28 @@ nsBulletFrame::GetListItemText(nsAString& aResult)
 #define MIN_BULLET_SIZE 1
 
 void
-nsBulletFrame::AppendSpacingToPadding(nsFontMetrics* aFontMetrics)
+nsBulletFrame::AppendSpacingToPadding(nsFontMetrics* aFontMetrics,
+                                      LogicalMargin* aPadding)
 {
-  mPadding.IEnd(GetWritingMode()) += aFontMetrics->EmHeight() / 2;
+  aPadding->IEnd(GetWritingMode()) += aFontMetrics->EmHeight() / 2;
 }
 
 void
 nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
                               nsRenderingContext *aRenderingContext,
                               nsHTMLReflowMetrics& aMetrics,
-                              float aFontSizeInflation)
+                              float aFontSizeInflation,
+                              LogicalMargin* aPadding)
 {
   // Reset our padding.  If we need it, we'll set it below.
   WritingMode wm = GetWritingMode();
-  mPadding.SizeTo(wm, 0, 0, 0, 0);
+  aPadding->SizeTo(wm, 0, 0, 0, 0);
   LogicalSize finalSize(wm);
 
   const nsStyleList* myList = StyleList();
   nscoord ascent;
-  nsRefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
-                                        aFontSizeInflation);
+  RefPtr<nsFontMetrics> fm =
+    nsLayoutUtils::GetFontMetricsForFrame(this, aFontSizeInflation);
 
   RemoveStateBits(BULLET_FRAME_IMAGE_LOADING);
 
@@ -544,7 +550,7 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
                                    mIntrinsicSize.BSize(wm));
       aMetrics.SetSize(wm, finalSize);
 
-      AppendSpacingToPadding(fm);
+      AppendSpacingToPadding(fm, aPadding);
 
       AddStateBits(BULLET_FRAME_IMAGE_LOADING);
 
@@ -575,10 +581,10 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
       ascent = fm->MaxAscent();
       bulletSize = std::max(nsPresContext::CSSPixelsToAppUnits(MIN_BULLET_SIZE),
                           NSToCoordRound(0.8f * (float(ascent) / 2.0f)));
-      mPadding.BEnd(wm) = NSToCoordRound(float(ascent) / 8.0f);
+      aPadding->BEnd(wm) = NSToCoordRound(float(ascent) / 8.0f);
       finalSize.ISize(wm) = finalSize.BSize(wm) = bulletSize;
-      aMetrics.SetBlockStartAscent(bulletSize + mPadding.BEnd(wm));
-      AppendSpacingToPadding(fm);
+      aMetrics.SetBlockStartAscent(bulletSize + aPadding->BEnd(wm));
+      AppendSpacingToPadding(fm, aPadding);
       break;
     }
 
@@ -588,20 +594,19 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
       bulletSize = std::max(
           nsPresContext::CSSPixelsToAppUnits(MIN_BULLET_SIZE),
           NSToCoordRound(0.75f * ascent));
-      mPadding.BEnd(wm) = NSToCoordRound(0.125f * ascent);
+      aPadding->BEnd(wm) = NSToCoordRound(0.125f * ascent);
       finalSize.ISize(wm) = finalSize.BSize(wm) = bulletSize;
       if (!wm.IsVertical()) {
-        aMetrics.SetBlockStartAscent(bulletSize + mPadding.BEnd(wm));
+        aMetrics.SetBlockStartAscent(bulletSize + aPadding->BEnd(wm));
       }
-      AppendSpacingToPadding(fm);
+      AppendSpacingToPadding(fm, aPadding);
       break;
 
     default:
       GetListItemText(text);
       finalSize.BSize(wm) = fm->MaxHeight();
       finalSize.ISize(wm) =
-        nsLayoutUtils::AppUnitWidthOfStringBidi(text, this, *fm,
-                                                *aRenderingContext);
+        nsLayoutUtils::AppUnitWidthOfStringBidi(text, this, *fm, *aRenderingContext);
       aMetrics.SetBlockStartAscent(wm.IsLineInverted()
                                      ? fm->MaxDescent() : fm->MaxAscent());
       break;
@@ -615,6 +620,7 @@ nsBulletFrame::Reflow(nsPresContext* aPresContext,
                       const nsHTMLReflowState& aReflowState,
                       nsReflowStatus& aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsBulletFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
 
@@ -622,7 +628,8 @@ nsBulletFrame::Reflow(nsPresContext* aPresContext,
   SetFontSizeInflation(inflation);
 
   // Get the base size
-  GetDesiredSize(aPresContext, aReflowState.rendContext, aMetrics, inflation);
+  GetDesiredSize(aPresContext, aReflowState.rendContext, aMetrics, inflation,
+                 &mPadding);
 
   // Add in the border and padding; split the top/bottom between the
   // ascent and descent to make things look nice
@@ -656,7 +663,9 @@ nsBulletFrame::GetMinISize(nsRenderingContext *aRenderingContext)
   WritingMode wm = GetWritingMode();
   nsHTMLReflowMetrics metrics(wm);
   DISPLAY_MIN_WIDTH(this, metrics.ISize(wm));
-  GetDesiredSize(PresContext(), aRenderingContext, metrics, 1.0f);
+  LogicalMargin padding(wm);
+  GetDesiredSize(PresContext(), aRenderingContext, metrics, 1.0f, &padding);
+  metrics.ISize(wm) += padding.IStartEnd(wm);
   return metrics.ISize(wm);
 }
 
@@ -666,8 +675,46 @@ nsBulletFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
   WritingMode wm = GetWritingMode();
   nsHTMLReflowMetrics metrics(wm);
   DISPLAY_PREF_WIDTH(this, metrics.ISize(wm));
-  GetDesiredSize(PresContext(), aRenderingContext, metrics, 1.0f);
+  LogicalMargin padding(wm);
+  GetDesiredSize(PresContext(), aRenderingContext, metrics, 1.0f, &padding);
+  metrics.ISize(wm) += padding.IStartEnd(wm);
   return metrics.ISize(wm);
+}
+
+// If a bullet has zero size and is "ignorable" from its styling, we behave
+// as if it doesn't exist, from a line-breaking/isize-computation perspective.
+// Otherwise, we use the default implementation, same as nsFrame.
+static inline bool
+IsIgnoreable(const nsIFrame* aFrame, nscoord aISize)
+{
+  if (aISize != nscoord(0)) {
+    return false;
+  }
+  auto listStyle = aFrame->StyleList();
+  return listStyle->GetCounterStyle()->IsNone() &&
+         !listStyle->GetListStyleImage();
+}
+
+/* virtual */ void
+nsBulletFrame::AddInlineMinISize(nsRenderingContext* aRenderingContext,
+                                 nsIFrame::InlineMinISizeData* aData)
+{
+  nscoord isize = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
+                    this, nsLayoutUtils::MIN_ISIZE);
+  if (MOZ_LIKELY(!::IsIgnoreable(this, isize))) {
+    aData->DefaultAddInlineMinISize(this, isize);
+  }
+}
+
+/* virtual */ void
+nsBulletFrame::AddInlinePrefISize(nsRenderingContext* aRenderingContext,
+                                  nsIFrame::InlinePrefISizeData* aData)
+{
+  nscoord isize = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
+                    this, nsLayoutUtils::PREF_ISIZE);
+  if (MOZ_LIKELY(!::IsIgnoreable(this, isize))) {
+    aData->DefaultAddInlinePrefISize(isize);
+  }
 }
 
 NS_IMETHODIMP
@@ -698,10 +745,31 @@ nsBulletFrame::Notify(imgIRequest *aRequest, int32_t aType, const nsIntRect* aDa
     // Unconditionally start decoding for now.
     // XXX(seth): We eventually want to decide whether to do this based on
     // visibility. We should get that for free from bug 1091236.
-    if (aRequest == mImageRequest) {
-      mImageRequest->RequestDecode();
+    nsCOMPtr<imgIContainer> container;
+    aRequest->GetImage(getter_AddRefs(container));
+    if (container) {
+      // Retrieve the intrinsic size of the image.
+      int32_t width = 0;
+      int32_t height = 0;
+      container->GetWidth(&width);
+      container->GetHeight(&height);
+
+      // Request a decode at that size.
+      container->RequestDecodeForSize(IntSize(width, height),
+                                      imgIContainer::DECODE_FLAGS_DEFAULT);
     }
+
     InvalidateFrame();
+  }
+
+  if (aType == imgINotificationObserver::DECODE_COMPLETE) {
+    if (nsIDocument* parent = GetOurCurrentDoc()) {
+      nsCOMPtr<imgIContainer> container;
+      aRequest->GetImage(getter_AddRefs(container));
+      if (container) {
+        container->PropagateUseCounters(parent);
+      }
+    }
   }
 
   return NS_OK;
@@ -815,22 +883,13 @@ nsBulletFrame::GetLoadGroup(nsPresContext *aPresContext, nsILoadGroup **aLoadGro
   *aLoadGroup = doc->GetDocumentLoadGroup().take();
 }
 
-union VoidPtrOrFloat {
-  VoidPtrOrFloat() : p(nullptr) {}
-
-  void *p;
-  float f;
-};
-
 float
 nsBulletFrame::GetFontSizeInflation() const
 {
   if (!HasFontSizeInflation()) {
     return 1.0f;
   }
-  VoidPtrOrFloat u;
-  u.p = Properties().Get(FontSizeInflationProperty());
-  return u.f;
+  return Properties().Get(FontSizeInflationProperty());
 }
 
 void
@@ -845,9 +904,7 @@ nsBulletFrame::SetFontSizeInflation(float aInflation)
   }
 
   AddStateBits(BULLET_FRAME_HAS_FONT_INFLATION);
-  VoidPtrOrFloat u;
-  u.f = aInflation;
-  Properties().Set(FontSizeInflationProperty(), u.p);
+  Properties().Set(FontSizeInflationProperty(), aInflation);
 }
 
 already_AddRefed<imgIContainer>
@@ -869,9 +926,8 @@ nsBulletFrame::GetLogicalBaseline(WritingMode aWritingMode) const
   if (GetStateBits() & BULLET_FRAME_IMAGE_LOADING) {
     ascent = BSize(aWritingMode);
   } else {
-    nsRefPtr<nsFontMetrics> fm;
-    nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
-                                          GetFontSizeInflation());
+    RefPtr<nsFontMetrics> fm =
+      nsLayoutUtils::GetFontMetricsForFrame(this, GetFontSizeInflation());
     CounterStyle* listStyleType = StyleList()->GetCounterStyle();
     switch (listStyleType->GetStyle()) {
       case NS_STYLE_LIST_STYLE_NONE:

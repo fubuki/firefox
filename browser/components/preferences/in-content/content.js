@@ -2,6 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+XPCOMUtils.defineLazyGetter(this, "AlertsServiceDND", function () {
+  try {
+    let alertsService = Cc["@mozilla.org/alerts-service;1"]
+                          .getService(Ci.nsIAlertsService)
+                          .QueryInterface(Ci.nsIAlertsDoNotDisturb);
+    // This will throw if manualDoNotDisturb isn't implemented.
+    alertsService.manualDoNotDisturb;
+    return alertsService;
+  } catch (ex) {
+    return undefined;
+  }
+});
+
 var gContentPane = {
   init: function ()
   {
@@ -15,8 +28,7 @@ var gContentPane = {
     this._rebuildFonts();
     var menulist = document.getElementById("defaultFont");
     if (menulist.selectedIndex == -1) {
-      menulist.insertItemAt(0, "", "", "");
-      menulist.selectedIndex = 0;
+      menulist.value = FontBuilder.readFontSelection(menulist);
     }
 
     // Show translation preferences if we may:
@@ -24,10 +36,29 @@ var gContentPane = {
     if (Services.prefs.getBoolPref(prefName)) {
       let row = document.getElementById("translationBox");
       row.removeAttribute("hidden");
+      // Showing attribution only for Bing Translator.
+      Components.utils.import("resource:///modules/translation/Translation.jsm");
+      if (Translation.translationEngine == "bing") {
+        document.getElementById("bingAttribution").removeAttribute("hidden");
+      }
+    }
+
+    let doNotDisturbAlertsEnabled = false;
+    if (AlertsServiceDND) {
+      let notificationsDoNotDisturbRow =
+        document.getElementById("notificationsDoNotDisturbRow");
+      notificationsDoNotDisturbRow.removeAttribute("hidden");
+      if (AlertsServiceDND.manualDoNotDisturb) {
+        let notificationsDoNotDisturb =
+          document.getElementById("notificationsDoNotDisturb");
+        notificationsDoNotDisturb.setAttribute("checked", true);
+      }
     }
 
     setEventListener("font.language.group", "change",
       gContentPane._rebuildFonts);
+    setEventListener("notificationsPolicyButton", "command",
+      gContentPane.showNotificationExceptions);
     setEventListener("popupPolicyButton", "command",
       gContentPane.showPopupExceptions);
     setEventListener("advancedFonts", "command",
@@ -40,11 +71,23 @@ var gContentPane = {
       gContentPane.openTranslationProviderAttribution);
     setEventListener("translateButton", "command",
       gContentPane.showTranslationExceptions);
+    setEventListener("notificationsDoNotDisturb", "command",
+      gContentPane.toggleDoNotDisturbNotifications);
+
+    let notificationInfoURL =
+      Services.urlFormatter.formatURLPref("app.support.baseURL") + "push";
+    document.getElementById("notificationsPolicyLearnMore").setAttribute("href",
+                                                                         notificationInfoURL);
 
     let drmInfoURL =
       Services.urlFormatter.formatURLPref("app.support.baseURL") + "drm-content";
     document.getElementById("playDRMContentLink").setAttribute("href", drmInfoURL);
-    if (!Services.prefs.getBoolPref("browser.eme.ui.enabled")) {
+    let emeUIEnabled = Services.prefs.getBoolPref("browser.eme.ui.enabled");
+    // Force-disable/hide on WinXP:
+    if (navigator.platform.toLowerCase().startsWith("win")) {
+      emeUIEnabled = emeUIEnabled && parseFloat(Services.sysinfo.get("version")) >= 6;
+    }
+    if (!emeUIEnabled) {
       // Don't want to rely on .hidden for the toplevel groupbox because
       // of the pane hiding/showing code potentially interfering:
       document.getElementById("drmGroup").setAttribute("style", "display: none !important");
@@ -74,6 +117,27 @@ var gContentPane = {
    * - true if popups are blocked by default, false otherwise
    */
 
+  // NOTIFICATIONS
+
+  /**
+   * Displays the notifications exceptions dialog where specific site notification
+   * preferences can be set.
+   */
+  showNotificationExceptions()
+  {
+    let bundlePreferences = document.getElementById("bundlePreferences");
+    let params = { permissionType: "desktop-notification" };
+    params.windowTitle = bundlePreferences.getString("notificationspermissionstitle");
+    params.introText = bundlePreferences.getString("notificationspermissionstext4");
+
+    gSubDialog.open("chrome://browser/content/preferences/permissions.xul",
+                    "resizable=yes", params);
+
+    Services.telemetry
+            .getHistogramById("WEB_NOTIFICATION_EXCEPTIONS_OPENED").add();
+  },
+
+
   // POP-UPS
 
   /**
@@ -99,13 +163,18 @@ var gContentPane = {
    */
   _rebuildFonts: function ()
   {
+    var preferences = document.getElementById("contentPreferences");
+    // Ensure preferences are "visible" to ensure bindings work.
+    preferences.hidden = false;
+    // Force flush:
+    preferences.clientHeight;
     var langGroupPref = document.getElementById("font.language.group");
     this._selectDefaultLanguageGroup(langGroupPref.value,
                                      this._readDefaultFontTypeForLanguage(langGroupPref.value) == "serif");
   },
 
   /**
-   * 
+   *
    */
   _selectDefaultLanguageGroup: function (aLanguageGroup, aIsSerif)
   {
@@ -115,6 +184,7 @@ var gContentPane = {
     const kFontNameListFmtSansSerif = "font.name-list.sans-serif.%LANG%";
     const kFontSizeFmtVariable      = "font.size.variable.%LANG%";
 
+    var preferences = document.getElementById("contentPreferences");
     var prefs = [{ format   : aIsSerif ? kFontNameFmtSerif : kFontNameFmtSansSerif,
                    type     : "fontname",
                    element  : "defaultFont",
@@ -127,11 +197,6 @@ var gContentPane = {
                    type     : "int",
                    element  : "defaultFontSize",
                    fonttype : null }];
-    var preferences = document.getElementById("contentPreferences");
-    // Ensure preferences are "visible" to ensure bindings work.
-    preferences.hidden = false;
-    // Force flush:
-    preferences.clientHeight;
     for (var i = 0; i < prefs.length; ++i) {
       var preference = document.getElementById(prefs[i].format.replace(/%LANG%/, aLanguageGroup));
       if (!preference) {
@@ -181,10 +246,10 @@ var gContentPane = {
   /**
    * Displays the fonts dialog, where web page font names and sizes can be
    * configured.
-   */  
+   */
   configureFonts: function ()
   {
-    gSubDialog.open("chrome://browser/content/preferences/fonts.xul");
+    gSubDialog.open("chrome://browser/content/preferences/fonts.xul", "resizable=no");
   },
 
   /**
@@ -193,7 +258,7 @@ var gContentPane = {
    */
   configureColors: function ()
   {
-    gSubDialog.open("chrome://browser/content/preferences/colors.xul");
+    gSubDialog.open("chrome://browser/content/preferences/colors.xul", "resizable=no");
   },
 
   // LANGUAGES
@@ -219,5 +284,10 @@ var gContentPane = {
   {
     Components.utils.import("resource:///modules/translation/Translation.jsm");
     Translation.openProviderAttribution();
-  }
+  },
+
+  toggleDoNotDisturbNotifications: function (event)
+  {
+    AlertsServiceDND.manualDoNotDisturb = event.target.checked;
+  },
 };

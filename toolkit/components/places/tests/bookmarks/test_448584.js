@@ -32,7 +32,7 @@ var invalidURITest = {
                                          PlacesUtils.bookmarks.DEFAULT_INDEX,
                                          this._itemTitle);
     // this bookmark will go corrupt
-    this._itemId = 
+    this._itemId =
       PlacesUtils.bookmarks.insertBookmark(PlacesUtils.toolbarFolderId,
                                            PlacesUtils._uri(this._itemUrl),
                                            PlacesUtils.bookmarks.DEFAULT_INDEX,
@@ -70,7 +70,7 @@ function run_test() {
   run_next_test();
 }
 
-add_task(function() {
+add_task(function*() {
   // make json file
   let jsonFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.json");
 

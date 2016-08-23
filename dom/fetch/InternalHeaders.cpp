@@ -16,6 +16,13 @@
 namespace mozilla {
 namespace dom {
 
+InternalHeaders::InternalHeaders(const nsTArray<Entry>&& aHeaders,
+                                 HeadersGuardEnum aGuard)
+  : mGuard(aGuard)
+  , mList(aHeaders)
+{
+}
+
 void
 InternalHeaders::Append(const nsACString& aName, const nsACString& aValue,
                         ErrorResult& aRv)
@@ -144,13 +151,8 @@ InternalHeaders::Clear()
 void
 InternalHeaders::SetGuard(HeadersGuardEnum aGuard, ErrorResult& aRv)
 {
-  // Rather than re-validate all current headers, just require code to set
-  // this prior to populating the InternalHeaders object.  Allow setting immutable
-  // late, though, as that is pretty much required to have a  useful, immutable
-  // headers object.
-  if (aGuard != HeadersGuardEnum::Immutable && mList.Length() > 0) {
-    aRv.Throw(NS_ERROR_FAILURE);
-  }
+  // The guard is only checked during ::Set() and ::Append() in the spec.  It
+  // does not require revalidating headers already set.
   mGuard = aGuard;
 }
 
@@ -172,13 +174,24 @@ InternalHeaders::IsSimpleHeader(const nsACString& aName, const nsACString& aValu
           nsContentUtils::IsAllowedNonCorsContentType(aValue));
 }
 
+// static
+bool
+InternalHeaders::IsRevalidationHeader(const nsACString& aName)
+{
+  return aName.EqualsLiteral("if-modified-since") ||
+         aName.EqualsLiteral("if-none-match") ||
+         aName.EqualsLiteral("if-unmodified-since") ||
+         aName.EqualsLiteral("if-match") ||
+         aName.EqualsLiteral("if-range");
+}
+
 //static
 bool
 InternalHeaders::IsInvalidName(const nsACString& aName, ErrorResult& aRv)
 {
   if (!NS_IsValidHTTPToken(aName)) {
     NS_ConvertUTF8toUTF16 label(aName);
-    aRv.ThrowTypeError(MSG_INVALID_HEADER_NAME, &label);
+    aRv.ThrowTypeError<MSG_INVALID_HEADER_NAME>(label);
     return true;
   }
 
@@ -191,7 +204,7 @@ InternalHeaders::IsInvalidValue(const nsACString& aValue, ErrorResult& aRv)
 {
   if (!NS_IsReasonableHTTPHeaderValue(aValue)) {
     NS_ConvertUTF8toUTF16 label(aValue);
-    aRv.ThrowTypeError(MSG_INVALID_HEADER_VALUE, &label);
+    aRv.ThrowTypeError<MSG_INVALID_HEADER_VALUE>(label);
     return true;
   }
   return false;
@@ -201,7 +214,7 @@ bool
 InternalHeaders::IsImmutable(ErrorResult& aRv) const
 {
   if (mGuard == HeadersGuardEnum::Immutable) {
-    aRv.ThrowTypeError(MSG_HEADERS_IMMUTABLE);
+    aRv.ThrowTypeError<MSG_HEADERS_IMMUTABLE>();
     return true;
   }
   return false;
@@ -252,7 +265,7 @@ InternalHeaders::Fill(const Sequence<Sequence<nsCString>>& aInit, ErrorResult& a
   for (uint32_t i = 0; i < aInit.Length() && !aRv.Failed(); ++i) {
     const Sequence<nsCString>& tuple = aInit[i];
     if (tuple.Length() != 2) {
-      aRv.ThrowTypeError(MSG_INVALID_HEADER_SEQUENCE);
+      aRv.ThrowTypeError<MSG_INVALID_HEADER_SEQUENCE>();
       return;
     }
     Append(tuple[0], tuple[1], aRv);
@@ -281,11 +294,23 @@ InternalHeaders::HasOnlySimpleHeaders() const
   return true;
 }
 
+bool
+InternalHeaders::HasRevalidationHeaders() const
+{
+  for (uint32_t i = 0; i < mList.Length(); ++i) {
+    if (IsRevalidationHeader(mList[i].mName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // static
 already_AddRefed<InternalHeaders>
 InternalHeaders::BasicHeaders(InternalHeaders* aHeaders)
 {
-  nsRefPtr<InternalHeaders> basic = new InternalHeaders(*aHeaders);
+  RefPtr<InternalHeaders> basic = new InternalHeaders(*aHeaders);
   ErrorResult result;
   // The Set-Cookie headers cannot be invalid mutable headers, so the Delete
   // must succeed.
@@ -300,12 +325,30 @@ InternalHeaders::BasicHeaders(InternalHeaders* aHeaders)
 already_AddRefed<InternalHeaders>
 InternalHeaders::CORSHeaders(InternalHeaders* aHeaders)
 {
-  nsRefPtr<InternalHeaders> cors = new InternalHeaders(aHeaders->mGuard);
+  RefPtr<InternalHeaders> cors = new InternalHeaders(aHeaders->mGuard);
   ErrorResult result;
 
-  nsAutoTArray<nsCString, 1> acExposedNames;
-  aHeaders->GetAll(NS_LITERAL_CSTRING("Access-Control-Expose-Headers"), acExposedNames, result);
+  nsAutoCString acExposedNames;
+  aHeaders->Get(NS_LITERAL_CSTRING("Access-Control-Expose-Headers"), acExposedNames, result);
   MOZ_ASSERT(!result.Failed());
+
+  AutoTArray<nsCString, 5> exposeNamesArray;
+  nsCCharSeparatedTokenizer exposeTokens(acExposedNames, ',');
+  while (exposeTokens.hasMoreTokens()) {
+    const nsDependentCSubstring& token = exposeTokens.nextToken();
+    if (token.IsEmpty()) {
+      continue;
+    }
+
+    if (!NS_IsValidHTTPToken(token)) {
+      NS_WARNING("Got invalid HTTP token in Access-Control-Expose-Headers. Header value is:");
+      NS_WARNING(acExposedNames.get());
+      exposeNamesArray.Clear();
+      break;
+    }
+
+    exposeNamesArray.AppendElement(token);
+  }
 
   nsCaseInsensitiveCStringArrayComparator comp;
   for (uint32_t i = 0; i < aHeaders->mList.Length(); ++i) {
@@ -316,7 +359,7 @@ InternalHeaders::CORSHeaders(InternalHeaders* aHeaders)
         entry.mName.EqualsASCII("expires") ||
         entry.mName.EqualsASCII("last-modified") ||
         entry.mName.EqualsASCII("pragma") ||
-        acExposedNames.Contains(entry.mName, comp)) {
+        exposeNamesArray.Contains(entry.mName, comp)) {
       cors->Append(entry.mName, entry.mValue, result);
       MOZ_ASSERT(!result.Failed());
     }
@@ -324,5 +367,25 @@ InternalHeaders::CORSHeaders(InternalHeaders* aHeaders)
 
   return cors.forget();
 }
+
+void
+InternalHeaders::GetEntries(nsTArray<InternalHeaders::Entry>& aEntries) const
+{
+  MOZ_ASSERT(aEntries.IsEmpty());
+  aEntries.AppendElements(mList);
+}
+
+void
+InternalHeaders::GetUnsafeHeaders(nsTArray<nsCString>& aNames) const
+{
+  MOZ_ASSERT(aNames.IsEmpty());
+  for (uint32_t i = 0; i < mList.Length(); ++i) {
+    const Entry& header = mList[i];
+    if (!InternalHeaders::IsSimpleHeader(header.mName, header.mValue)) {
+      aNames.AppendElement(header.mName);
+    }
+  }
+}
+
 } // namespace dom
 } // namespace mozilla

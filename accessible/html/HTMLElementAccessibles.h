@@ -23,7 +23,7 @@ public:
     LeafAccessible(aContent, aDoc) {}
 
   // Accessible
-  virtual a11y::role NativeRole() MOZ_OVERRIDE;
+  virtual a11y::role NativeRole() override;
 };
 
 /**
@@ -36,15 +36,16 @@ public:
     LeafAccessible(aContent, aDoc)
   {
     mType = eHTMLBRType;
+    mGenericTypes |= eText;
   }
 
   // Accessible
-  virtual a11y::role NativeRole() MOZ_OVERRIDE;
-  virtual uint64_t NativeState() MOZ_OVERRIDE;
+  virtual a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
 
 protected:
   // Accessible
-  virtual ENameValueFlag NativeName(nsString& aName) MOZ_OVERRIDE;
+  virtual ENameValueFlag NativeName(nsString& aName) override;
 };
 
 /**
@@ -60,12 +61,16 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   // Accessible
-  virtual a11y::role NativeRole() MOZ_OVERRIDE;
-  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
+  virtual Relation RelationByType(RelationType aType) override;
+
+  // ActionAccessible
+  virtual uint8_t ActionCount() override;
+  virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
+  virtual bool DoAction(uint8_t aIndex) override;
 
 protected:
   virtual ~HTMLLabelAccessible() {}
-  virtual ENameValueFlag NativeName(nsString& aName) MOZ_OVERRIDE;
+  virtual ENameValueFlag NativeName(nsString& aName) override;
 };
 
 /**
@@ -81,9 +86,7 @@ public:
   NS_DECL_ISUPPORTS_INHERITED
 
   // Accessible
-  virtual a11y::role NativeRole() MOZ_OVERRIDE;
-  virtual already_AddRefed<nsIPersistentProperties> NativeAttributes() MOZ_OVERRIDE;
-  virtual Relation RelationByType(RelationType aType) MOZ_OVERRIDE;
+  virtual Relation RelationByType(RelationType aType) override;
 
 protected:
   virtual ~HTMLOutputAccessible() {}

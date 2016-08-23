@@ -13,7 +13,6 @@
 #include "mozilla/gfx/Types.h"
 #include "mozilla/EnumSet.h"
 
-#include "mozilla/TypedEnum.h"
 #include "mozilla/TypedEnumBits.h"
 
 namespace mozilla {
@@ -25,7 +24,7 @@ namespace layers {
  * by the compositableCient, they may be modified by either the compositable or
  * texture clients.
  */
-MOZ_BEGIN_ENUM_CLASS(TextureFlags, uint32_t)
+enum class TextureFlags : uint32_t {
   NO_FLAGS           = 0,
   // Use nearest-neighbour texture filtering (as opposed to linear filtering).
   USE_NEAREST_FILTER = 1 << 0,
@@ -52,22 +51,27 @@ MOZ_BEGIN_ENUM_CLASS(TextureFlags, uint32_t)
   // deallocation.
   // The default behaviour is to deallocate on the host side.
   DEALLOCATE_CLIENT  = 1 << 6,
+  DEALLOCATE_SYNC    = 1 << 6, // XXX - make it a separate flag.
+  DEALLOCATE_MAIN_THREAD = 1 << 8,
   // After being shared ith the compositor side, an immutable texture is never
   // modified, it can only be read. It is safe to not Lock/Unlock immutable
   // textures.
-  IMMUTABLE          = 1 << 7,
+  IMMUTABLE          = 1 << 9,
   // The contents of the texture must be uploaded or copied immediately
   // during the transaction, because the producer may want to write
   // to it again.
-  IMMEDIATE_UPLOAD   = 1 << 8,
+  IMMEDIATE_UPLOAD   = 1 << 10,
   // The texture is part of a component-alpha pair
-  COMPONENT_ALPHA    = 1 << 9,
+  COMPONENT_ALPHA    = 1 << 11,
+  // The texture is being allocated for a compositor that no longer exists.
+  // This flag is only used in the parent process.
+  INVALID_COMPOSITOR = 1 << 12,
 
   // OR union of all valid bits
-  ALL_BITS           = (1 << 10) - 1,
+  ALL_BITS           = (1 << 13) - 1,
   // the default flags
   DEFAULT = NO_FLAGS
-MOZ_END_ENUM_CLASS(TextureFlags)
+};
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(TextureFlags)
 
 static inline bool
@@ -83,14 +87,14 @@ TextureRequiresLocking(TextureFlags aFlags)
 /**
  * The type of debug diagnostic to enable.
  */
-MOZ_BEGIN_ENUM_CLASS(DiagnosticTypes, uint8_t)
+enum class DiagnosticTypes : uint8_t {
   NO_DIAGNOSTIC    = 0,
   TILE_BORDERS     = 1 << 0,
   LAYER_BORDERS    = 1 << 1,
   BIGIMAGE_BORDERS = 1 << 2,
   FLASH_BORDERS    = 1 << 3,
   ALL_BITS         = (1 << 4) - 1
-MOZ_END_ENUM_CLASS(DiagnosticTypes)
+};
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(DiagnosticTypes)
 
 #define DIAGNOSTIC_FLASH_COUNTER_MAX 100
@@ -98,7 +102,7 @@ MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(DiagnosticTypes)
 /**
  * Information about the object that is being diagnosed.
  */
-MOZ_BEGIN_ENUM_CLASS(DiagnosticFlags, uint16_t)
+enum class DiagnosticFlags : uint16_t {
   NO_DIAGNOSTIC   = 0,
   IMAGE           = 1 << 0,
   CONTENT         = 1 << 1,
@@ -108,55 +112,42 @@ MOZ_BEGIN_ENUM_CLASS(DiagnosticFlags, uint16_t)
   TILE            = 1 << 5,
   BIGIMAGE        = 1 << 6,
   COMPONENT_ALPHA = 1 << 7,
-  REGION_RECT     = 1 << 8
-MOZ_END_ENUM_CLASS(DiagnosticFlags)
+  REGION_RECT     = 1 << 8,
+  NV12            = 1 << 9,
+  YCBCR           = 1 << 10
+};
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(DiagnosticFlags)
 
 /**
  * See gfx/layers/Effects.h
  */
-MOZ_BEGIN_ENUM_CLASS(EffectTypes, uint8_t)
+enum class EffectTypes : uint8_t {
   MASK,
   BLEND_MODE,
   COLOR_MATRIX,
   MAX_SECONDARY, // sentinel for the count of secondary effect types
   RGB,
   YCBCR,
+  NV12,
   COMPONENT_ALPHA,
   SOLID_COLOR,
   RENDER_TARGET,
   VR_DISTORTION,
   MAX  //sentinel for the count of all effect types
-MOZ_END_ENUM_CLASS(EffectTypes)
+};
 
 /**
  * How the Compositable should manage textures.
  */
-MOZ_BEGIN_ENUM_CLASS(CompositableType, uint8_t)
+enum class CompositableType : uint8_t {
   UNKNOWN,
-  CONTENT_INC,     // painted layer interface, only sends incremental
-                   // updates to a texture on the compositor side.
   CONTENT_TILED,   // tiled painted layer
   IMAGE,           // image with single buffering
-  IMAGE_OVERLAY,   // image without buffer
   IMAGE_BRIDGE,    // ImageBridge protocol
   CONTENT_SINGLE,  // painted layer interface, single buffering
   CONTENT_DOUBLE,  // painted layer interface, double buffering
   COUNT
-MOZ_END_ENUM_CLASS(CompositableType)
-
-/**
- * How the texture host is used for composition,
- * XXX - Only used by ContentClientIncremental
- */
-MOZ_BEGIN_ENUM_CLASS(DeprecatedTextureHostFlags, uint8_t)
-  DEFAULT = 0,       // The default texture host for the given SurfaceDescriptor
-  TILED = 1 << 0,    // A texture host that supports tiling
-  COPY_PREVIOUS = 1 << 1, // Texture contents should be initialized
-                                      // from the previous texture.
-  ALL_BITS = (1 << 2) - 1
-MOZ_END_ENUM_CLASS(DeprecatedTextureHostFlags)
-MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(DeprecatedTextureHostFlags)
+};
 
 #ifdef XP_WIN
 typedef void* SyncHandle;
@@ -173,7 +164,6 @@ struct TextureFactoryIdentifier
 {
   LayersBackend mParentBackend;
   GeckoProcessType mParentProcessId;
-  EnumSet<gfx::CompositionOp> mSupportedBlendModes;
   int32_t mMaxTextureSize;
   bool mSupportsTextureBlitting;
   bool mSupportsPartialUploads;
@@ -187,27 +177,12 @@ struct TextureFactoryIdentifier
                                     SyncHandle aSyncHandle = 0)
     : mParentBackend(aLayersBackend)
     , mParentProcessId(aParentProcessId)
-    , mSupportedBlendModes(gfx::CompositionOp::OP_OVER)
     , mMaxTextureSize(aMaxTextureSize)
     , mSupportsTextureBlitting(aSupportsTextureBlitting)
     , mSupportsPartialUploads(aSupportsPartialUploads)
     , mSyncHandle(aSyncHandle)
   {}
 };
-
-/**
- * Identify a texture to a compositable. Many textures can have the same id, but
- * the id is unique for any texture owned by a particular compositable.
- * XXX - We don't really need this, it will be removed along with the incremental
- * ContentClient/Host.
- */
-MOZ_BEGIN_ENUM_CLASS(TextureIdentifier, uint8_t)
-  Front = 1,
-  Back = 2,
-  OnWhiteFront = 3,
-  OnWhiteBack = 4,
-  HighBound
-MOZ_END_ENUM_CLASS(TextureIdentifier)
 
 /**
  * Information required by the compositor from the content-side for creating or
@@ -219,27 +194,22 @@ MOZ_END_ENUM_CLASS(TextureIdentifier)
 struct TextureInfo
 {
   CompositableType mCompositableType;
-  // XXX - only used by ContentClientIncremental
-  DeprecatedTextureHostFlags mDeprecatedTextureHostFlags;
   TextureFlags mTextureFlags;
 
   TextureInfo()
     : mCompositableType(CompositableType::UNKNOWN)
-    , mDeprecatedTextureHostFlags(DeprecatedTextureHostFlags::DEFAULT)
     , mTextureFlags(TextureFlags::NO_FLAGS)
   {}
 
   explicit TextureInfo(CompositableType aType,
                        TextureFlags aTextureFlags = TextureFlags::DEFAULT)
     : mCompositableType(aType)
-    , mDeprecatedTextureHostFlags(DeprecatedTextureHostFlags::DEFAULT)
     , mTextureFlags(aTextureFlags)
   {}
 
   bool operator==(const TextureInfo& aOther) const
   {
     return mCompositableType == aOther.mCompositableType &&
-           mDeprecatedTextureHostFlags == aOther.mDeprecatedTextureHostFlags &&
            mTextureFlags == aOther.mTextureFlags;
   }
 };
@@ -249,24 +219,23 @@ struct TextureInfo
  *
  * See ShadowLayerForwarder::OpenDescriptor for example.
  */
-MOZ_BEGIN_ENUM_CLASS(OpenMode, uint8_t)
+enum class OpenMode : uint8_t {
   OPEN_NONE        = 0,
   OPEN_READ        = 0x1,
   OPEN_WRITE       = 0x2,
   OPEN_READ_WRITE  = OPEN_READ|OPEN_WRITE,
   OPEN_READ_ONLY   = OPEN_READ,
   OPEN_WRITE_ONLY  = OPEN_WRITE
-MOZ_END_ENUM_CLASS(OpenMode)
+};
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(OpenMode)
 
 // The kinds of mask texture a shader can support
 // We rely on the items in this enum being sequential
-MOZ_BEGIN_ENUM_CLASS(MaskType, uint8_t)
+enum class MaskType : uint8_t {
   MaskNone = 0,   // no mask layer
-  Mask2d,         // mask layer for layers with 2D transforms
-  Mask3d,         // mask layer for layers with 3D transforms
+  Mask,           // mask layer
   NumMaskTypes
-MOZ_END_ENUM_CLASS(MaskType)
+};
 
 } // namespace layers
 } // namespace mozilla

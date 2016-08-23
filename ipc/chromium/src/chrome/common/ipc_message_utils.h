@@ -12,13 +12,12 @@
 #include "base/file_path.h"
 #include "base/string_util.h"
 #include "base/string16.h"
-#include "base/tuple.h"
 #include "base/time.h"
 
 #if defined(OS_POSIX)
 #include "chrome/common/file_descriptor_set_posix.h"
 #endif
-#include "chrome/common/ipc_sync_message.h"
+#include "chrome/common/ipc_message.h"
 #include "chrome/common/transport_dib.h"
 
 namespace IPC {
@@ -54,7 +53,7 @@ class MessageIterator {
       NOTREACHED();
     return val;
   }
-  const void NextData(const char** data, int* length) const {
+  void NextData(const char** data, int* length) const {
     if (!msg_.ReadData(&iter_, data, length)) {
       NOTREACHED();
     }

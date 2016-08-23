@@ -45,6 +45,7 @@ if (typeof assertDeepEq === 'undefined') {
             Array_isArray = Array.isArray,
             Map_ = Map,
             Error_ = Error,
+            Symbol_ = Symbol,
             Map_has = call.bind(Map.prototype.has),
             Map_get = call.bind(Map.prototype.get),
             Map_set = call.bind(Map.prototype.set),
@@ -150,8 +151,8 @@ if (typeof assertDeepEq === 'undefined') {
                 }
             };
 
-            var ab = Map_();
-            var bpath = Map_();
+            var ab = new Map_();
+            var bpath = new Map_();
 
             function check(a, b, path) {
                 if (typeof a === "symbol") {
@@ -202,4 +203,15 @@ if (typeof assertDeepEq === 'undefined') {
             check(a, b, "");
         };
     })();
+}
+
+if (typeof assertWarning === 'undefined') {
+    function assertWarning(func, name) {
+        enableLastWarning();
+        func();
+        var warning = getLastWarning();
+        assertEq(warning !== null, true);
+        assertEq(warning.name, name);
+        disableLastWarning();
+    }
 }

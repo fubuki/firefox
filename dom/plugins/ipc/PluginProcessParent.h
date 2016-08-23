@@ -17,6 +17,7 @@
 #include "chrome/common/child_process_host.h"
 
 #include "mozilla/ipc/GeckoChildProcessHost.h"
+#include "mozilla/plugins/TaskFactory.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
 #include "nsIRunnable.h"
@@ -50,15 +51,15 @@ public:
      *
      * @param aLaunchCompleteTask Task that is executed on the main
      * thread once the asynchonous launch has completed.
-     * @param aEnableSandbox Enables a process sandbox if one is available for
-     * this platform/build. Will assert if true passed and one is not available.
+     * @param aSandboxLevel Determines the strength of the sandbox.
+     * <= 0 means no sandbox.
      */
     bool Launch(UniquePtr<LaunchCompleteTask> aLaunchCompleteTask = UniquePtr<LaunchCompleteTask>(),
-                bool aEnableSandbox = false);
+                int32_t aSandboxLevel = 0);
 
     void Delete();
 
-    virtual bool CanShutdown() MOZ_OVERRIDE
+    virtual bool CanShutdown() override
     {
         return true;
     }
@@ -69,10 +70,10 @@ public:
     using mozilla::ipc::GeckoChildProcessHost::GetChannel;
 
     void SetCallRunnableImmediately(bool aCallImmediately);
-    virtual bool WaitUntilConnected(int32_t aTimeoutMs = 0) MOZ_OVERRIDE;
+    virtual bool WaitUntilConnected(int32_t aTimeoutMs = 0) override;
 
-    virtual void OnChannelConnected(int32_t peer_pid) MOZ_OVERRIDE;
-    virtual void OnChannelError() MOZ_OVERRIDE;
+    virtual void OnChannelConnected(int32_t peer_pid) override;
+    virtual void OnChannelError() override;
 
     bool IsConnected();
 
@@ -80,6 +81,7 @@ private:
     void RunLaunchCompleteTask();
 
     std::string mPluginFilePath;
+    TaskFactory<PluginProcessParent> mTaskFactory;
     UniquePtr<LaunchCompleteTask> mLaunchCompleteTask;
     MessageLoop* mMainMsgLoop;
     bool mRunCompleteTaskImmediately;

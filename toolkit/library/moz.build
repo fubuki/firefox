@@ -6,9 +6,7 @@
 
 @template
 def Libxul(name):
-    MSVC_ENABLE_PGO = True
-
-    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+    if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit'):
         # This is going to be a framework named "XUL", not an ordinary library named
         # "libxul.dylib"
         GeckoFramework(name, linkage=None)
@@ -20,6 +18,7 @@ def Libxul(name):
     DELAYLOAD_DLLS += [
         'comdlg32.dll',
         'dbghelp.dll',
+        'PowrProf.dll',
         'psapi.dll',
         'rasapi32.dll',
         'rasdlg.dll',
@@ -28,18 +27,17 @@ def Libxul(name):
         'winspool.drv'
     ]
 
-    if CONFIG['MOZ_METRO']:
-        DELAYLOAD_DLLS += [
-            'API-MS-WIN-CORE-WINRT-L' + CONFIG['CRTEXPDLLVERSION'] + '.DLL',
-            'API-MS-WIN-CORE-WINRT-STRING-L' + CONFIG['CRTEXPDLLVERSION'] + '.DLL',
-            'uiautomationcore.dll'
-        ]
-
     if CONFIG['ACCESSIBILITY']:
         DELAYLOAD_DLLS += ['oleacc.dll']
 
     if CONFIG['MOZ_WEBRTC']:
         DELAYLOAD_DLLS += ['msdmo.dll']
+
+    if CONFIG['OS_ARCH'] == 'WINNT':
+        DELAYLOAD_DLLS += [
+            'api-ms-win-core-winrt-l1-1-0.dll',
+            'api-ms-win-core-winrt-string-l1-1-0.dll',
+        ]
 
     if CONFIG['OS_ARCH'] == 'WINNT' and not CONFIG['GNU_CC']:
         LOCAL_INCLUDES += [
@@ -57,6 +55,8 @@ def Libxul(name):
     if not CONFIG['JS_SHARED_LIBRARY']:
         LIBRARY_DEFINES['STATIC_EXPORTABLE_JS_API'] = True
 
+    if CONFIG['MOZ_NEEDS_LIBATOMIC']:
+        OS_LIBS += ['atomic']
 
 Libxul('xul')
 
@@ -69,8 +69,6 @@ STATIC_LIBRARY_NAME = 'xul_s'
 SOURCES += [
     'StaticXULComponentsStart.cpp',
 ]
-
-MSVC_ENABLE_PGO = True
 
 # This, combined with the fact the file is first, makes the start pointer
 # it contains first in Windows PGO builds.
@@ -96,8 +94,6 @@ if CONFIG['OS_ARCH'] == 'WINNT' and not CONFIG['GNU_CC']:
         '/xpcom/base',
     ]
 
-FAIL_ON_WARNINGS = True
-
 DIRS += ['gtest']
 
 # js needs to come after xul for now, because it is an archive and its content
@@ -113,7 +109,7 @@ if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
 
 USE_LIBS += [
     'gkmedias',
-    'mozalloc',
+    'lgpllibs',
     'nspr',
     'nss',
     'sqlite',
@@ -125,7 +121,7 @@ if CONFIG['USE_ICU']:
         'icu',
     ]
 
-if CONFIG['MOZ_WIDGET_GTK'] and CONFIG['MOZ_ENABLE_GTK3']:
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3':
     USE_LIBS += [
         'mozgtk_stub',
     ]
@@ -135,7 +131,7 @@ if CONFIG['MOZ_JPROF']:
         'jprof',
     ]
 
-if CONFIG['MOZ_WIDGET_GTK'] or CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt' or \
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT'] or CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt' or \
         CONFIG['MOZ_TREE_FREETYPE']:
     USE_LIBS += [
         'freetype',
@@ -148,7 +144,6 @@ if CONFIG['MOZ_WEBRTC']:
     if CONFIG['OS_TARGET'] == 'WINNT':
         OS_LIBS += [
             'secur32',
-            'crypt32',
             'iphlpapi',
             'strmiids',
             'dmoguids',
@@ -166,6 +161,7 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         '-framework IOKit',
         '-F%s' % CONFIG['MACOS_PRIVATE_FRAMEWORKS_DIR'],
         '-framework CoreUI',
+        '-framework CoreSymbolication',
         'cups',
     ]
 
@@ -191,6 +187,7 @@ if CONFIG['OS_ARCH'] == 'FreeBSD':
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     OS_LIBS += [
+        'crypt32',
         'shell32',
         'ole32',
         'version',
@@ -202,7 +199,7 @@ if CONFIG['MOZ_B2G_BT_BLUEZ'] and CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
         'dbus',
     ]
 
-if CONFIG['MOZ_B2G_CAMERA']:
+if CONFIG['MOZ_B2G_CAMERA'] and CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     OS_LIBS += [
         'stagefright',
         'stagefright_omx',
@@ -215,20 +212,21 @@ if CONFIG['OS_ARCH'] == 'Linux' and CONFIG['OS_TARGET'] != 'Android':
 
 OS_LIBS += CONFIG['MOZ_CAIRO_OSLIBS']
 OS_LIBS += CONFIG['MOZ_WEBRTC_X11_LIBS']
+OS_LIBS += CONFIG['MOZ_SERVO_LIBS']
 
-if CONFIG['MOZ_NATIVE_JPEG']:
+if CONFIG['MOZ_SYSTEM_JPEG']:
     OS_LIBS += CONFIG['MOZ_JPEG_LIBS']
 
-if CONFIG['MOZ_NATIVE_PNG']:
+if CONFIG['MOZ_SYSTEM_PNG']:
     OS_LIBS += CONFIG['MOZ_PNG_LIBS']
 
-if CONFIG['MOZ_NATIVE_HUNSPELL']:
+if CONFIG['MOZ_SYSTEM_HUNSPELL']:
     OS_LIBS += CONFIG['MOZ_HUNSPELL_LIBS']
 
-if CONFIG['MOZ_NATIVE_LIBEVENT']:
+if CONFIG['MOZ_SYSTEM_LIBEVENT']:
     OS_LIBS += CONFIG['MOZ_LIBEVENT_LIBS']
 
-if CONFIG['MOZ_NATIVE_LIBVPX']:
+if CONFIG['MOZ_SYSTEM_LIBVPX']:
     OS_LIBS += CONFIG['MOZ_LIBVPX_LIBS']
 
 if not CONFIG['MOZ_TREE_PIXMAN']:
@@ -264,6 +262,16 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
         'mtp',
     ]
 
+    if int(CONFIG['ANDROID_VERSION']) >= 17:
+        OS_LIBS += [
+            'sync',
+        ]
+
+    if CONFIG['ANDROID_VERSION'] >= '16':
+        OS_LIBS += [
+            'mdnssd',
+        ]
+
 if 'rtsp' in CONFIG['NECKO_PROTOCOLS']:
     OS_LIBS += [
         'stagefright_foundation',
@@ -271,7 +279,7 @@ if 'rtsp' in CONFIG['NECKO_PROTOCOLS']:
 
 OS_LIBS += CONFIG['ICONV_LIBS']
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit'):
     OS_LIBS += CONFIG['TK_LIBS']
 
 if CONFIG['OS_ARCH'] == 'OpenBSD':
@@ -282,8 +290,8 @@ if CONFIG['OS_ARCH'] == 'OpenBSD':
 if CONFIG['MOZ_ENABLE_DBUS']:
     OS_LIBS += CONFIG['MOZ_DBUS_GLIB_LIBS']
 
-if CONFIG['MOZ_WIDGET_GTK']:
-    if CONFIG['MOZ_ENABLE_GTK3']:
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
+    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3':
         OS_LIBS += [l for l in CONFIG['TK_LIBS']
             if l not in ('-lgtk-3', '-lgdk-3')]
     else:
@@ -350,22 +358,16 @@ if CONFIG['OS_ARCH'] == 'WINNT':
         'wbemuuid',
         'wintrust',
         'wtsapi32',
+        'locationapi',
+        'sapi',
     ]
     if CONFIG['ACCESSIBILITY']:
         OS_LIBS += [
             'oleacc',
         ]
-    if CONFIG['MOZ_METRO']:
-        OS_LIBS += [
-            'uiautomationcore',
-            'runtimeobject',
-        ]
 
 if CONFIG['MOZ_ENABLE_QT']:
     OS_LIBS += CONFIG['XEXT_LIBS']
-
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa' and CONFIG['MOZ_GSTREAMER']:
-    OS_LIBS += CONFIG['GSTREAMER_LIBS']
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     OS_LIBS += [

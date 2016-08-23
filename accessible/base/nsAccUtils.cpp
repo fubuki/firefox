@@ -37,9 +37,16 @@ nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
                        nsIAtom *aAttrName, const nsAString& aAttrValue)
 {
   nsAutoString oldValue;
-  nsAutoCString attrName;
-
   aAttributes->SetStringProperty(nsAtomCString(aAttrName), aAttrValue, oldValue);
+}
+
+void
+nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
+                       nsIAtom* aAttrName, nsIAtom* aAttrValue)
+{
+  nsAutoString oldValue;
+  aAttributes->SetStringProperty(nsAtomCString(aAttrName),
+                                 nsAtomString(aAttrValue), oldValue);
 }
 
 void
@@ -124,11 +131,11 @@ nsAccUtils::GetLevelForXULContainerItem(nsIContent *aContent)
 
 void
 nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
-                                       nsIContent *aStartContent,
-                                       nsIContent *aTopContent)
+                                       nsIContent* aStartContent,
+                                       dom::Element* aTopEl)
 {
   nsAutoString live, relevant, busy;
-  nsIContent *ancestor = aStartContent;
+  nsIContent* ancestor = aStartContent;
   while (ancestor) {
 
     // container-relevant attribute
@@ -139,10 +146,12 @@ nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
 
     // container-live, and container-live-role attributes
     if (live.IsEmpty()) {
-      nsRoleMapEntry* role = aria::GetRoleMap(ancestor);
+      const nsRoleMapEntry* role = nullptr;
+      if (ancestor->IsElement()) {
+        role = aria::GetRoleMap(ancestor->AsElement());
+      }
       if (HasDefinedARIAToken(ancestor, nsGkAtoms::aria_live)) {
-        ancestor->GetAttr(kNameSpaceID_None, nsGkAtoms::aria_live,
-                          live);
+        ancestor->GetAttr(kNameSpaceID_None, nsGkAtoms::aria_live, live);
       } else if (role) {
         GetLiveAttrValue(role->liveAttRule, live);
       }
@@ -168,12 +177,12 @@ nsAccUtils::SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
         ancestor->GetAttr(kNameSpaceID_None, nsGkAtoms::aria_busy, busy))
       SetAccAttr(aAttributes, nsGkAtoms::containerBusy, busy);
 
-    if (ancestor == aTopContent)
+    if (ancestor == aTopEl)
       break;
 
     ancestor = ancestor->GetParent();
     if (!ancestor)
-      ancestor = aTopContent; // Use <body>/<frameset>
+      ancestor = aTopEl; // Use <body>/<frameset>
   }
 }
 
@@ -233,6 +242,27 @@ nsAccUtils::IsARIASelected(Accessible* aAccessible)
   return aAccessible->GetContent()->
     AttrValueIs(kNameSpaceID_None, nsGkAtoms::aria_selected,
                 nsGkAtoms::_true, eCaseMatters);
+}
+
+Accessible*
+nsAccUtils::TableFor(Accessible* aRow)
+{
+  if (aRow) {
+    Accessible* table = aRow->Parent();
+    if (table) {
+      roles::Role tableRole = table->Role();
+      if (tableRole == roles::GROUPING) { // if there's a rowgroup.
+        table = table->Parent();
+        if (table)
+          tableRole = table->Role();
+      }
+
+      return (tableRole == roles::TABLE || tableRole == roles::TREE_TABLE ||
+              tableRole == roles::MATHML_TABLE) ? table : nullptr;
+    }
+  }
+
+  return nullptr;
 }
 
 HyperTextAccessible*
@@ -362,7 +392,7 @@ nsAccUtils::IsTextInterfaceSupportCorrect(Accessible* aAccessible)
   uint32_t childCount = aAccessible->ChildCount();
   for (uint32_t childIdx = 0; childIdx < childCount; childIdx++) {
     Accessible* child = aAccessible->GetChildAt(childIdx);
-    if (!IsEmbeddedObject(child)) {
+    if (child->IsText()) {
       foundText = true;
       break;
     }
@@ -375,8 +405,9 @@ nsAccUtils::IsTextInterfaceSupportCorrect(Accessible* aAccessible)
 uint32_t
 nsAccUtils::TextLength(Accessible* aAccessible)
 {
-  if (IsEmbeddedObject(aAccessible))
+  if (!aAccessible->IsText()) {
     return 1;
+  }
 
   TextLeafAccessible* textLeaf = aAccessible->AsTextLeaf();
   if (textLeaf)
@@ -393,7 +424,7 @@ nsAccUtils::TextLength(Accessible* aAccessible)
 
 bool
 nsAccUtils::MustPrune(Accessible* aAccessible)
-{ 
+{
   roles::Role role = aAccessible->Role();
 
   // Don't prune the tree for certain roles if the tree is more complex than

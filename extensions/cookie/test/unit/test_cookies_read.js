@@ -3,9 +3,9 @@
 
 // test cookie database asynchronous read operation.
 
-let test_generator = do_run_test();
+var test_generator = do_run_test();
 
-let CMAX = 1000;    // # of cookies to create
+var CMAX = 1000;    // # of cookies to create
 
 function run_test() {
   do_test_pending();
@@ -86,11 +86,11 @@ function do_run_test() {
   // remove some of the cookies, in both reverse and forward order
   for (let i = 100; i-- > 0; ) {
     let host = i.toString() + ".com";
-    Services.cookiemgr.remove(host, "oh", "/", false);
+    Services.cookiemgr.remove(host, "oh", "/", false, {});
   }
   for (let i = CMAX - 100; i < CMAX; ++i) {
     let host = i.toString() + ".com";
-    Services.cookiemgr.remove(host, "oh", "/", false);
+    Services.cookiemgr.remove(host, "oh", "/", false, {});
   }
 
   // check the count

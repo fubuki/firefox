@@ -7,6 +7,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=945152
   <meta charset="utf-8">
   <title>Test for Bug 945152</title>
   <script type="application/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
+  <script type="application/javascript" src="common.js"></script>
   <link rel="stylesheet" type="text/css" href="chrome://mochikit/content/tests/SimpleTest/test.css"/>
   <script type="application/javascript;version=1.7">
 
@@ -17,19 +18,6 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=945152
   const gBaseURL = 'http://test/chrome/dom/apps/tests/';
   const gSJS = gBaseURL + 'file_bug_945152.sjs';
   var gGenerator = runTest();
-
-  // When using SpecialPowers.autoConfirmAppInstall, it skips the local
-  // installation, and we need this mock to get correct package path.
-  Cu.import("resource://gre/modules/Services.jsm");
-  Cu.import("resource://gre/modules/WebappOSUtils.jsm");
-  var oldWebappOSUtils = WebappOSUtils;
-  WebappOSUtils.getPackagePath = function(aApp) {
-    return aApp.basePath + "/" + aApp.id;
-  }
-
-  SimpleTest.registerCleanupFunction(() => {
-    WebappOSUtils = oldWebappOSUtils;
-  });
 
   function go() {
      gGenerator.next();
@@ -59,7 +47,6 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=945152
 
   function runTest() {
     // Set up.
-    SpecialPowers.setAllAppsLaunchable(true);
     SpecialPowers.pushPrefEnv({
       "set": [
         ["dom.mozBrowserFramesEnabled", true],
@@ -162,7 +149,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=945152
 
   </script>
 </head>
-<body onload="go()">
+<body onload="prepareEnv(go)">
 <a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=945152">Mozilla Bug 945152</a>
 <p id="display"></p>
 <div id="content" style="display: none">

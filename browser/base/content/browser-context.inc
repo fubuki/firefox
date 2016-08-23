@@ -32,7 +32,7 @@
                   command="Browser:Stop"/>
         <menuitem id="context-bookmarkpage"
                   class="menuitem-iconic"
-                  tooltiptext="&bookmarkPageCmd2.label;"
+                  observes="bookmarkThisPageBroadcaster"
                   aria-label="&bookmarkPageCmd2.label;"
                   oncommand="gContextMenu.bookmarkThisPage();"/>
       </menugroup>
@@ -57,7 +57,29 @@
       <menuitem id="context-openlinkintab"
                 label="&openLinkCmdInTab.label;"
                 accesskey="&openLinkCmdInTab.accesskey;"
-                oncommand="gContextMenu.openLinkInTab();"/>
+                usercontextid="0"
+                oncommand="gContextMenu.openLinkInTab(event);"/>
+
+      <menu id="context-openlinkinusercontext-menu"
+            label="&openLinkCmdInContainerTab.label;"
+            accesskey="&openLinkCmdInContainerTab.accesskey;"
+            hidden="true">
+        <menupopup oncommand="gContextMenu.openLinkInTab(event);">
+          <menuitem label="&userContextPersonal.label;"
+                    usercontextid="1"
+                    accesskey="&userContextPersonal.accesskey;"/>
+          <menuitem label="&userContextWork.label;"
+                    usercontextid="2"
+                    accesskey="&userContextWork.accesskey;"/>
+          <menuitem label="&userContextBanking.label;"
+                    usercontextid="3"
+                    accesskey="&userContextBanking.accesskey;"/>
+          <menuitem label="&userContextShopping.label;"
+                    usercontextid="4"
+                    accesskey="&userContextShopping.accesskey;"/>
+        </menupopup>
+      </menu>
+
       <menuitem id="context-openlink"
                 label="&openLinkCmd.label;"
                 accesskey="&openLinkCmd.accesskey;"
@@ -156,7 +178,7 @@
       <menuitem id="context-video-fullscreen"
                 accesskey="&videoFullScreen.accesskey;"
                 label="&videoFullScreen.label;"
-                oncommand="gContextMenu.fullScreenVideo();"/>
+                oncommand="gContextMenu.mediaCommand('fullscreen');"/>
       <menuitem id="context-leave-dom-fullscreen"
                 accesskey="&leaveDOMFullScreen.accesskey;"
                 label="&leaveDOMFullScreen.label;"
@@ -312,7 +334,7 @@
       <menuitem id="context-shareselect"
                 label="&shareSelect.label;"
                 accesskey="&shareSelect.accesskey;"
-                oncommand="gContextMenu.shareSelect(getBrowserSelection());"/>
+                oncommand="gContextMenu.shareSelect();"/>
       <menuseparator id="frame-sep"/>
       <menu id="frame" label="&thisFrameMenu.label;" accesskey="&thisFrameMenu.accesskey;">
         <menupopup>
@@ -373,8 +395,8 @@
       <menuitem id="context-viewsource"
                 label="&viewPageSourceCmd.label;"
                 accesskey="&viewPageSourceCmd.accesskey;"
-                oncommand="BrowserViewSourceOfDocument(gContextMenu.browser.contentDocumentAsCPOW);"
-                observes="isImage"/>
+                oncommand="BrowserViewSource(gContextMenu.browser);"
+                observes="canViewSource"/>
       <menuitem id="context-viewinfo"
                 label="&viewPageInfoCmd.label;"
                 accesskey="&viewPageInfoCmd.accesskey;"
@@ -409,6 +431,28 @@
                 label="&bidiSwitchPageDirectionItem.label;"
                 accesskey="&bidiSwitchPageDirectionItem.accesskey;"
                 oncommand="gContextMenu.switchPageDirection();"/>
+      <menuseparator id="fill-login-separator" hidden="true"/>
+      <menu id="fill-login"
+            label="&fillLoginMenu.label;"
+            label-login="&fillLoginMenu.label;"
+            label-password="&fillPasswordMenu.label;"
+            label-username="&fillUsernameMenu.label;"
+            accesskey="&fillLoginMenu.accesskey;"
+            accesskey-login="&fillLoginMenu.accesskey;"
+            accesskey-password="&fillPasswordMenu.accesskey;"
+            accesskey-username="&fillUsernameMenu.accesskey;"
+            hidden="true">
+        <menupopup id="fill-login-popup">
+          <menuitem id="fill-login-no-logins"
+                    label="&noLoginSuggestions.label;"
+                    disabled="true"
+                    hidden="true"/>
+          <menuseparator id="saved-logins-separator"/>
+          <menuitem id="fill-login-saved-passwords"
+                    label="&viewSavedLogins.label;"
+                    oncommand="gContextMenu.openPasswordManager();"/>
+        </menupopup>
+      </menu>
       <menuseparator id="inspect-separator" hidden="true"/>
       <menuitem id="context-inspect"
                 hidden="true"
@@ -419,6 +463,7 @@
       <menuitem id="context-media-eme-learnmore"
                 class="menuitem-iconic"
                 hidden="true"
-                label="Learn more about DRM"
-                accesskey="D"
-                onclick="gContextMenu.drmLearnMore(event);"/>
+                label="&emeLearnMoreContextMenu.label;"
+                accesskey="&emeLearnMoreContextMenu.accesskey;"
+                oncommand="gContextMenu.drmLearnMore(event);"
+                onclick="checkForMiddleClick(this, event);"/>

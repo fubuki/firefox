@@ -42,11 +42,10 @@ function checkState(tab) {
       // deserialized in the content scope. And in this case, since RegExps are
       // not currently Xrayable (see bug 1014991), trying to pull |obj3| (a RegExp)
       // off of an Xrayed Object won't work. So we need to waive.
-      runInContent(tab.linkedBrowser, function(win, event) {
-        return Cu.waiveXrays(event.state).obj3.toString();
-      }, aEvent).then(function(stateStr) {
-        is(stateStr, '/^a$/', "second popstate object.");
-
+      ContentTask.spawn(tab.linkedBrowser, aEvent.state, function(state) {
+        Assert.equal(Cu.waiveXrays(state).obj3.toString(),
+          "/^a$/", "second popstate object.");
+      }).then(function() {
         // Make sure that the new-elem node is present in the document.  If it's
         // not, then this history entry has a different doc identifier than the
         // previous entry, which is bad.
@@ -83,23 +82,24 @@ function test() {
   let tab = gBrowser.addTab("about:blank");
   let browser = tab.linkedBrowser;
 
-  whenBrowserLoaded(browser, function() {
+  promiseBrowserLoaded(browser).then(() => {
     browser.loadURI("http://example.com", null, null);
 
-    whenBrowserLoaded(browser, function() {
+    promiseBrowserLoaded(browser).then(() => {
       // After these push/replaceState calls, the window should have three
       // history entries:
       //   testURL        (state object: null)          <-- oldest
       //   testURL        (state object: {obj1:1})
       //   testURL?page2  (state object: {obj3:/^a$/})  <-- newest
-      function contentTest(win) {
-        let history = win.history;
+      function contentTest() {
+        let history = content.window.history;
         history.pushState({obj1:1}, "title-obj1");
         history.pushState({obj2:2}, "title-obj2", "?page2");
         history.replaceState({obj3:/^a$/}, "title-obj3");
       }
-      runInContent(browser, contentTest, null).then(function() {
-        TabState.flush(tab.linkedBrowser);
+      ContentTask.spawn(browser, null, contentTest).then(function() {
+        return TabStateFlusher.flush(tab.linkedBrowser);
+      }).then(() => {
         let state = ss.getTabState(tab);
         gBrowser.removeTab(tab);
 
@@ -109,9 +109,7 @@ function test() {
         ss.setTabState(tab2, state, true);
 
         // Run checkState() once the tab finishes loading its restored state.
-        whenTabRestored(tab2, function() {
-          checkState(tab2);
-        });
+        promiseTabRestored(tab2).then(() => checkState(tab2));
       });
     });
   });

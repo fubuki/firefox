@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
 * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,7 +25,7 @@ namespace mobileconnection {
 
 NS_IMPL_ISUPPORTS(MobileConnectionCallback, nsIMobileConnectionCallback)
 
-MobileConnectionCallback::MobileConnectionCallback(nsPIDOMWindow* aWindow,
+MobileConnectionCallback::MobileConnectionCallback(nsPIDOMWindowInner* aWindow,
                                                    DOMRequest* aRequest)
   : mWindow(aWindow)
   , mRequest(aRequest)
@@ -57,7 +59,7 @@ MobileConnectionCallback::NotifySuccessWithString(const nsAString& aResult)
   JS::Rooted<JS::Value> jsResult(cx);
 
   if (!ToJSValue(cx, aResult, &jsResult)) {
-    JS_ClearPendingException(cx);
+    jsapi.ClearException();
     return NS_ERROR_TYPE_ERR;
   }
 
@@ -83,10 +85,10 @@ NS_IMETHODIMP
 MobileConnectionCallback::NotifyGetNetworksSuccess(uint32_t aCount,
                                                    nsIMobileNetworkInfo** aNetworks)
 {
-  nsTArray<nsRefPtr<MobileNetworkInfo>> results;
+  nsTArray<RefPtr<MobileNetworkInfo>> results;
   for (uint32_t i = 0; i < aCount; i++)
   {
-    nsRefPtr<MobileNetworkInfo> networkInfo = new MobileNetworkInfo(mWindow);
+    RefPtr<MobileNetworkInfo> networkInfo = new MobileNetworkInfo(mWindow);
     networkInfo->Update(aNetworks[i]);
     results.AppendElement(networkInfo);
   }
@@ -100,7 +102,7 @@ MobileConnectionCallback::NotifyGetNetworksSuccess(uint32_t aCount,
   JS::Rooted<JS::Value> jsResult(cx);
 
   if (!ToJSValue(cx, results, &jsResult)) {
-    JS_ClearPendingException(cx);
+    jsapi.ClearException();
     return NS_ERROR_TYPE_ERR;
   }
 
@@ -157,7 +159,7 @@ MobileConnectionCallback::NotifyGetCallForwardingSuccess(uint32_t aCount,
   JS::Rooted<JS::Value> jsResult(cx);
 
   if (!ToJSValue(cx, results, &jsResult)) {
-    JS_ClearPendingException(cx);
+    jsapi.ClearException();
     return NS_ERROR_TYPE_ERR;
   }
 
@@ -182,11 +184,19 @@ MobileConnectionCallback::NotifyGetCallBarringSuccess(uint16_t aProgram,
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> jsResult(cx);
   if (!ToJSValue(cx, result, &jsResult)) {
-    JS_ClearPendingException(cx);
+    jsapi.ClearException();
     return NS_ERROR_TYPE_ERR;
   }
 
   return NotifySuccess(jsResult);
+}
+
+NS_IMETHODIMP
+MobileConnectionCallback::NotifyGetCallWaitingSuccess(uint16_t aServiceClass)
+{
+  return (aServiceClass & nsIMobileConnection::ICC_SERVICE_CLASS_VOICE)
+           ? NotifySuccess(JS::TrueHandleValue)
+           : NotifySuccess(JS::FalseHandleValue);
 }
 
 NS_IMETHODIMP
@@ -204,7 +214,7 @@ MobileConnectionCallback::NotifyGetClirStatusSuccess(uint16_t aN, uint16_t aM)
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> jsResult(cx);
   if (!ToJSValue(cx, result, &jsResult)) {
-    JS_ClearPendingException(cx);
+    jsapi.ClearException();
     return NS_ERROR_TYPE_ERR;
   }
 

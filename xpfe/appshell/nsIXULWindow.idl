@@ -18,7 +18,7 @@ interface nsIDocShellTreeItem;
 interface nsIXULBrowserWindow;
 interface nsITabParent;
 
-[scriptable, uuid(a68a40b9-f7df-47ff-a874-2af3df7eb888)]
+[scriptable, uuid(d6d7a014-e28d-4c9d-8727-1cf6d870619b)]
 interface nsIXULWindow : nsISupports
 {
   /**
@@ -40,6 +40,15 @@ interface nsIXULWindow : nsISupports
    * Query accordingly to determine the capabilities.
    */
   readonly attribute nsIDocShellTreeItem primaryContentShell;
+
+  /**
+   * In multiprocess case we may not have primaryContentShell but
+   * primaryTabParent.
+   */
+  readonly attribute nsITabParent primaryTabParent;
+
+  void tabParentAdded(in nsITabParent aTab, in boolean aPrimary);
+  void tabParentRemoved(in nsITabParent aTab);
 
   /**
    * The content shell specified by the supplied id.
@@ -125,4 +134,13 @@ interface nsIXULWindow : nsISupports
    * docshell could cause problems.
    */
   [noscript] void applyChromeFlags();
+
+
+  /**
+   * Sometimes the child's nsDocShellTreeOwner needs to propogate a SizeShellTo call to the parent. But the
+   * shellItem argument of the call will not be available on the parent side, so we pass its dimensions here.
+   * Note: this is an internal method, other consumers should never call this.
+   */
+  [noscript, notxpcom] void sizeShellToWithLimit(in int32_t aCx, in int32_t aCy,
+                                                 in int32_t shellItemCx, in int32_t shellItemCy);
 };

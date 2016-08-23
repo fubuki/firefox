@@ -15,7 +15,7 @@
 #include "gfxTypes.h"
 #include "mozilla/GfxMessageUtils.h"    // for gfxContentType
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
-#include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
+#include "mozilla/Attributes.h"         // for override
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/gfx/Point.h"          // for IntSize, IntPoint
@@ -29,35 +29,23 @@
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_WARNING
 #include "nsISupportsImpl.h"            // for TextureImage::Release, etc
+#include "nsRegionFwd.h"                // for nsIntRegion
 #include "OGLShaderProgram.h"           // for ShaderProgramType, etc
-#ifdef MOZ_WIDGET_GONK
-#include <ui/GraphicBuffer.h>
-#if ANDROID_VERSION >= 17
-#include <ui/Fence.h>
-#endif
-#endif
-
-class gfxReusableSurfaceWrapper;
-class nsIntRegion;
-struct nsIntPoint;
-struct nsIntRect;
-struct nsIntSize;
 
 namespace mozilla {
 namespace gfx {
 class DataSourceSurface;
-}
+} // namespace gfx
 
 namespace gl {
 class AndroidSurfaceTexture;
-}
+} // namespace gl
 
 namespace layers {
 
 class Compositor;
 class CompositorOGL;
 class TextureImageTextureSourceOGL;
-class TextureSharedDataGonkOGL;
 class GLTextureSource;
 
 inline void ApplyFilterToBoundTexture(gl::GLContext* aGL,
@@ -134,48 +122,6 @@ private:
 };
 
 /**
- * TextureHostOGL provides the necessary API for platform specific composition.
- */
-class TextureHostOGL
-{
-public:
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-
-  /**
-   * Store a fence that will signal when the current buffer is no longer being read.
-   * Similar to android's GLConsumer::setReleaseFence()
-   */
-  virtual bool SetReleaseFence(const android::sp<android::Fence>& aReleaseFence);
-
-  /**
-   * Return a releaseFence's Fence and clear a reference to the Fence.
-   */
-  virtual android::sp<android::Fence> GetAndResetReleaseFence();
-
-  virtual void SetAcquireFence(const android::sp<android::Fence>& aAcquireFence);
-
-  /**
-   * Return a acquireFence's Fence and clear a reference to the Fence.
-   */
-  virtual android::sp<android::Fence> GetAndResetAcquireFence();
-
-  virtual void WaitAcquireFenceSyncComplete();
-
-protected:
-  android::sp<android::Fence> mReleaseFence;
-
-  android::sp<android::Fence> mAcquireFence;
-
-  /**
-   * Hold previous ReleaseFence to prevent Fence delivery failure via gecko IPC.
-   * Fence is a kernel object and its lifetime is managed by a reference count.
-   * Until the Fence is delivered to client side, need to hold Fence on host side.
-   */
-  android::sp<android::Fence> mPrevReleaseFence;
-#endif
-};
-
-/**
  * A TextureSource backed by a TextureImage.
  *
  * Depending on the underlying TextureImage, may support texture tiling, so
@@ -184,9 +130,9 @@ protected:
  * This TextureSource can be used without a TextureHost and manage it's own
  * GL texture(s).
  */
-class TextureImageTextureSourceOGL MOZ_FINAL : public DataTextureSource
-                                             , public TextureSourceOGL
-                                             , public BigImageIterator
+class TextureImageTextureSourceOGL final : public DataTextureSource
+                                         , public TextureSourceOGL
+                                         , public BigImageIterator
 {
 public:
   explicit TextureImageTextureSourceOGL(CompositorOGL *aCompositor,
@@ -196,75 +142,76 @@ public:
     , mIterating(false)
   {}
 
+  virtual const char* Name() const override { return "TextureImageTextureSourceOGL"; }
   // DataTextureSource
 
   virtual bool Update(gfx::DataSourceSurface* aSurface,
                       nsIntRegion* aDestRegion = nullptr,
-                      gfx::IntPoint* aSrcOffset = nullptr) MOZ_OVERRIDE;
+                      gfx::IntPoint* aSrcOffset = nullptr) override;
 
-  void EnsureBuffer(const nsIntSize& aSize,
-                            gfxContentType aContentType);
+  void EnsureBuffer(const gfx::IntSize& aSize,
+                    gfxContentType aContentType);
 
-  void CopyTo(const nsIntRect& aSourceRect,
-                      DataTextureSource* aDest,
-                      const nsIntRect& aDestRect);
+  void CopyTo(const gfx::IntRect& aSourceRect,
+              DataTextureSource* aDest,
+              const gfx::IntRect& aDestRect);
 
-  virtual TextureImageTextureSourceOGL* AsTextureImageTextureSource() MOZ_OVERRIDE { return this; }
+  virtual TextureImageTextureSourceOGL* AsTextureImageTextureSource() override { return this; }
 
   // TextureSource
 
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE
+  virtual void DeallocateDeviceData() override
   {
     mTexImage = nullptr;
     SetUpdateSerial(0);
   }
 
-  virtual TextureSourceOGL* AsSourceOGL() MOZ_OVERRIDE { return this; }
+  virtual TextureSourceOGL* AsSourceOGL() override { return this; }
 
-  virtual void BindTexture(GLenum aTextureUnit, gfx::Filter aFilter) MOZ_OVERRIDE;
+  virtual void BindTexture(GLenum aTextureUnit, gfx::Filter aFilter) override;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE;
+  virtual gfx::IntSize GetSize() const override;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const override;
 
-  virtual bool IsValid() const MOZ_OVERRIDE { return !!mTexImage; }
+  virtual bool IsValid() const override { return !!mTexImage; }
 
-  virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void SetCompositor(Compositor* aCompositor) override;
 
-  virtual GLenum GetWrapMode() const MOZ_OVERRIDE
+  virtual GLenum GetWrapMode() const override
   {
     return mTexImage->GetWrapMode();
   }
 
   // BigImageIterator
 
-  virtual BigImageIterator* AsBigImageIterator() MOZ_OVERRIDE { return this; }
+  virtual BigImageIterator* AsBigImageIterator() override { return this; }
 
-  virtual void BeginBigImageIteration() MOZ_OVERRIDE
+  virtual void BeginBigImageIteration() override
   {
     mTexImage->BeginBigImageIteration();
     mIterating = true;
   }
 
-  virtual void EndBigImageIteration() MOZ_OVERRIDE
+  virtual void EndBigImageIteration() override
   {
     mIterating = false;
   }
 
-  virtual nsIntRect GetTileRect() MOZ_OVERRIDE;
+  virtual gfx::IntRect GetTileRect() override;
 
-  virtual size_t GetTileCount() MOZ_OVERRIDE
+  virtual size_t GetTileCount() override
   {
     return mTexImage->GetTileCount();
   }
 
-  virtual bool NextTile() MOZ_OVERRIDE
+  virtual bool NextTile() override
   {
     return mTexImage->NextTile();
   }
 
 protected:
-  nsRefPtr<gl::TextureImage> mTexImage;
+  RefPtr<gl::TextureImage> mTexImage;
   RefPtr<CompositorOGL> mCompositor;
   TextureFlags mFlags;
   bool mIterating;
@@ -291,25 +238,27 @@ public:
 
   ~GLTextureSource();
 
-  virtual GLTextureSource* AsGLTextureSource() MOZ_OVERRIDE { return this; }
+  virtual const char* Name() const override { return "GLTextureSource"; }
 
-  virtual TextureSourceOGL* AsSourceOGL() MOZ_OVERRIDE { return this; }
+  virtual GLTextureSource* AsGLTextureSource() override { return this; }
 
-  virtual void BindTexture(GLenum activetex, gfx::Filter aFilter) MOZ_OVERRIDE;
+  virtual TextureSourceOGL* AsSourceOGL() override { return this; }
 
-  virtual bool IsValid() const MOZ_OVERRIDE;
+  virtual void BindTexture(GLenum activetex, gfx::Filter aFilter) override;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
+  virtual bool IsValid() const override;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE { return mFormat; }
+  virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual GLenum GetTextureTarget() const MOZ_OVERRIDE { return mTextureTarget; }
+  virtual gfx::SurfaceFormat GetFormat() const override { return mFormat; }
 
-  virtual GLenum GetWrapMode() const MOZ_OVERRIDE { return LOCAL_GL_CLAMP_TO_EDGE; }
+  virtual GLenum GetTextureTarget() const override { return mTextureTarget; }
 
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE;
+  virtual GLenum GetWrapMode() const override { return LOCAL_GL_CLAMP_TO_EDGE; }
 
-  virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void DeallocateDeviceData() override;
+
+  virtual void SetCompositor(Compositor* aCompositor) override;
 
   void SetSize(gfx::IntSize aSize) { mSize = aSize; }
 
@@ -332,6 +281,56 @@ protected:
   bool mExternallyOwned;
 };
 
+class GLTextureHost : public TextureHost
+{
+public:
+  GLTextureHost(TextureFlags aFlags,
+                GLuint aTextureHandle,
+                GLenum aTarget,
+                GLsync aSync,
+                gfx::IntSize aSize,
+                bool aHasAlpha);
+
+  virtual ~GLTextureHost();
+
+  // We don't own anything.
+  virtual void DeallocateDeviceData() override {}
+
+  virtual void SetCompositor(Compositor* aCompositor) override;
+
+  virtual bool Lock() override;
+
+  virtual void Unlock() override {}
+
+  virtual gfx::SurfaceFormat GetFormat() const override;
+
+  virtual bool BindTextureSource(CompositableTextureSourceRef& aTexture) override
+  {
+    aTexture = mTextureSource;
+    return !!aTexture;
+  }
+
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
+  {
+    return nullptr; // XXX - implement this (for MOZ_DUMP_PAINTING)
+  }
+
+  gl::GLContext* gl() const;
+
+  virtual gfx::IntSize GetSize() const override { return mSize; }
+
+  virtual const char* Name() override { return "GLTextureHost"; }
+
+protected:
+  const GLuint mTexture;
+  const GLenum mTarget;
+  GLsync mSync;
+  const gfx::IntSize mSize;
+  const bool mHasAlpha;
+  RefPtr<CompositorOGL> mCompositor;
+  RefPtr<GLTextureSource> mTextureSource;
+};
+
 ////////////////////////////////////////////////////////////////////////
 // SurfaceTexture
 
@@ -348,32 +347,33 @@ public:
                        GLenum aWrapMode,
                        gfx::IntSize aSize);
 
+  virtual const char* Name() const override { return "SurfaceTextureSource"; }
+
   virtual TextureSourceOGL* AsSourceOGL() { return this; }
 
-  virtual void BindTexture(GLenum activetex, gfx::Filter aFilter) MOZ_OVERRIDE;
+  virtual void BindTexture(GLenum activetex, gfx::Filter aFilter) override;
 
-  virtual bool IsValid() const MOZ_OVERRIDE;
+  virtual bool IsValid() const override;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
+  virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE { return mFormat; }
+  virtual gfx::SurfaceFormat GetFormat() const override { return mFormat; }
 
-  virtual gfx::Matrix4x4 GetTextureTransform() MOZ_OVERRIDE;
+  virtual gfx::Matrix4x4 GetTextureTransform() override;
 
   virtual GLenum GetTextureTarget() const { return mTextureTarget; }
 
-  virtual GLenum GetWrapMode() const MOZ_OVERRIDE { return mWrapMode; }
+  virtual GLenum GetWrapMode() const override { return mWrapMode; }
 
-  // We don't own anything.
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE {}
+  virtual void DeallocateDeviceData() override;
 
-  virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void SetCompositor(Compositor* aCompositor) override;
 
   gl::GLContext* gl() const;
 
 protected:
   RefPtr<CompositorOGL> mCompositor;
-  mozilla::gl::AndroidSurfaceTexture* const mSurfTex;
+  RefPtr<gl::AndroidSurfaceTexture> mSurfTex;
   const gfx::SurfaceFormat mFormat;
   const GLenum mTextureTarget;
   const GLenum mWrapMode;
@@ -389,35 +389,35 @@ public:
 
   virtual ~SurfaceTextureHost();
 
-  // We don't own anything.
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE {}
+  virtual void DeallocateDeviceData() override;
 
-  virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void SetCompositor(Compositor* aCompositor) override;
 
-  virtual bool Lock() MOZ_OVERRIDE;
+  virtual bool Lock() override;
 
-  virtual void Unlock() MOZ_OVERRIDE;
+  virtual void Unlock() override;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const override;
 
-  virtual TextureSource* GetTextureSources() MOZ_OVERRIDE
+  virtual bool BindTextureSource(CompositableTextureSourceRef& aTexture) override
   {
-    return mTextureSource;
+    aTexture = mTextureSource;
+    return !!aTexture;
   }
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr; // XXX - implement this (for MOZ_DUMP_PAINTING)
   }
 
   gl::GLContext* gl() const;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
+  virtual gfx::IntSize GetSize() const override { return mSize; }
 
   virtual const char* Name() { return "SurfaceTextureHost"; }
 
 protected:
-  mozilla::gl::AndroidSurfaceTexture* const mSurfTex;
+  RefPtr<gl::AndroidSurfaceTexture> mSurfTex;
   const gfx::IntSize mSize;
   RefPtr<CompositorOGL> mCompositor;
   RefPtr<SurfaceTextureSource> mTextureSource;
@@ -439,26 +439,28 @@ public:
                         GLenum aWrapMode,
                         gfx::IntSize aSize);
 
-  virtual TextureSourceOGL* AsSourceOGL() MOZ_OVERRIDE { return this; }
+  virtual const char* Name() const override { return "EGLImageTextureSource"; }
 
-  virtual void BindTexture(GLenum activetex, gfx::Filter aFilter) MOZ_OVERRIDE;
+  virtual TextureSourceOGL* AsSourceOGL() override { return this; }
 
-  virtual bool IsValid() const MOZ_OVERRIDE;
+  virtual void BindTexture(GLenum activetex, gfx::Filter aFilter) override;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
+  virtual bool IsValid() const override;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE { return mFormat; }
+  virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual gfx::Matrix4x4 GetTextureTransform() MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const override { return mFormat; }
 
-  virtual GLenum GetTextureTarget() const MOZ_OVERRIDE { return mTextureTarget; }
+  virtual gfx::Matrix4x4 GetTextureTransform() override;
 
-  virtual GLenum GetWrapMode() const MOZ_OVERRIDE { return mWrapMode; }
+  virtual GLenum GetTextureTarget() const override { return mTextureTarget; }
+
+  virtual GLenum GetWrapMode() const override { return mWrapMode; }
 
   // We don't own anything.
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE {}
+  virtual void DeallocateDeviceData() override {}
 
-  virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void SetCompositor(Compositor* aCompositor) override;
 
   gl::GLContext* gl() const;
 
@@ -477,46 +479,51 @@ public:
   EGLImageTextureHost(TextureFlags aFlags,
                      EGLImage aImage,
                      EGLSync aSync,
-                     gfx::IntSize aSize);
+                     gfx::IntSize aSize,
+                     bool hasAlpha);
 
   virtual ~EGLImageTextureHost();
 
   // We don't own anything.
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE {}
+  virtual void DeallocateDeviceData() override {}
 
-  virtual void SetCompositor(Compositor* aCompositor) MOZ_OVERRIDE;
+  virtual void SetCompositor(Compositor* aCompositor) override;
 
-  virtual bool Lock() MOZ_OVERRIDE;
+  virtual bool Lock() override;
 
-  virtual void Unlock() MOZ_OVERRIDE;
+  virtual void Unlock() override;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const override;
 
-  virtual TextureSource* GetTextureSources() MOZ_OVERRIDE
+  virtual bool BindTextureSource(CompositableTextureSourceRef& aTexture) override
   {
-    return mTextureSource;
+    aTexture = mTextureSource;
+    return !!aTexture;
   }
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() MOZ_OVERRIDE
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr; // XXX - implement this (for MOZ_DUMP_PAINTING)
   }
 
   gl::GLContext* gl() const;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE { return mSize; }
+  virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual const char* Name() MOZ_OVERRIDE { return "EGLImageTextureHost"; }
+  virtual const char* Name() override { return "EGLImageTextureHost"; }
 
 protected:
   const EGLImage mImage;
   const EGLSync mSync;
   const gfx::IntSize mSize;
+  const bool mHasAlpha;
   RefPtr<CompositorOGL> mCompositor;
   RefPtr<EGLImageTextureSource> mTextureSource;
 };
 
-} // namespace
-} // namespace
+CompositorOGL* AssertGLCompositor(Compositor* aCompositor);
+
+} // namespace layers
+} // namespace mozilla
 
 #endif /* MOZILLA_GFX_TEXTUREOGL_H */

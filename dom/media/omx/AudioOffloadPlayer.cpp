@@ -42,39 +42,26 @@ using namespace android;
 
 namespace mozilla {
 
-#ifdef PR_LOGGING
-PRLogModuleInfo* gAudioOffloadPlayerLog;
+LazyLogModule gAudioOffloadPlayerLog("AudioOffloadPlayer");
 #define AUDIO_OFFLOAD_LOG(type, msg) \
-  PR_LOG(gAudioOffloadPlayerLog, type, msg)
-#else
-#define AUDIO_OFFLOAD_LOG(type, msg)
-#endif
+  MOZ_LOG(gAudioOffloadPlayerLog, type, msg)
 
 // maximum time in paused state when offloading audio decompression.
-// When elapsed, the AudioSink is destroyed to allow the audio DSP to power down.
+// When elapsed, the GonkAudioSink is destroyed to allow the audio DSP to power down.
 static const uint64_t OFFLOAD_PAUSE_MAX_MSECS = 60000ll;
 
 AudioOffloadPlayer::AudioOffloadPlayer(MediaOmxCommonDecoder* aObserver) :
   mStarted(false),
   mPlaying(false),
-  mSeeking(false),
   mReachedEOS(false),
-  mSeekDuringPause(false),
   mIsElementVisible(true),
   mSampleRate(0),
   mStartPosUs(0),
-  mSeekTimeUs(0),
   mPositionTimeMediaUs(-1),
   mInputBuffer(nullptr),
   mObserver(aObserver)
 {
   MOZ_ASSERT(NS_IsMainThread());
-
-#ifdef PR_LOGGING
-  if (!gAudioOffloadPlayerLog) {
-    gAudioOffloadPlayerLog = PR_NewLogModule("AudioOffloadPlayer");
-  }
-#endif
 
   CHECK(aObserver);
 #if ANDROID_VERSION >= 21
@@ -144,7 +131,7 @@ status_t AudioOffloadPlayer::Start(bool aSourceAlreadyStarted)
   }
 
   if (mapMimeToAudioFormat(audioFormat, mime) != OK) {
-    AUDIO_OFFLOAD_LOG(PR_LOG_ERROR, ("Couldn't map mime type \"%s\" to a valid "
+    AUDIO_OFFLOAD_LOG(LogLevel::Error, ("Couldn't map mime type \"%s\" to a valid "
         "AudioSystem::audio_format", mime));
     audioFormat = AUDIO_FORMAT_INVALID;
   }
@@ -158,7 +145,7 @@ status_t AudioOffloadPlayer::Start(bool aSourceAlreadyStarted)
   offloadInfo.has_video = false;
   offloadInfo.is_streaming = false;
 
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("isOffloadSupported: SR=%u, CM=0x%x, "
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("isOffloadSupported: SR=%u, CM=0x%x, "
       "Format=0x%x, StreamType=%d, BitRate=%u, duration=%lld us, has_video=%d",
       offloadInfo.sample_rate, offloadInfo.channel_mask, offloadInfo.format,
       offloadInfo.stream_type, offloadInfo.bit_rate, offloadInfo.duration_us,
@@ -199,13 +186,6 @@ status_t AudioOffloadPlayer::ChangeState(MediaDecoder::PlayState aState)
       StartTimeUpdate();
     } break;
 
-    case MediaDecoder::PLAY_STATE_SEEKING: {
-      int64_t seekTimeUs
-          = mObserver->GetSeekTime();
-      SeekTo(seekTimeUs, true);
-      mObserver->ResetSeekTime();
-    } break;
-
     case MediaDecoder::PLAY_STATE_PAUSED:
     case MediaDecoder::PLAY_STATE_SHUTDOWN:
       // Just pause here during play state shutdown as well to stop playing
@@ -226,7 +206,7 @@ status_t AudioOffloadPlayer::ChangeState(MediaDecoder::PlayState aState)
 
 static void ResetCallback(nsITimer* aTimer, void* aClosure)
 {
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("%s", __FUNCTION__));
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("%s", __FUNCTION__));
   AudioOffloadPlayer* player = static_cast<AudioOffloadPlayer*>(aClosure);
   if (player) {
     player->Reset();
@@ -278,8 +258,12 @@ status_t AudioOffloadPlayer::Play()
       return err;
     }
     // Seek to last play position only when there was no seek during last pause
-    if (!mSeeking) {
-      SeekTo(mPositionTimeMediaUs);
+    android::Mutex::Autolock autoLock(mLock);
+    if (!mSeekTarget.IsValid()) {
+      mSeekTarget = SeekTarget(mPositionTimeMediaUs,
+                               SeekTarget::Accurate,
+                               MediaDecoderEventVisibility::Suppressed);
+      DoSeek();
     }
   }
 
@@ -303,7 +287,7 @@ void AudioOffloadPlayer::Reset()
 
   CHECK(mAudioSink.get());
 
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("reset: mPlaying=%d mReachedEOS=%d",
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("reset: mPlaying=%d mReachedEOS=%d",
       mPlaying, mReachedEOS));
 
   mAudioSink->Stop();
@@ -325,7 +309,7 @@ void AudioOffloadPlayer::Reset()
   // source is able to stop().
 
   if (mInputBuffer) {
-    AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Releasing input buffer"));
+    AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Releasing input buffer"));
 
     mInputBuffer->release();
     mInputBuffer = nullptr;
@@ -343,25 +327,37 @@ void AudioOffloadPlayer::Reset()
   WakeLockRelease();
 }
 
-status_t AudioOffloadPlayer::SeekTo(int64_t aTimeUs, bool aDispatchSeekEvents)
+RefPtr<MediaDecoder::SeekPromise> AudioOffloadPlayer::Seek(SeekTarget aTarget)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  CHECK(mAudioSink.get());
-
   android::Mutex::Autolock autoLock(mLock);
 
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("SeekTo ( %lld )", aTimeUs));
+  mSeekPromise.RejectIfExists(true, __func__);
+  mSeekTarget = aTarget;
+  RefPtr<MediaDecoder::SeekPromise> p = mSeekPromise.Ensure(__func__);
+  DoSeek();
+  return p;
+}
 
-  mSeeking = true;
+status_t AudioOffloadPlayer::DoSeek()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mSeekTarget.IsValid());
+  CHECK(mAudioSink.get());
+
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug,
+                    ("DoSeek ( %lld )", mSeekTarget.GetTime().ToMicroseconds()));
+
   mReachedEOS = false;
   mPositionTimeMediaUs = -1;
-  mSeekTimeUs = aTimeUs;
-  mStartPosUs = aTimeUs;
-  mDispatchSeekEvents = aDispatchSeekEvents;
+  mStartPosUs = mSeekTarget.GetTime().ToMicroseconds();
 
-  if (mDispatchSeekEvents) {
-    nsCOMPtr<nsIRunnable> nsEvent = NS_NewRunnableMethod(mObserver,
-        &MediaDecoder::SeekingStarted);
+  if (!mSeekPromise.IsEmpty()) {
+    nsCOMPtr<nsIRunnable> nsEvent =
+      NS_NewRunnableMethodWithArg<MediaDecoderEventVisibility>(
+        mObserver,
+        &MediaDecoder::SeekingStarted,
+        mSeekTarget.mEventVisibility);
     NS_DispatchToCurrentThread(nsEvent);
   }
 
@@ -371,29 +367,19 @@ status_t AudioOffloadPlayer::SeekTo(int64_t aTimeUs, bool aDispatchSeekEvents)
     mAudioSink->Start();
 
   } else {
-    mSeekDuringPause = true;
-
     if (mStarted) {
       mAudioSink->Flush();
     }
 
-    if (mDispatchSeekEvents) {
-      mDispatchSeekEvents = false;
-      AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Fake seek complete during pause"));
-      nsCOMPtr<nsIRunnable> nsEvent = NS_NewRunnableMethod(mObserver,
-          &MediaDecoder::SeekingStopped);
-      NS_DispatchToCurrentThread(nsEvent);
+    if (!mSeekPromise.IsEmpty()) {
+      AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Fake seek complete during pause"));
+      // We do not reset mSeekTarget here.
+      MediaDecoder::SeekResolveValue val(mReachedEOS, mSeekTarget.mEventVisibility);
+      mSeekPromise.Resolve(val, __func__);
     }
   }
 
   return OK;
-}
-
-double AudioOffloadPlayer::GetMediaTimeSecs()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  return (static_cast<double>(GetMediaTimeUs()) /
-      static_cast<double>(USECS_PER_S));
 }
 
 int64_t AudioOffloadPlayer::GetMediaTimeUs()
@@ -401,8 +387,8 @@ int64_t AudioOffloadPlayer::GetMediaTimeUs()
   android::Mutex::Autolock autoLock(mLock);
 
   int64_t playPosition = 0;
-  if (mSeeking) {
-    return mSeekTimeUs;
+  if (mSeekTarget.IsValid()) {
+    return mSeekTarget.GetTime().ToMicroseconds();
   }
   if (!mStarted) {
     return mPositionTimeMediaUs;
@@ -433,6 +419,12 @@ int64_t AudioOffloadPlayer::GetOutputPlayPositionUs_l() const
 
 void AudioOffloadPlayer::NotifyAudioEOS()
 {
+  android::Mutex::Autolock autoLock(mLock);
+  // We do not reset mSeekTarget here.
+  if (!mSeekPromise.IsEmpty()) {
+    MediaDecoder::SeekResolveValue val(mReachedEOS, mSeekTarget.mEventVisibility);
+    mSeekPromise.Resolve(val, __func__);
+  }
   nsCOMPtr<nsIRunnable> nsEvent = NS_NewRunnableMethod(mObserver,
       &MediaDecoder::PlaybackEnded);
   NS_DispatchToMainThread(nsEvent);
@@ -440,47 +432,56 @@ void AudioOffloadPlayer::NotifyAudioEOS()
 
 void AudioOffloadPlayer::NotifyPositionChanged()
 {
-  nsCOMPtr<nsIRunnable> nsEvent = NS_NewRunnableMethod(mObserver,
-      &MediaOmxCommonDecoder::PlaybackPositionChanged);
+  nsCOMPtr<nsIRunnable> nsEvent =
+    NS_NewRunnableMethod(mObserver, &MediaOmxCommonDecoder::NotifyOffloadPlayerPositionChanged);
   NS_DispatchToMainThread(nsEvent);
 }
 
 void AudioOffloadPlayer::NotifyAudioTearDown()
 {
+  // Fallback to state machine.
+  // state machine's seeks will be done with
+  // MediaDecoderEventVisibility::Suppressed.
+  android::Mutex::Autolock autoLock(mLock);
+  // We do not reset mSeekTarget here.
+  if (!mSeekPromise.IsEmpty()) {
+    MediaDecoder::SeekResolveValue val(mReachedEOS, mSeekTarget.mEventVisibility);
+    mSeekPromise.Resolve(val, __func__);
+  }
   nsCOMPtr<nsIRunnable> nsEvent = NS_NewRunnableMethod(mObserver,
       &MediaOmxCommonDecoder::AudioOffloadTearDown);
   NS_DispatchToMainThread(nsEvent);
 }
 
 // static
-size_t AudioOffloadPlayer::AudioSinkCallback(AudioSink* aAudioSink,
+size_t AudioOffloadPlayer::AudioSinkCallback(GonkAudioSink* aAudioSink,
                                              void* aBuffer,
                                              size_t aSize,
                                              void* aCookie,
-                                             AudioSink::cb_event_t aEvent)
+                                             GonkAudioSink::cb_event_t aEvent)
 {
   AudioOffloadPlayer* me = (AudioOffloadPlayer*) aCookie;
 
   switch (aEvent) {
 
-    case AudioSink::CB_EVENT_FILL_BUFFER:
-      AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Notify Audio position changed"));
+    case GonkAudioSink::CB_EVENT_FILL_BUFFER:
+      AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Notify Audio position changed"));
       me->NotifyPositionChanged();
       return me->FillBuffer(aBuffer, aSize);
 
-    case AudioSink::CB_EVENT_STREAM_END:
-      AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Notify Audio EOS"));
+    case GonkAudioSink::CB_EVENT_STREAM_END:
+      AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Notify Audio EOS"));
       me->mReachedEOS = true;
       me->NotifyAudioEOS();
       break;
 
-    case AudioSink::CB_EVENT_TEAR_DOWN:
-      AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Notify Tear down event"));
+    case GonkAudioSink::CB_EVENT_TEAR_DOWN:
+      AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Notify Tear down event"));
       me->NotifyAudioTearDown();
       break;
 
     default:
-      AUDIO_OFFLOAD_LOG(PR_LOG_ERROR, ("Unknown event %d from audio sink",
+      AUDIO_OFFLOAD_LOG(LogLevel::Error, ("Unknown event %d from audio sink",
           aEvent));
       break;
   }
@@ -497,27 +498,26 @@ size_t AudioOffloadPlayer::FillBuffer(void* aData, size_t aSize)
 
   size_t sizeDone = 0;
   size_t sizeRemaining = aSize;
+  int64_t seekTimeUs = -1;
   while (sizeRemaining > 0) {
     MediaSource::ReadOptions options;
     bool refreshSeekTime = false;
-
     {
       android::Mutex::Autolock autoLock(mLock);
 
-      if (mSeeking) {
-        options.setSeekTo(mSeekTimeUs);
+      if (mSeekTarget.IsValid()) {
+        seekTimeUs = mSeekTarget.GetTime().ToMicroseconds();
+        options.setSeekTo(seekTimeUs);
         refreshSeekTime = true;
 
         if (mInputBuffer) {
           mInputBuffer->release();
           mInputBuffer = nullptr;
         }
-        mSeeking = false;
       }
     }
 
     if (!mInputBuffer) {
-
       status_t err;
       err = mSource->read(&mInputBuffer, &options);
 
@@ -526,7 +526,10 @@ size_t AudioOffloadPlayer::FillBuffer(void* aData, size_t aSize)
       android::Mutex::Autolock autoLock(mLock);
 
       if (err != OK) {
-        AUDIO_OFFLOAD_LOG(PR_LOG_ERROR, ("Error while reading media source %d "
+        if (mSeekTarget.IsValid()) {
+          mSeekTarget.Reset();
+        }
+        AUDIO_OFFLOAD_LOG(LogLevel::Error, ("Error while reading media source %d "
             "Ok to receive EOS error at end", err));
         if (!mReachedEOS) {
           // After seek there is a possible race condition if
@@ -538,8 +541,8 @@ size_t AudioOffloadPlayer::FillBuffer(void* aData, size_t aSize)
           // there will be an unnecessary call to the parser
           // after parser signalled EOS.
           if (sizeDone > 0) {
-            AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("send Partial buffer down"));
-            AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("skip calling stop till next"
+            AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("send Partial buffer down"));
+            AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("skip calling stop till next"
                 " fillBuffer"));
             break;
           }
@@ -555,37 +558,27 @@ size_t AudioOffloadPlayer::FillBuffer(void* aData, size_t aSize)
             kKeyTime, &mPositionTimeMediaUs));
       }
 
-      if (refreshSeekTime) {
-        if (mDispatchSeekEvents && !mSeekDuringPause) {
-          mDispatchSeekEvents = false;
-          AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("FillBuffer posting SEEK_COMPLETE"));
-          nsCOMPtr<nsIRunnable> nsEvent = NS_NewRunnableMethod(mObserver,
-              &MediaDecoder::SeekingStopped);
-          NS_DispatchToMainThread(nsEvent, NS_DISPATCH_NORMAL);
-
-        } else if (mSeekDuringPause) {
-          // Callback is already called for seek during pause. Just reset the
-          // flag
-          AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Not posting seek complete as its"
-              " already faked"));
-          mSeekDuringPause = false;
+      if (mSeekTarget.IsValid() &&
+          seekTimeUs == mSeekTarget.GetTime().ToMicroseconds()) {
+        MOZ_ASSERT(mSeekTarget.IsValid());
+        mSeekTarget.Reset();
+        if (!mSeekPromise.IsEmpty()) {
+          AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("FillBuffer posting SEEK_COMPLETE"));
+          MediaDecoder::SeekResolveValue val(mReachedEOS, mSeekTarget.mEventVisibility);
+          mSeekPromise.Resolve(val, __func__);
         }
+      } else if (mSeekTarget.IsValid()) {
+        AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("seek is updated during unlocking mLock"));
+      }
 
+      if (refreshSeekTime) {
         NotifyPositionChanged();
 
         // need to adjust the mStartPosUs for offload decoding since parser
         // might not be able to get the exact seek time requested.
         mStartPosUs = mPositionTimeMediaUs;
-        AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Adjust seek time to: %.2f",
+        AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Adjust seek time to: %.2f",
             mStartPosUs / 1E6));
-
-        // clear seek time with mLock locked and once we have valid
-        // mPositionTimeMediaUs
-        // before clearing mSeekTimeUs check if a new seek request has been
-        // received while we were reading from the source with mLock released.
-        if (!mSeeking) {
-          mSeekTimeUs = 0;
-        }
       }
     }
 
@@ -618,7 +611,7 @@ void AudioOffloadPlayer::SetElementVisibility(bool aIsVisible)
   MOZ_ASSERT(NS_IsMainThread());
   mIsElementVisible = aIsVisible;
   if (mIsElementVisible) {
-    AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("Element is visible. Start time update"));
+    AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("Element is visible. Start time update"));
     StartTimeUpdate();
   }
 }
@@ -677,7 +670,7 @@ nsresult AudioOffloadPlayer::StopTimeUpdate()
 MediaDecoderOwner::NextFrameStatus AudioOffloadPlayer::GetNextFrameStatus()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  if (mPlayState == MediaDecoder::PLAY_STATE_SEEKING) {
+  if (mSeekTarget.IsValid()) {
     return MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE_SEEKING;
   } else if (mPlayState == MediaDecoder::PLAY_STATE_ENDED) {
     return MediaDecoderOwner::NEXT_FRAME_UNAVAILABLE;
@@ -686,7 +679,7 @@ MediaDecoderOwner::NextFrameStatus AudioOffloadPlayer::GetNextFrameStatus()
   }
 }
 
-void AudioOffloadPlayer::SendMetaDataToHal(sp<AudioSink>& aSink,
+void AudioOffloadPlayer::SendMetaDataToHal(sp<GonkAudioSink>& aSink,
                                            const sp<MetaData>& aMeta)
 {
   int32_t sampleRate = 0;
@@ -714,7 +707,7 @@ void AudioOffloadPlayer::SendMetaDataToHal(sp<AudioSink>& aSink,
     param.addInt(String8(AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES), paddingSamples);
   }
 
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("SendMetaDataToHal: bitRate %d,"
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("SendMetaDataToHal: bitRate %d,"
       " sampleRate %d, chanMask %d, delaySample %d, paddingSample %d", bitRate,
       sampleRate, channelMask, delaySamples, paddingSamples));
 
@@ -732,9 +725,9 @@ void AudioOffloadPlayer::SetVolume(double aVolume)
 void AudioOffloadPlayer::WakeLockCreate()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("%s", __FUNCTION__));
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("%s", __FUNCTION__));
   if (!mWakeLock) {
-    nsRefPtr<dom::power::PowerManagerService> pmService =
+    RefPtr<dom::power::PowerManagerService> pmService =
       dom::power::PowerManagerService::GetInstance();
     NS_ENSURE_TRUE_VOID(pmService);
 
@@ -746,11 +739,10 @@ void AudioOffloadPlayer::WakeLockCreate()
 void AudioOffloadPlayer::WakeLockRelease()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  AUDIO_OFFLOAD_LOG(PR_LOG_DEBUG, ("%s", __FUNCTION__));
+  AUDIO_OFFLOAD_LOG(LogLevel::Debug, ("%s", __FUNCTION__));
   if (mWakeLock) {
     ErrorResult rv;
     mWakeLock->Unlock(rv);
-    NS_WARN_IF_FALSE(!rv.Failed(), "Failed to unlock the wakelock.");
     mWakeLock = nullptr;
   }
 }

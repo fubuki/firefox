@@ -23,7 +23,7 @@ public:
   AsyncColorChooser(COLORREF aInitialColor,
                     nsIWidget* aParentWidget,
                     nsIColorPickerShownCallback* aCallback);
-  NS_IMETHOD Run() MOZ_OVERRIDE;
+  NS_IMETHOD Run() override;
 
 private:
   void Update(COLORREF aColor);
@@ -47,7 +47,7 @@ public:
 
   NS_DECL_ISUPPORTS
 
-  NS_IMETHOD Init(nsIDOMWindow* parent, const nsAString& title,
+  NS_IMETHOD Init(mozIDOMWindowProxy* parent, const nsAString& title,
                   const nsAString& aInitialColor);
   NS_IMETHOD Open(nsIColorPickerShownCallback* aCallback);
 

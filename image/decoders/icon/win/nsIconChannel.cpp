@@ -17,13 +17,17 @@
 #include "nsMemory.h"
 #include "nsIStringStream.h"
 #include "nsIURL.h"
-#include "nsNetUtil.h"
+#include "nsIOutputStream.h"
+#include "nsIPipe.h"
+#include "nsNetCID.h"
 #include "nsIFile.h"
 #include "nsIFileURL.h"
 #include "nsIMIMEService.h"
 #include "nsCExternalHandlerService.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsProxyRelease.h"
+#include "nsContentSecurityManager.h"
+#include "nsContentUtils.h"
 
 #ifdef _WIN32_WINNT
 #undef _WIN32_WINNT
@@ -72,12 +76,7 @@ nsIconChannel::nsIconChannel()
 nsIconChannel::~nsIconChannel()
 {
   if (mLoadInfo) {
-    nsCOMPtr<nsIThread> mainThread;
-    NS_GetMainThread(getter_AddRefs(mainThread));
-
-    nsILoadInfo* forgetableLoadInfo;
-    mLoadInfo.forget(&forgetableLoadInfo);
-    NS_ProxyRelease(mainThread, forgetableLoadInfo, false);
+    NS_ReleaseOnMainThread(mLoadInfo.forget());
   }
 }
 
@@ -196,6 +195,15 @@ nsIconChannel::Open(nsIInputStream** _retval)
   return MakeInputStream(_retval, false);
 }
 
+NS_IMETHODIMP
+nsIconChannel::Open2(nsIInputStream** aStream)
+{
+  nsCOMPtr<nsIStreamListener> listener;
+  nsresult rv = nsContentSecurityManager::doContentSecurityCheck(this, listener);
+  NS_ENSURE_SUCCESS(rv, rv);
+  return Open(aStream);
+}
+
 nsresult
 nsIconChannel::ExtractIconInfoFromUrl(nsIFile** aLocalFile,
                         uint32_t* aDesiredImageSize, nsCString& aContentType,
@@ -227,6 +235,13 @@ NS_IMETHODIMP
 nsIconChannel::AsyncOpen(nsIStreamListener* aListener,
                                        nsISupports* ctxt)
 {
+  MOZ_ASSERT(!mLoadInfo ||
+             mLoadInfo->GetSecurityMode() == 0 ||
+             mLoadInfo->GetInitialSecurityCheckDone() ||
+             (mLoadInfo->GetSecurityMode() == nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL &&
+              nsContentUtils::IsSystemPrincipal(mLoadInfo->LoadingPrincipal())),
+             "security flags in loadInfo but asyncOpen2() not called");
+
   nsCOMPtr<nsIInputStream> inStream;
   nsresult rv = MakeInputStream(getter_AddRefs(inStream), true);
   if (NS_FAILED(rv)) {
@@ -249,6 +264,15 @@ nsIconChannel::AsyncOpen(nsIStreamListener* aListener,
     }
   }
   return rv;
+}
+
+NS_IMETHODIMP
+nsIconChannel::AsyncOpen2(nsIStreamListener* aListener)
+{
+  nsCOMPtr<nsIStreamListener> listener = aListener;
+  nsresult rv = nsContentSecurityManager::doContentSecurityCheck(this, listener);
+  NS_ENSURE_SUCCESS(rv, rv);
+  return AsyncOpen(listener, nullptr);
 }
 
 static DWORD
@@ -490,7 +514,7 @@ CreateBitmapInfo(BITMAPINFOHEADER* aHeader, size_t aColorTableSize)
 {
   BITMAPINFO* bmi = (BITMAPINFO*) ::operator new(sizeof(BITMAPINFOHEADER) +
                                                  aColorTableSize,
-                                                 mozilla::fallible_t());
+                                                 mozilla::fallible);
   if (bmi) {
     memcpy(bmi, aHeader, sizeof(BITMAPINFOHEADER));
     memset(bmi->bmiColors, 0, aColorTableSize);
@@ -550,11 +574,11 @@ nsIconChannel::MakeInputStream(nsIInputStream** _retval, bool aNonBlocking)
                             colorHeader.biSizeImage +
                             maskHeader.biSizeImage;
 
-        char* buffer = new char[iconSize];
+        UniquePtr<char[]> buffer = MakeUnique<char[]>(iconSize);
         if (!buffer) {
           rv = NS_ERROR_OUT_OF_MEMORY;
         } else {
-          char* whereTo = buffer;
+          char* whereTo = buffer.get();
           int howMuch;
 
           // the data starts with an icon file header
@@ -615,7 +639,7 @@ nsIconChannel::MakeInputStream(nsIInputStream** _retval, bool aNonBlocking)
                               iconSize, iconSize, aNonBlocking);
               if (NS_SUCCEEDED(rv)) {
                 uint32_t written;
-                rv = outStream->Write(buffer, iconSize, &written);
+                rv = outStream->Write(buffer.get(), iconSize, &written);
                 if (NS_SUCCEEDED(rv)) {
                   NS_ADDREF(*_retval = inStream);
                 }
@@ -625,7 +649,6 @@ nsIconChannel::MakeInputStream(nsIInputStream** _retval, bool aNonBlocking)
             delete maskInfo;
           } // if we got mask bits
           delete colorInfo;
-          delete [] buffer;
         } // if we allocated the buffer
       } // if we got mask size
 
@@ -708,8 +731,8 @@ nsIconChannel::
 NS_IMETHODIMP
 nsIconChannel::GetContentLength(int64_t* aContentLength)
 {
-  *aContentLength = mContentLength;
-  return NS_OK;
+  *aContentLength = 0;
+  return NS_ERROR_FAILURE;
 }
 
 NS_IMETHODIMP

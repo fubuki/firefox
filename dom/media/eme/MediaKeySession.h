@@ -16,6 +16,7 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/dom/Date.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/DetailedPromise.h"
 #include "mozilla/dom/MediaKeySessionBinding.h"
 #include "mozilla/dom/MediaKeysBinding.h"
 #include "mozilla/dom/MediaKeyMessageEventBinding.h"
@@ -23,16 +24,13 @@
 struct JSContext;
 
 namespace mozilla {
-
-class CDMProxy;
-
 namespace dom {
 
 class ArrayBufferViewOrArrayBuffer;
 class MediaKeyError;
 class MediaKeyStatusMap;
 
-class MediaKeySession MOZ_FINAL : public DOMEventTargetHelper
+class MediaKeySession final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -40,15 +38,16 @@ public:
                                            DOMEventTargetHelper)
 public:
   MediaKeySession(JSContext* aCx,
-                  nsPIDOMWindow* aParent,
+                  nsPIDOMWindowInner* aParent,
                   MediaKeys* aKeys,
                   const nsAString& aKeySystem,
+                  const nsAString& aCDMVersion,
                   SessionType aSessionType,
                   ErrorResult& aRv);
 
   void SetSessionId(const nsAString& aSessionId);
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // Mark this as resultNotAddRefed to return raw pointers
   MediaKeyError* GetError() const;
@@ -93,6 +92,8 @@ public:
 
   bool IsClosed() const;
 
+  void SetExpiration(double aExpiry);
+
   // Process-unique identifier.
   uint32_t Token() const;
 
@@ -101,17 +102,29 @@ private:
 
   void UpdateKeyStatusMap();
 
-  nsRefPtr<Promise> mClosed;
+  bool IsCallable() const {
+    // The EME spec sets the "callable value" to true whenever the CDM sets
+    // the sessionId. When the session is initialized, sessionId is empty and
+    // callable is thus false.
+    return !mSessionId.IsEmpty();
+  }
 
-  nsRefPtr<MediaKeyError> mMediaKeyError;
-  nsRefPtr<MediaKeys> mKeys;
+  already_AddRefed<DetailedPromise> MakePromise(ErrorResult& aRv,
+                                                const nsACString& aName);
+
+  RefPtr<DetailedPromise> mClosed;
+
+  RefPtr<MediaKeyError> mMediaKeyError;
+  RefPtr<MediaKeys> mKeys;
   const nsString mKeySystem;
+  const nsString mCDMVersion;
   nsString mSessionId;
   const SessionType mSessionType;
   const uint32_t mToken;
   bool mIsClosed;
   bool mUninitialized;
-  nsRefPtr<MediaKeyStatusMap> mKeyStatusMap;
+  RefPtr<MediaKeyStatusMap> mKeyStatusMap;
+  double mExpiration;
 };
 
 } // namespace dom

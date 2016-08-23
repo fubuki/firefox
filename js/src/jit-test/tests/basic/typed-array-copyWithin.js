@@ -172,6 +172,31 @@ for (var constructor of constructors) {
       assertEq(e, 42, "should have failed converting target to index");
     }
 
+    function detachAndConvertTo(x) {
+      return { valueOf() {
+                 detachArrayBuffer(tarray.buffer, "change-data");
+                 return x;
+               } };
+    }
+
+    // Detaching during argument processing triggers a TypeError.
+    tarray = new constructor([1, 2, 3, 4, 5]);
+    try
+    {
+      tarray.copyWithin(0, 3, detachAndConvertTo(4));
+      throw new Error("expected to throw");
+    }
+    catch (e)
+    {
+      assertEq(e instanceof TypeError, true,
+               "expected throw with detached buffer during set");
+    }
+
+    // ...unless no elements are to be copied.
+    tarray = new constructor([1, 2, 3, 4, 5]);
+    assertDeepEq(tarray.copyWithin(0, 3, detachAndConvertTo(3)),
+                 new constructor([]));
+
     /* // fails, unclear whether it should, disabling for now
     // test with a proxy object
     var handler = {

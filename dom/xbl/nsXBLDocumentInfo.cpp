@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,7 +12,6 @@
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScriptContext.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMScriptObjectFactory.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "nsIURI.h"
@@ -39,42 +38,14 @@ using namespace mozilla::dom;
 static const char kXBLCachePrefix[] = "xblcache";
 
 /* Implementation file */
-
-static PLDHashOperator
-TraverseProtos(const nsACString &aKey, nsXBLPrototypeBinding *aProto, void* aClosure)
-{
-  nsCycleCollectionTraversalCallback *cb =
-    static_cast<nsCycleCollectionTraversalCallback*>(aClosure);
-  aProto->Traverse(*cb);
-  return PL_DHASH_NEXT;
-}
-
-static PLDHashOperator
-UnlinkProto(const nsACString &aKey, nsXBLPrototypeBinding *aProto, void* aClosure)
-{
-  aProto->Unlink();
-  return PL_DHASH_NEXT;
-}
-
-struct ProtoTracer
-{
-  const TraceCallbacks &mCallbacks;
-  void *mClosure;
-};
-
-static PLDHashOperator
-TraceProtos(const nsACString &aKey, nsXBLPrototypeBinding *aProto, void* aClosure)
-{
-  ProtoTracer* closure = static_cast<ProtoTracer*>(aClosure);
-  aProto->Trace(closure->mCallbacks, closure->mClosure);
-  return PL_DHASH_NEXT;
-}
-
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsXBLDocumentInfo)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsXBLDocumentInfo)
   if (tmp->mBindingTable) {
-    tmp->mBindingTable->EnumerateRead(UnlinkProto, nullptr);
+    for (auto iter = tmp->mBindingTable->ConstIter();
+         !iter.Done(); iter.Next()) {
+      iter.UserData()->Unlink();
+    }
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -86,28 +57,26 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsXBLDocumentInfo)
   }
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument)
   if (tmp->mBindingTable) {
-    tmp->mBindingTable->EnumerateRead(TraverseProtos, &cb);
+    for (auto iter = tmp->mBindingTable->ConstIter();
+         !iter.Done(); iter.Next()) {
+      iter.UserData()->Traverse(cb);
+    }
   }
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsXBLDocumentInfo)
   if (tmp->mBindingTable) {
-    ProtoTracer closure = { aCallbacks, aClosure };
-    tmp->mBindingTable->EnumerateRead(TraceProtos, &closure);
+    for (auto iter = tmp->mBindingTable->ConstIter();
+         !iter.Done(); iter.Next()) {
+      iter.UserData()->Trace(aCallbacks, aClosure);
+    }
   }
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 static void
 UnmarkXBLJSObject(JS::GCCellPtr aPtr, const char* aName, void* aClosure)
 {
-  JS::ExposeObjectToActiveJS(aPtr.toObject());
-}
-
-static PLDHashOperator
-UnmarkProtos(const nsACString &aKey, nsXBLPrototypeBinding *aProto, void* aClosure)
-{
-  aProto->Trace(TraceCallbackFunc(UnmarkXBLJSObject), nullptr);
-  return PL_DHASH_NEXT;
+  JS::ExposeObjectToActiveJS(&aPtr.as<JSObject>());
 }
 
 void
@@ -118,7 +87,9 @@ nsXBLDocumentInfo::MarkInCCGeneration(uint32_t aGeneration)
   }
   // Unmark any JS we hold
   if (mBindingTable) {
-    mBindingTable->EnumerateRead(UnmarkProtos, nullptr);
+    for (auto iter = mBindingTable->Iter(); !iter.Done(); iter.Next()) {
+      iter.UserData()->Trace(TraceCallbackFunc(UnmarkXBLJSObject), nullptr);
+    }
   }
 }
 
@@ -213,16 +184,6 @@ nsXBLDocumentInfo::RemovePrototypeBinding(const nsACString& aRef)
   }
 }
 
-// Callback to enumerate over the bindings from this document and write them
-// out to the cache.
-static PLDHashOperator
-WriteBinding(const nsACString &aKey, nsXBLPrototypeBinding *aProto, void* aClosure)
-{
-  aProto->Write((nsIObjectOutputStream*)aClosure);
-
-  return PL_DHASH_NEXT;
-}
-
 // static
 nsresult
 nsXBLDocumentInfo::ReadPrototypeBindings(nsIURI* aURI, nsXBLDocumentInfo** aDocInfo)
@@ -236,17 +197,16 @@ nsXBLDocumentInfo::ReadPrototypeBindings(nsIURI* aURI, nsXBLDocumentInfo** aDocI
   StartupCache* startupCache = StartupCache::GetSingleton();
   NS_ENSURE_TRUE(startupCache, NS_ERROR_FAILURE);
 
-  nsAutoArrayPtr<char> buf;
+  UniquePtr<char[]> buf;
   uint32_t len;
-  rv = startupCache->GetBuffer(spec.get(), getter_Transfers(buf), &len);
+  rv = startupCache->GetBuffer(spec.get(), &buf, &len);
   // GetBuffer will fail if the binding is not in the cache.
   if (NS_FAILED(rv))
     return rv;
 
   nsCOMPtr<nsIObjectInputStream> stream;
-  rv = NewObjectInputStreamFromBuffer(buf, len, getter_AddRefs(stream));
+  rv = NewObjectInputStreamFromBuffer(Move(buf), len, getter_AddRefs(stream));
   NS_ENSURE_SUCCESS(rv, rv);
-  buf.forget();
 
   // The file compatibility.ini stores the build id. This is checked in
   // nsAppRunner.cpp and will delete the cache if a different build is
@@ -271,7 +231,7 @@ nsXBLDocumentInfo::ReadPrototypeBindings(nsIURI* aURI, nsXBLDocumentInfo** aDocI
 
   nsCOMPtr<nsIDocument> doc = do_QueryInterface(domdoc);
   NS_ASSERTION(doc, "Must have a document!");
-  nsRefPtr<nsXBLDocumentInfo> docInfo = new nsXBLDocumentInfo(doc);
+  RefPtr<nsXBLDocumentInfo> docInfo = new nsXBLDocumentInfo(doc);
 
   while (1) {
     uint8_t flags;
@@ -315,7 +275,9 @@ nsXBLDocumentInfo::WritePrototypeBindings()
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (mBindingTable) {
-    mBindingTable->EnumerateRead(WriteBinding, stream);
+    for (auto iter = mBindingTable->Iter(); !iter.Done(); iter.Next()) {
+      iter.UserData()->Write(stream);
+    }
   }
 
   // write a end marker at the end
@@ -326,11 +288,11 @@ nsXBLDocumentInfo::WritePrototypeBindings()
   NS_ENSURE_SUCCESS(rv, rv);
 
   uint32_t len;
-  nsAutoArrayPtr<char> buf;
-  rv = NewBufferFromStorageStream(storageStream, getter_Transfers(buf), &len);
+  UniquePtr<char[]> buf;
+  rv = NewBufferFromStorageStream(storageStream, &buf, &len);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return startupCache->PutBuffer(spec.get(), buf, len);
+  return startupCache->PutBuffer(spec.get(), buf.get(), len);
 }
 
 void
@@ -339,18 +301,13 @@ nsXBLDocumentInfo::SetFirstPrototypeBinding(nsXBLPrototypeBinding* aBinding)
   mFirstBinding = aBinding;
 }
 
-static PLDHashOperator
-FlushScopedSkinSheets(const nsACString &aKey, nsXBLPrototypeBinding *aProto, void* aClosure)
-{
-  aProto->FlushSkinSheets();
-  return PL_DHASH_NEXT;
-}
-
 void
 nsXBLDocumentInfo::FlushSkinStylesheets()
 {
   if (mBindingTable) {
-    mBindingTable->EnumerateRead(FlushScopedSkinSheets, nullptr);
+    for (auto iter = mBindingTable->Iter(); !iter.Done(); iter.Next()) {
+      iter.UserData()->FlushSkinSheets();
+    }
   }
 }
 

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,19 +9,19 @@
 #include "mozilla/Attributes.h"
 #include "nsString.h"
 #include "nsCOMPtr.h"
+#include "nsIContent.h"
+#include "nsNCRFallbackEncoderWrapper.h"
 
 class nsIURI;
 class nsIInputStream;
 class nsGenericHTMLElement;
-class nsILinkHandler;
-class nsIContent;
-class nsIFormControl;
-class nsIDOMHTMLElement;
-class nsIDocShell;
-class nsIRequest;
-class nsISaveAsCharset;
 class nsIMultiplexInputStream;
-class nsIDOMBlob;
+
+namespace mozilla {
+namespace dom {
+class Blob;
+} // namespace dom
+} // namespace mozilla
 
 /**
  * Class for form submissions; encompasses the function to call to submit as
@@ -44,16 +45,16 @@ public:
                                     const nsAString& aValue) = 0;
 
   /**
-   * Submit a name/file pair
+   * Submit a name/blob pair
    *
    * @param aName the name of the parameter
-   * @param aBlob the file to submit
-   * @param aFilename the filename to be used (not void)
+   * @param aBlob the blob to submit. The file's name will be used if the Blob
+   * is actually a File, otherwise 'blob' string is used instead if the aBlob is
+   * not null.
    */
-  virtual nsresult AddNameFilePair(const nsAString& aName,
-                                   nsIDOMBlob* aBlob,
-                                   const nsString& aFilename) = 0;
-  
+  virtual nsresult AddNameBlobOrNullPair(const nsAString& aName,
+                                         mozilla::dom::Blob* aBlob) = 0;
+
   /**
    * Reports whether the instance supports AddIsindex().
    *
@@ -141,7 +142,7 @@ public:
 
 private:
   // The encoder that will encode Unicode names and values
-  nsCOMPtr<nsISaveAsCharset> mEncoder;
+  nsNCRFallbackEncoderWrapper mEncoder;
 };
 
 /**
@@ -159,12 +160,11 @@ public:
   ~nsFSMultipartFormData();
  
   virtual nsresult AddNameValuePair(const nsAString& aName,
-                                    const nsAString& aValue) MOZ_OVERRIDE;
-  virtual nsresult AddNameFilePair(const nsAString& aName,
-                                   nsIDOMBlob* aBlob,
-                                   const nsString& aFilename) MOZ_OVERRIDE;
+                                    const nsAString& aValue) override;
+  virtual nsresult AddNameBlobOrNullPair(const nsAString& aName,
+                                         mozilla::dom::Blob* aBlob) override;
   virtual nsresult GetEncodedSubmission(nsIURI* aURI,
-                                        nsIInputStream** aPostDataStream) MOZ_OVERRIDE;
+                                        nsIInputStream** aPostDataStream) override;
 
   void GetContentType(nsACString& aContentType)
   {

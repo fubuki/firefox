@@ -47,14 +47,5 @@ filters::GetRow(Accessible* aAccessible)
 uint32_t
 filters::GetCell(Accessible* aAccessible)
 {
-  a11y::role role = aAccessible->Role();
-  return role == roles::GRID_CELL || role == roles::ROWHEADER ||
-    role == roles::COLUMNHEADER ? eMatch : eSkipSubtree;
-}
-
-uint32_t
-filters::GetEmbeddedObject(Accessible* aAccessible)
-{
-  return nsAccUtils::IsEmbeddedObject(aAccessible) ?
-    eMatch | eSkipSubtree : eSkipSubtree;
+  return aAccessible->IsTableCell() ? eMatch : eSkipSubtree;
 }

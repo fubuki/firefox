@@ -3,35 +3,33 @@
 
 
 add_task(function*() {
-  Services.search.addEngineWithDetails("MozSearch", "", "", "", "GET",
-                                       "http://s.example.com/search");
-  let engine = Services.search.getEngineByName("MozSearch");
-  Services.search.currentEngine = engine;
+  // Note that head_autocomplete.js has already added a MozSearch engine.
+  // Here we add another engine with a search alias.
   Services.search.addEngineWithDetails("AliasedMozSearch", "", "doit", "",
                                        "GET", "http://s.example.com/search");
 
-  do_log_info("search engine");
+  do_print("search engine");
   yield check_autocomplete({
     search: "mozilla",
     searchParam: "enable-actions",
-    matches: [ { uri: makeActionURI("searchengine", {engineName: "MozSearch", input: "mozilla", searchQuery: "mozilla"}), title: "MozSearch", style: [ "action", "searchengine" ] }, ]
+    matches: [ makeSearchMatch("mozilla", { heuristic: true }) ]
   });
 
-  do_log_info("search engine, uri-like input");
+  do_print("search engine, uri-like input");
   yield check_autocomplete({
     search: "http:///",
     searchParam: "enable-actions",
-    matches: [ { uri: makeActionURI("searchengine", {engineName: "MozSearch", input: "http:///", searchQuery: "http:///"}), title: "MozSearch", style: [ "action", "searchengine" ] }, ]
+    matches: [ makeSearchMatch("http:///", { heuristic: true }) ]
   });
 
-  do_log_info("search engine, multiple words");
+  do_print("search engine, multiple words");
   yield check_autocomplete({
     search: "mozzarella cheese",
     searchParam: "enable-actions",
-    matches: [ { uri: makeActionURI("searchengine", {engineName: "MozSearch", input: "mozzarella cheese", searchQuery: "mozzarella cheese"}), title: "MozSearch", style: [ "action", "searchengine" ] }, ]
+    matches: [ makeSearchMatch("mozzarella cheese", { heuristic: true }) ]
   });
 
-  do_log_info("search engine, after current engine has changed");
+  do_print("search engine, after current engine has changed");
   Services.search.addEngineWithDetails("MozSearch2", "", "", "", "GET",
                                        "http://s.example.com/search2");
   engine = Services.search.getEngineByName("MozSearch2");
@@ -40,7 +38,7 @@ add_task(function*() {
   yield check_autocomplete({
     search: "mozilla",
     searchParam: "enable-actions",
-    matches: [ { uri: makeActionURI("searchengine", {engineName: "MozSearch2", input: "mozilla", searchQuery: "mozilla"}), title: "MozSearch2", style: [ "action", "searchengine" ] }, ]
+    matches: [ makeSearchMatch("mozilla", { engineName: "MozSearch2", heuristic: true }) ]
   });
 
   yield cleanup();

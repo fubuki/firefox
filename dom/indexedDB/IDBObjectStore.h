@@ -1,11 +1,11 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_indexeddb_idbobjectstore_h__
-#define mozilla_dom_indexeddb_idbobjectstore_h__
+#ifndef mozilla_dom_idbobjectstore_h__
+#define mozilla_dom_idbobjectstore_h__
 
 #include "js/RootingAPI.h"
 #include "mozilla/dom/IDBCursorBinding.h"
@@ -18,7 +18,7 @@
 #include "nsWrapperCache.h"
 
 struct JSClass;
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 
@@ -27,33 +27,35 @@ class ErrorResult;
 namespace dom {
 
 class DOMStringList;
-class nsIContentParent;
+class IDBCursor;
+class IDBRequest;
+class IDBTransaction;
 template <typename> class Sequence;
 
 namespace indexedDB {
-
-class FileManager;
-class IDBCursor;
-class IDBKeyRange;
-class IDBRequest;
-class IDBTransaction;
-class IndexUpdateInfo;
 class Key;
 class KeyPath;
+class IndexUpdateInfo;
 class ObjectStoreSpec;
-struct StructuredCloneFile;
 struct StructuredCloneReadInfo;
+} // namespace indexedDB
 
-class IDBObjectStore MOZ_FINAL
+class IDBObjectStore final
   : public nsISupports
   , public nsWrapperCache
 {
+  typedef indexedDB::IndexUpdateInfo IndexUpdateInfo;
+  typedef indexedDB::Key Key;
+  typedef indexedDB::KeyPath KeyPath;
+  typedef indexedDB::ObjectStoreSpec ObjectStoreSpec;
+  typedef indexedDB::StructuredCloneReadInfo StructuredCloneReadInfo;
+
   // For AddOrPut() and DeleteInternal().
-  friend class IDBCursor; 
+  friend class IDBCursor;
 
   static const JSClass sDummyPropJSClass;
 
-  nsRefPtr<IDBTransaction> mTransaction;
+  RefPtr<IDBTransaction> mTransaction;
   JS::Heap<JS::Value> mCachedKeyPath;
 
   // This normally points to the ObjectStoreSpec owned by the parent IDBDatabase
@@ -63,7 +65,7 @@ class IDBObjectStore MOZ_FINAL
   const ObjectStoreSpec* mSpec;
   nsAutoPtr<ObjectStoreSpec> mDeletedSpec;
 
-  nsTArray<nsRefPtr<IDBIndex>> mIndexes;
+  nsTArray<RefPtr<IDBIndex>> mIndexes;
 
   const int64_t mId;
   bool mRooted;
@@ -79,6 +81,7 @@ public:
                         const KeyPath& aKeyPath,
                         bool aUnique,
                         bool aMultiEntry,
+                        const nsCString& aLocale,
                         JSContext* aCx,
                         JS::Handle<JS::Value> aObject,
                         nsTArray<IndexUpdateInfo>& aUpdateInfoArray);
@@ -95,6 +98,13 @@ public:
   DeserializeIndexValue(JSContext* aCx,
                         StructuredCloneReadInfo& aCloneReadInfo,
                         JS::MutableHandle<JS::Value> aValue);
+
+#if !defined(MOZ_B2G)
+  static bool
+  DeserializeUpgradeValue(JSContext* aCx,
+                          StructuredCloneReadInfo& aCloneReadInfo,
+                          JS::MutableHandle<JS::Value> aValue);
+#endif
 
   static const JSClass*
   DummyPropClass()
@@ -130,7 +140,7 @@ public:
   bool
   HasValidKeyPath() const;
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const;
 
   void
@@ -192,7 +202,7 @@ public:
   Get(JSContext* aCx, JS::Handle<JS::Value> aKey, ErrorResult& aRv);
 
   already_AddRefed<IDBRequest>
-  Clear(ErrorResult& aRv);
+  Clear(JSContext* aCx, ErrorResult& aRv);
 
   already_AddRefed<IDBIndex>
   CreateIndex(const nsAString& aName,
@@ -252,6 +262,17 @@ public:
   }
 
   already_AddRefed<IDBRequest>
+  OpenCursor(JSContext* aCx,
+             IDBCursorDirection aDirection,
+             ErrorResult& aRv)
+  {
+    AssertIsOnOwningThread();
+
+    return OpenCursorInternal(/* aKeysOnly */ false, aCx,
+                              JS::UndefinedHandleValue, aDirection, aRv);
+  }
+
+  already_AddRefed<IDBRequest>
   OpenKeyCursor(JSContext* aCx,
                 JS::Handle<JS::Value> aRange,
                 IDBCursorDirection aDirection,
@@ -272,12 +293,20 @@ public:
   void
   NoteDeletion();
 
+  bool
+  IsDeleted() const
+  {
+    AssertIsOnOwningThread();
+
+    return !!mDeletedSpec;
+  }
+
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(IDBObjectStore)
 
   // nsWrapperCache
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 private:
   IDBObjectStore(IDBTransaction* aTransaction, const ObjectStoreSpec* aSpec);
@@ -327,8 +356,7 @@ private:
                      ErrorResult& aRv);
 };
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla
 
-#endif // mozilla_dom_indexeddb_idbobjectstore_h__
+#endif // mozilla_dom_idbobjectstore_h__

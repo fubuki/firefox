@@ -10,14 +10,16 @@ EXPORTS += [
     'nsGeoPositionIPCSerialiser.h',
 ]
 
-UNIFIED_SOURCES += [
-    'nsGeoGridFuzzer.cpp',
+SOURCES += [
     'nsGeolocation.cpp',
+]
+
+UNIFIED_SOURCES += [
+    'MLSFallback.cpp',
+    'nsGeoGridFuzzer.cpp',
     'nsGeolocationSettings.cpp',
     'nsGeoPosition.cpp',
 ]
-
-FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -45,4 +47,10 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     LOCAL_INCLUDES += [
         '/dom/system/mac',
     ]
+elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+    LOCAL_INCLUDES += [
+        '/dom/system/windows',
+    ]
 
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

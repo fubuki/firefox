@@ -18,9 +18,10 @@ import re
 import shutil
 import sys
 import tempfile
+from bisect import bisect_right
 
 # The DMD output version this script handles.
-outputVersion = 3
+outputVersion = 5
 
 # If --ignore-alloc-fns is specified, stack frames containing functions that
 # match these strings will be removed from the *start* of stack traces. (Once
@@ -37,8 +38,6 @@ allocatorFns = [
     'memalign',
     'operator new(',
     'operator new[](',
-    'NS_Alloc',
-    'NS_Realloc',
     'g_slice_alloc',
     # This one necessary to fully filter some sequences of allocation functions
     # that happen in practice. Note that ??? entries that follow non-allocation
@@ -56,7 +55,6 @@ class Record(object):
         self.reqSize = 0
         self.slopSize = 0
         self.usableSize = 0
-        self.isSampled = False
         self.allocatedAtDesc = None
         self.reportedAtDescs = []
         self.usableSizes = collections.defaultdict(int)
@@ -75,8 +73,8 @@ class Record(object):
         self.usableSize = -self.usableSize
 
         negatedUsableSizes = collections.defaultdict(int)
-        for (usableSize, isSampled), count in self.usableSizes.items():
-            negatedUsableSizes[(-usableSize, isSampled)] = count
+        for usableSize, count in self.usableSizes.items():
+            negatedUsableSizes[-usableSize] = count
         self.usableSizes = negatedUsableSizes
 
     def subtract(self, r):
@@ -89,53 +87,44 @@ class Record(object):
         self.reqSize -= r.reqSize
         self.slopSize -= r.slopSize
         self.usableSize -= r.usableSize
-        self.isSampled = self.isSampled or r.isSampled
 
         usableSizes1 = self.usableSizes
         usableSizes2 = r.usableSizes
         usableSizes3 = collections.defaultdict(int)
-        for usableSize, isSampled in usableSizes1:
-            counts1 = usableSizes1[usableSize, isSampled]
-            if (usableSize, isSampled) in usableSizes2:
-                counts2 = usableSizes2[usableSize, isSampled]
-                del usableSizes2[usableSize, isSampled]
+        for usableSize in usableSizes1:
+            counts1 = usableSizes1[usableSize]
+            if usableSize in usableSizes2:
+                counts2 = usableSizes2[usableSize]
+                del usableSizes2[usableSize]
                 counts3 = counts1 - counts2
                 if counts3 != 0:
                     if counts3 < 0:
                         usableSize = -usableSize
                         counts3 = -counts3
-                    usableSizes3[usableSize, isSampled] = counts3
+                    usableSizes3[usableSize] = counts3
             else:
-                usableSizes3[usableSize, isSampled] = counts1
+                usableSizes3[usableSize] = counts1
 
-        for usableSize, isSampled in usableSizes2:
-            usableSizes3[-usableSize, isSampled] = \
-                usableSizes2[usableSize, isSampled]
+        for usableSize in usableSizes2:
+            usableSizes3[-usableSize] = usableSizes2[usableSize]
 
         self.usableSizes = usableSizes3
 
     @staticmethod
-    def cmpByIsSampled(r1, r2):
-        # Treat sampled as smaller than non-sampled.
-        return cmp(r2.isSampled, r1.isSampled)
-
-    @staticmethod
     def cmpByUsableSize(r1, r2):
-        # Sort by usable size, then req size, then by isSampled.
+        # Sort by usable size, then by req size.
         return cmp(abs(r1.usableSize), abs(r2.usableSize)) or \
                Record.cmpByReqSize(r1, r2)
 
     @staticmethod
     def cmpByReqSize(r1, r2):
-        # Sort by req size, then by isSampled.
-        return cmp(abs(r1.reqSize), abs(r2.reqSize)) or \
-               Record.cmpByIsSampled(r1, r2)
+        # Sort by req size.
+        return cmp(abs(r1.reqSize), abs(r2.reqSize))
 
     @staticmethod
     def cmpBySlopSize(r1, r2):
-        # Sort by slop size, then by isSampled.
-        return cmp(abs(r1.slopSize), abs(r2.slopSize)) or \
-               Record.cmpByIsSampled(r1, r2)
+        # Sort by slop size.
+        return cmp(abs(r1.slopSize), abs(r2.slopSize))
 
     @staticmethod
     def cmpByNumBlocks(r1, r2):
@@ -189,6 +178,12 @@ variable is used to find breakpad symbols for stack fixing.
 
     p.add_argument('--no-fix-stacks', action='store_true',
                    help='do not fix stacks')
+
+    p.add_argument('--clamp-contents', action='store_true',
+                   help='for a scan mode log, clamp addresses to the start of live blocks, or zero if not in one')
+
+    p.add_argument('--print-clamp-stats', action='store_true',
+                   help='print information about the results of pointer clamping; mostly useful for debugging clamping')
 
     p.add_argument('--filter-stacks-for-testing', action='store_true',
                    help='filter stack traces; only useful for testing purposes')
@@ -261,6 +256,9 @@ def getDigestFromFile(args, inputFile):
     if not args.no_fix_stacks:
         fixStackTraces(inputFile, isZipped, opener)
 
+    if args.clamp_contents:
+        clampBlockList(args, inputFile, isZipped, opener)
+
     with opener(inputFile, 'rb') as f:
         j = json.load(f)
 
@@ -271,15 +269,25 @@ def getDigestFromFile(args, inputFile):
     invocation = j['invocation']
     dmdEnvVar = invocation['dmdEnvVar']
     mode = invocation['mode']
-    sampleBelowSize = invocation['sampleBelowSize']
     blockList = j['blockList']
     traceTable = j['traceTable']
     frameTable = j['frameTable']
 
+    # Insert the necessary entries for unrecorded stack traces. Note that 'ut'
+    # and 'uf' will not overlap with any keys produced by DMD's
+    # ToIdStringConverter::Base32() function.
+    unrecordedTraceID = 'ut'
+    unrecordedFrameID = 'uf'
+    traceTable[unrecordedTraceID] = [unrecordedFrameID]
+    frameTable[unrecordedFrameID] = \
+        '#00: (no stack trace recorded due to --stacks=partial)'
+
+    # For the purposes of this script, 'scan' behaves like 'live'.
+    if mode == 'scan':
+        mode = 'live'
+
     if not mode in ['live', 'dark-matter', 'cumulative']:
         raise Exception("bad 'mode' property: '{:s}'".format(mode))
-
-    heapIsSampled = sampleBelowSize > 1     # is sampling present?
 
     # Remove allocation functions at the start of traces.
     if args.ignore_alloc_fns:
@@ -376,7 +384,7 @@ def getDigestFromFile(args, inputFile):
             recordKeyPartCache[traceKey] = recordKeyPart
             return recordKeyPart
 
-        allocatedAtTraceKey = block['alloc']
+        allocatedAtTraceKey = block.get('alloc', unrecordedTraceID)
         if mode in ['live', 'cumulative']:
             recordKey = makeRecordKeyPart(allocatedAtTraceKey)
             records = liveOrCumulativeRecords
@@ -395,28 +403,25 @@ def getDigestFromFile(args, inputFile):
 
         record = records[recordKey]
 
-        if 'req' in block:
-            # not sampled
-            reqSize = block['req']
-            slopSize = block.get('slop', 0)
-            isSampled = False
+        if 'req' not in block:
+            raise Exception("'req' property missing in block'")
+
+        reqSize = block['req']
+        slopSize = block.get('slop', 0)
+
+        if 'num' in block:
+            num = block['num']
         else:
-            # sampled
-            reqSize = sampleBelowSize
-            if 'slop' in block:
-                raise Exception("'slop' property in sampled block'")
-            slopSize = 0
-            isSampled = True
+            num = 1
 
         usableSize = reqSize + slopSize
-        heapUsableSize += usableSize
-        heapBlocks += 1
+        heapUsableSize += num * usableSize
+        heapBlocks += num
 
-        record.numBlocks  += 1
-        record.reqSize    += reqSize
-        record.slopSize   += slopSize
-        record.usableSize += usableSize
-        record.isSampled   = record.isSampled or isSampled
+        record.numBlocks  += num
+        record.reqSize    += num * reqSize
+        record.slopSize   += num * slopSize
+        record.usableSize += num * usableSize
         if record.allocatedAtDesc == None:
             record.allocatedAtDesc = \
                 buildTraceDescription(traceTable, frameTable,
@@ -428,16 +433,14 @@ def getDigestFromFile(args, inputFile):
             if 'reps' in block and record.reportedAtDescs == []:
                 f = lambda k: buildTraceDescription(traceTable, frameTable, k)
                 record.reportedAtDescs = map(f, reportedAtTraceKeys)
-        record.usableSizes[(usableSize, isSampled)] += 1
+        record.usableSizes[usableSize] += num
 
     # All the processed data for a single DMD file is called a "digest".
     digest = {}
     digest['dmdEnvVar'] = dmdEnvVar
     digest['mode'] = mode
-    digest['sampleBelowSize'] = sampleBelowSize
     digest['heapUsableSize'] = heapUsableSize
     digest['heapBlocks'] = heapBlocks
-    digest['heapIsSampled'] = heapIsSampled
     if mode in ['live', 'cumulative']:
         digest['liveOrCumulativeRecords'] = liveOrCumulativeRecords
     elif mode == 'dark-matter':
@@ -479,10 +482,8 @@ def diffDigests(args, d1, d2):
     d3 = {}
     d3['dmdEnvVar'] = (d1['dmdEnvVar'], d2['dmdEnvVar'])
     d3['mode'] = d1['mode']
-    d3['sampleBelowSize'] = (d1['sampleBelowSize'], d2['sampleBelowSize'])
     d3['heapUsableSize'] = d2['heapUsableSize'] - d1['heapUsableSize']
     d3['heapBlocks']     = d2['heapBlocks']     - d1['heapBlocks']
-    d3['heapIsSampled']  = d2['heapIsSampled'] or d1['heapIsSampled']
     if d1['mode'] in ['live', 'cumulative']:
         d3['liveOrCumulativeRecords'] = \
             diffRecords(args, d1['liveOrCumulativeRecords'],
@@ -500,9 +501,7 @@ def diffDigests(args, d1, d2):
 def printDigest(args, digest):
     dmdEnvVar       = digest['dmdEnvVar']
     mode            = digest['mode']
-    sampleBelowSize = digest['sampleBelowSize']
     heapUsableSize  = digest['heapUsableSize']
-    heapIsSampled   = digest['heapIsSampled']
     heapBlocks      = digest['heapBlocks']
     if mode in ['live', 'cumulative']:
         liveOrCumulativeRecords = digest['liveOrCumulativeRecords']
@@ -513,10 +512,9 @@ def printDigest(args, digest):
 
     separator = '#' + '-' * 65 + '\n'
 
-    def number(n, isSampled):
-        '''Format a number, with comma as a separator and a '~' prefix if it's
-        sampled.'''
-        return '{:}{:,d}'.format('~' if isSampled else '', n)
+    def number(n):
+        '''Format a number with comma as a separator.'''
+        return '{:,d}'.format(n)
 
     def perc(m, n):
         return 0 if n == 0 else (100 * m / n)
@@ -561,19 +559,16 @@ def printDigest(args, digest):
 
             kindCumulativeUsableSize += record.usableSize
 
-            isSampled = record.isSampled
-
             out(RecordKind + ' {')
             out('  {:} block{:} in heap block record {:,d} of {:,d}'.
-                format(number(record.numBlocks, isSampled),
+                format(number(record.numBlocks),
                        plural(record.numBlocks), i, numRecords))
             out('  {:} bytes ({:} requested / {:} slop)'.
-                format(number(record.usableSize, isSampled),
-                       number(record.reqSize, isSampled),
-                       number(record.slopSize, isSampled)))
+                format(number(record.usableSize),
+                       number(record.reqSize),
+                       number(record.slopSize)))
 
-            abscmp = lambda ((usableSize1, _1a), _1b), \
-                            ((usableSize2, _2a), _2b): \
+            abscmp = lambda (usableSize1, _1), (usableSize2, _2): \
                             cmp(abs(usableSize1), abs(usableSize2))
             usableSizes = sorted(record.usableSizes.items(), cmp=abscmp,
                                  reverse=True)
@@ -586,10 +581,10 @@ def printDigest(args, digest):
                     out('(no change)', end='')
                 else:
                     isFirst = True
-                    for (usableSize, isSampled), count in usableSizes:
+                    for usableSize, count in usableSizes:
                         if not isFirst:
                             out('; ', end='')
-                        out('{:}'.format(number(usableSize, isSampled)), end='')
+                        out('{:}'.format(number(usableSize)), end='')
                         if count > 1:
                             out(' x {:,d}'.format(count), end='')
                         isFirst = False
@@ -621,14 +616,13 @@ def printDigest(args, digest):
         return (kindUsableSize, kindBlocks)
 
 
-    def printInvocation(n, dmdEnvVar, mode, sampleBelowSize):
+    def printInvocation(n, dmdEnvVar, mode):
         out('Invocation{:} {{'.format(n))
         if dmdEnvVar == None:
             out('  $DMD is undefined')
         else:
             out('  $DMD = \'' + dmdEnvVar + '\'')
         out('  Mode = \'' + mode + '\'')
-        out('  Sample-below size = ' + str(sampleBelowSize))
         out('}\n')
 
     # Print command line. Strip dirs so the output is deterministic, which is
@@ -638,10 +632,10 @@ def printDigest(args, digest):
 
     # Print invocation(s).
     if type(dmdEnvVar) is not tuple:
-        printInvocation('', dmdEnvVar, mode, sampleBelowSize)
+        printInvocation('', dmdEnvVar, mode)
     else:
-        printInvocation(' 1', dmdEnvVar[0], mode, sampleBelowSize[0])
-        printInvocation(' 2', dmdEnvVar[1], mode, sampleBelowSize[1])
+        printInvocation(' 1', dmdEnvVar[0], mode)
+        printInvocation(' 2', dmdEnvVar[1], mode)
 
     # Print records.
     if mode in ['live', 'cumulative']:
@@ -662,35 +656,224 @@ def printDigest(args, digest):
     out('Summary {')
     if mode in ['live', 'cumulative']:
         out('  Total: {:} bytes in {:} blocks'.
-            format(number(liveOrCumulativeUsableSize, heapIsSampled),
-                   number(liveOrCumulativeBlocks, heapIsSampled)))
+            format(number(liveOrCumulativeUsableSize),
+                   number(liveOrCumulativeBlocks)))
     elif mode == 'dark-matter':
         fmt = '  {:15} {:>12} bytes ({:6.2f}%) in {:>7} blocks ({:6.2f}%)'
         out(fmt.
             format('Total:',
-                   number(heapUsableSize, heapIsSampled),
+                   number(heapUsableSize),
                    100,
-                   number(heapBlocks, heapIsSampled),
+                   number(heapBlocks),
                    100))
         out(fmt.
             format('Unreported:',
-                   number(unreportedUsableSize, heapIsSampled),
+                   number(unreportedUsableSize),
                    perc(unreportedUsableSize, heapUsableSize),
-                   number(unreportedBlocks, heapIsSampled),
+                   number(unreportedBlocks),
                    perc(unreportedBlocks, heapBlocks)))
         out(fmt.
             format('Once-reported:',
-                   number(onceReportedUsableSize, heapIsSampled),
+                   number(onceReportedUsableSize),
                    perc(onceReportedUsableSize, heapUsableSize),
-                   number(onceReportedBlocks, heapIsSampled),
+                   number(onceReportedBlocks),
                    perc(onceReportedBlocks, heapBlocks)))
         out(fmt.
             format('Twice-reported:',
-                   number(twiceReportedUsableSize, heapIsSampled),
+                   number(twiceReportedUsableSize),
                    perc(twiceReportedUsableSize, heapUsableSize),
-                   number(twiceReportedBlocks, heapIsSampled),
+                   number(twiceReportedBlocks),
                    perc(twiceReportedBlocks, heapBlocks)))
     out('}\n')
+
+
+#############################
+# Pretty printer for DMD JSON
+#############################
+
+def prettyPrintDmdJson(out, j):
+    out.write('{\n')
+
+    out.write(' "version": {0},\n'.format(j['version']))
+    out.write(' "invocation": ')
+    json.dump(j['invocation'], out, sort_keys=True)
+    out.write(',\n')
+
+    out.write(' "blockList": [')
+    first = True
+    for b in j['blockList']:
+        out.write('' if first else ',')
+        out.write('\n  ')
+        json.dump(b, out, sort_keys=True)
+        first = False
+    out.write('\n ],\n')
+
+    out.write(' "traceTable": {')
+    first = True
+    for k, l in j['traceTable'].iteritems():
+        out.write('' if first else ',')
+        out.write('\n  "{0}": {1}'.format(k, json.dumps(l)))
+        first = False
+    out.write('\n },\n')
+
+    out.write(' "frameTable": {')
+    first = True
+    for k, v in j['frameTable'].iteritems():
+        out.write('' if first else ',')
+        out.write('\n  "{0}": {1}'.format(k, json.dumps(v)))
+        first = False
+    out.write('\n }\n')
+
+    out.write('}\n')
+
+
+##################################################################
+# Code for clamping addresses using conservative pointer analysis.
+##################################################################
+
+# Start is the address of the first byte of the block, while end is
+# the address of the first byte after the final byte in the block.
+class AddrRange:
+    def __init__(self, block, length):
+        self.block = block
+        self.start = int(block, 16)
+        self.length = length
+        self.end = self.start + self.length
+
+        assert self.start > 0
+        assert length >= 0
+
+
+class ClampStats:
+    def __init__(self):
+        # Number of pointers already pointing to the start of a block.
+        self.startBlockPtr = 0
+
+        # Number of pointers pointing to the middle of a block. These
+        # are clamped to the start of the block they point into.
+        self.midBlockPtr = 0
+
+        # Number of null pointers.
+        self.nullPtr = 0
+
+        # Number of non-null pointers that didn't point into the middle
+        # of any blocks. These are clamped to null.
+        self.nonNullNonBlockPtr = 0
+
+
+    def clampedBlockAddr(self, sameAddress):
+        if sameAddress:
+            self.startBlockPtr += 1
+        else:
+            self.midBlockPtr += 1
+
+    def nullAddr(self):
+        self.nullPtr += 1
+
+    def clampedNonBlockAddr(self):
+        self.nonNullNonBlockPtr += 1
+
+    def log(self):
+        sys.stderr.write('Results:\n')
+        sys.stderr.write('  Number of pointers already pointing to start of blocks: ' + str(self.startBlockPtr) + '\n')
+        sys.stderr.write('  Number of pointers clamped to start of blocks: ' + str(self.midBlockPtr) + '\n')
+        sys.stderr.write('  Number of non-null pointers not pointing into blocks clamped to null: ' + str(self.nonNullNonBlockPtr) + '\n')
+        sys.stderr.write('  Number of null pointers: ' + str(self.nullPtr) + '\n')
+
+
+# Search the block ranges array for a block that address points into.
+# The search is carried out in an array of starting addresses for each blocks
+# because it is faster.
+def clampAddress(blockRanges, blockStarts, clampStats, address):
+    i = bisect_right(blockStarts, address)
+
+    # Any addresses completely out of the range should have been eliminated already.
+    assert i > 0
+    r = blockRanges[i - 1]
+    assert r.start <= address
+
+    if address >= r.end:
+        assert address < blockRanges[i].start
+        clampStats.clampedNonBlockAddr()
+        return '0'
+
+    clampStats.clampedBlockAddr(r.start == address)
+    return r.block
+
+
+def clampBlockList(args, inputFileName, isZipped, opener):
+    # XXX This isn't very efficient because we end up reading and writing
+    # the file multiple times.
+    with opener(inputFileName, 'rb') as f:
+        j = json.load(f)
+
+    if j['version'] != outputVersion:
+        raise Exception("'version' property isn't '{:d}'".format(outputVersion))
+
+    # Check that the invocation is reasonable for contents clamping.
+    invocation = j['invocation']
+    if invocation['mode'] != 'scan':
+        raise Exception("Log was taken in mode " + invocation['mode'] + " not scan")
+
+    sys.stderr.write('Creating block range list.\n')
+    blockList = j['blockList']
+    blockRanges = []
+    for block in blockList:
+        blockRanges.append(AddrRange(block['addr'], block['req']))
+    blockRanges.sort(key=lambda r: r.start)
+
+    # Make sure there are no overlapping blocks.
+    prevRange = blockRanges[0]
+    for currRange in blockRanges[1:]:
+        assert prevRange.end <= currRange.start
+        prevRange = currRange
+
+    sys.stderr.write('Clamping block contents.\n')
+    clampStats = ClampStats()
+    firstAddr = blockRanges[0].start
+    lastAddr = blockRanges[-1].end
+
+    blockStarts = []
+    for r in blockRanges:
+        blockStarts.append(r.start)
+
+    for block in blockList:
+        # Small blocks don't have any contents.
+        if not 'contents' in block:
+            continue
+
+        cont = block['contents']
+        for i in range(len(cont)):
+            address = int(cont[i], 16)
+
+            if address == 0:
+                clampStats.nullAddr()
+                continue
+
+            # If the address is before the first block or after the last
+            # block then it can't be within a block.
+            if address < firstAddr or address >= lastAddr:
+                clampStats.clampedNonBlockAddr()
+                cont[i] = '0'
+                continue
+
+            cont[i] = clampAddress(blockRanges, blockStarts, clampStats, address)
+
+        # Remove any trailing nulls.
+        while len(cont) and cont[-1] == '0':
+            cont.pop()
+
+    if args.print_clamp_stats:
+        clampStats.log()
+
+    sys.stderr.write('Saving file.\n')
+    tmpFile = tempfile.NamedTemporaryFile(delete=False)
+    tmpFilename = tmpFile.name
+    if isZipped:
+        tmpFile = gzip.GzipFile(filename='', fileobj=tmpFile)
+    prettyPrintDmdJson(tmpFile, j)
+    tmpFile.close()
+    shutil.move(tmpFilename, inputFileName)
 
 
 def main():

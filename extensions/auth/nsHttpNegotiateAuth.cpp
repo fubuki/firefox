@@ -33,10 +33,13 @@
 #include "plbase64.h"
 #include "plstr.h"
 #include "prprf.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "prmem.h"
 #include "prnetdb.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Snprintf.h"
+#include "nsIChannel.h"
+#include "nsNetUtil.h"
 
 //-----------------------------------------------------------------------------
 
@@ -50,6 +53,15 @@ static const char kNegotiateAuthSSPI[] = "network.auth.use-sspi";
 #define kNegotiateLen  (sizeof(kNegotiate)-1)
 
 //-----------------------------------------------------------------------------
+
+// Return false when the channel comes from a Private browsing window.
+static bool
+TestNotInPBMode(nsIHttpAuthenticableChannel *authChannel)
+{
+    nsCOMPtr<nsIChannel> bareChannel = do_QueryInterface(authChannel);
+    MOZ_ASSERT(bareChannel);
+    return !NS_UsePrivateBrowsing(bareChannel);
+}
 
 NS_IMETHODIMP
 nsHttpNegotiateAuth::GetAuthFlags(uint32_t *flags)
@@ -112,8 +124,9 @@ nsHttpNegotiateAuth::ChallengeReceived(nsIHttpAuthenticableChannel *authChannel,
         proxyInfo->GetHost(service);
     }
     else {
-        bool allowed = TestNonFqdn(uri) ||
-                       TestPref(uri, kNegotiateAuthTrustedURIs);
+        bool allowed = TestNotInPBMode(authChannel) &&
+                       (TestNonFqdn(uri) ||
+                       TestPref(uri, kNegotiateAuthTrustedURIs));
         if (!allowed) {
             LOG(("nsHttpNegotiateAuth::ChallengeReceived URI blocked\n"));
             return NS_ERROR_ABORT;
@@ -268,7 +281,7 @@ nsHttpNegotiateAuth::GenerateCredentials(nsIHttpAuthenticableChannel *authChanne
     //
     char *encoded_token = PL_Base64Encode((char *)outToken, outTokenLen, nullptr);
 
-    nsMemory::Free(outToken);
+    free(outToken);
 
     if (!encoded_token)
         return NS_ERROR_OUT_OF_MEMORY;
@@ -276,11 +289,12 @@ nsHttpNegotiateAuth::GenerateCredentials(nsIHttpAuthenticableChannel *authChanne
     LOG(("  Sending a token of length %d\n", outTokenLen));
 
     // allocate a buffer sizeof("Negotiate" + " " + b64output_token + "\0")
-    *creds = (char *) nsMemory::Alloc(kNegotiateLen + 1 + strlen(encoded_token) + 1);
+    const int bufsize = kNegotiateLen + 1 + strlen(encoded_token) + 1;
+    *creds = (char *) moz_xmalloc(bufsize);
     if (MOZ_UNLIKELY(!*creds))
         rv = NS_ERROR_OUT_OF_MEMORY;
     else
-        sprintf(*creds, "%s %s", kNegotiate, encoded_token);
+        snprintf(*creds, bufsize, "%s %s", kNegotiate, encoded_token);
 
     PR_Free(encoded_token);
     return rv;
@@ -314,7 +328,7 @@ nsHttpNegotiateAuth::TestNonFqdn(nsIURI *uri)
         return false;
 
     // return true if host does not contain a dot and is not an ip address
-    return !host.IsEmpty() && host.FindChar('.') == kNotFound &&
+    return !host.IsEmpty() && !host.Contains('.') &&
            PR_StringToNetAddr(host.BeginReading(), &addr) != PR_SUCCESS;
 }
 
@@ -368,7 +382,7 @@ nsHttpNegotiateAuth::TestPref(nsIURI *uri, const char *pref)
         start = end + 1;
     }
     
-    nsMemory::Free(hostList);
+    free(hostList);
     return false;
 }
 

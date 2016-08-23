@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,6 +22,7 @@
 #include "js/TypeDecls.h"     // for Handle, Value, JSObject, JSContext
 #include "mozilla/dom/DOMString.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include <iosfwd>
 
 // Including 'windows.h' will #define GetClassInfo to something else.
 #ifdef XP_WIN
@@ -33,6 +35,7 @@ class nsAttrAndChildArray;
 class nsChildContentList;
 struct nsCSSSelectorList;
 class nsDOMAttributeMap;
+class nsIAnimationObserver;
 class nsIContent;
 class nsIDocument;
 class nsIDOMElement;
@@ -40,14 +43,15 @@ class nsIDOMNodeList;
 class nsIEditor;
 class nsIFrame;
 class nsIMutationObserver;
+class nsINode;
 class nsINodeList;
 class nsIPresShell;
 class nsIPrincipal;
 class nsIURI;
 class nsNodeSupportsWeakRefTearoff;
 class nsNodeWeakReference;
-class nsXPCClassInfo;
 class nsDOMMutationObserver;
+struct ServoNodeData;
 
 namespace mozilla {
 class EventListenerManager;
@@ -71,7 +75,6 @@ class DOMQuad;
 class DOMRectReadOnly;
 class Element;
 class EventHandlerNonNull;
-class OnErrorEventHandlerNonNull;
 template<typename T> class Optional;
 class Text;
 class TextOrElementOrDocument;
@@ -239,7 +242,7 @@ private:
 // defined, it is inherited from nsINode.
 // This macro isn't actually specific to nodes, and bug 956400 will move it into MFBT.
 #define NS_DECL_SIZEOF_EXCLUDING_THIS \
-  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
 
 // Categories of node properties
 // 0 is global.
@@ -248,8 +251,8 @@ private:
 
 // IID for the nsINode interface
 #define NS_INODE_IID \
-{ 0x66972940, 0x1d1b, 0x4d15, \
- { 0x93, 0x11, 0x96, 0x72, 0x84, 0x2e, 0xc7, 0x27 } }
+{ 0x70ba4547, 0x7699, 0x44fc, \
+  { 0xb3, 0x20, 0x52, 0xdb, 0xe3, 0xd1, 0xf9, 0x0a } }
 
 /**
  * An internal interface that abstracts some DOMNode-related parts that both
@@ -311,14 +314,17 @@ public:
 
 #ifdef MOZILLA_INTERNAL_API
   explicit nsINode(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
-  : mNodeInfo(aNodeInfo),
-    mParent(nullptr),
-    mBoolFlags(0),
-    mNextSibling(nullptr),
-    mPreviousSibling(nullptr),
-    mFirstChild(nullptr),
-    mSubtreeRoot(this),
-    mSlots(nullptr)
+  : mNodeInfo(aNodeInfo)
+  , mParent(nullptr)
+  , mBoolFlags(0)
+  , mNextSibling(nullptr)
+  , mPreviousSibling(nullptr)
+  , mFirstChild(nullptr)
+  , mSubtreeRoot(this)
+  , mSlots(nullptr)
+#ifdef MOZ_STYLO
+  , mServoNodeData(nullptr)
+#endif
   {
   }
 #endif
@@ -366,7 +372,7 @@ public:
    */
   virtual bool IsNodeOfType(uint32_t aFlags) const = 0;
 
-  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   /**
    * returns true if we are in priviliged code or
@@ -379,8 +385,12 @@ protected:
    * WrapNode is called from WrapObject to actually wrap this node, WrapObject
    * does some additional checks and fix-up that's common to all nodes. WrapNode
    * should just call the DOM binding's Wrap function.
+   *
+   * aGivenProto is the prototype to use (or null if the default one should be
+   * used) and should just be passed directly on to the DOM binding's Wrap
+   * function.
    */
-  virtual JSObject* WrapNode(JSContext *aCx) = 0;
+  virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) = 0;
 
 public:
   mozilla::dom::ParentObject GetParentObject() const; // Implemented in nsIDocument.h
@@ -465,10 +475,18 @@ public:
   virtual int32_t IndexOf(const nsINode* aPossibleChild) const = 0;
 
   /**
-   * Return the "owner document" of this node.  Note that this is not the same
-   * as the DOM ownerDocument -- that's null for Document nodes, whereas for a
-   * nsIDocument GetOwnerDocument returns the document itself.  For nsIContent
-   * implementations the two are the same.
+   * Returns the "node document" of this node.
+   *
+   * https://dom.spec.whatwg.org/#concept-node-document
+   *
+   * Note that in the case that this node is a document node this method
+   * will return |this|.  That is different to the Node.ownerDocument DOM
+   * attribute (implemented by nsINode::GetOwnerDocument) which is specified to
+   * be null in that case:
+   *
+   * https://dom.spec.whatwg.org/#dom-node-ownerdocument
+   *
+   * For all other cases OwnerDoc and GetOwnerDocument behave identically.
    */
   nsIDocument *OwnerDoc() const
   {
@@ -492,14 +510,6 @@ public:
   }
 
   /**
-   * @deprecated
-   */
-  bool IsInDoc() const
-  {
-    return IsInUncomposedDoc();
-  }
-
-  /**
    * Get the document that this content is currently in, if any. This will be
    * null if the content has no ancestor that is a document.
    *
@@ -512,32 +522,14 @@ public:
   }
 
   /**
-   * @deprecated
-   */
-  nsIDocument *GetCurrentDoc() const
-  {
-    return GetUncomposedDoc();
-  }
-
-  /**
-   * This method gets the current doc of the node hosting this content
-   * or the current doc of this content if it is not being hosted. This
-   * method walks through ShadowRoot boundaries until it reach the host
-   * that is located in the root of the "tree of trees" (see Shadow DOM
-   * spec) and returns the current doc for that host.
+   * This method returns the owner doc if the node is in the
+   * composed document (as defined in the Shadow DOM spec), otherwise
+   * it returns null.
    */
   nsIDocument* GetComposedDoc() const
   {
     return IsInShadowTree() ?
       GetComposedDocInternal() : GetUncomposedDoc();
-  }
-
-  /**
-   * @deprecated
-   */
-  nsIDocument* GetCrossShadowCurrentDoc() const
-  {
-    return GetComposedDoc();
   }
 
   /**
@@ -566,14 +558,102 @@ public:
   }
 
   /**
-   * Get the tag for this element. This will always return a non-null atom
-   * pointer (as implied by the naming of the method).  For elements this is
-   * the non-namespaced tag, and for other nodes it's something like "#text",
-   * "#comment", "#document", etc.
+   * Get the NodeInfo for this element
+   * @return the nodes node info
    */
-  nsIAtom* Tag() const
+  inline mozilla::dom::NodeInfo* NodeInfo() const
   {
-    return mNodeInfo->NameAtom();
+    return mNodeInfo;
+  }
+
+  inline bool IsInNamespace(int32_t aNamespace) const
+  {
+    return mNodeInfo->NamespaceID() == aNamespace;
+  }
+
+  /**
+   * Print a debugger friendly descriptor of this element. This will describe
+   * the position of this element in the document.
+   */
+  friend std::ostream& operator<<(std::ostream& aStream, const nsINode& aNode);
+
+protected:
+  // These 2 methods are useful for the recursive templates IsHTMLElement,
+  // IsSVGElement, etc.
+  inline bool IsNodeInternal() const
+  {
+    return false;
+  }
+
+  template<typename First, typename... Args>
+  inline bool IsNodeInternal(First aFirst, Args... aArgs) const
+  {
+    return mNodeInfo->Equals(aFirst) || IsNodeInternal(aArgs...);
+  }
+
+public:
+  inline bool IsHTMLElement() const
+  {
+    return IsElement() && IsInNamespace(kNameSpaceID_XHTML);
+  }
+
+  inline bool IsHTMLElement(nsIAtom* aTag) const
+  {
+    return IsElement() && mNodeInfo->Equals(aTag, kNameSpaceID_XHTML);
+  }
+
+  template<typename First, typename... Args>
+  inline bool IsAnyOfHTMLElements(First aFirst, Args... aArgs) const
+  {
+    return IsHTMLElement() && IsNodeInternal(aFirst, aArgs...);
+  }
+
+  inline bool IsSVGElement() const
+  {
+    return IsElement() && IsInNamespace(kNameSpaceID_SVG);
+  }
+
+  inline bool IsSVGElement(nsIAtom* aTag) const
+  {
+    return IsElement() && mNodeInfo->Equals(aTag, kNameSpaceID_SVG);
+  }
+
+  template<typename First, typename... Args>
+  inline bool IsAnyOfSVGElements(First aFirst, Args... aArgs) const
+  {
+    return IsSVGElement() && IsNodeInternal(aFirst, aArgs...);
+  }
+
+  inline bool IsXULElement() const
+  {
+    return IsElement() && IsInNamespace(kNameSpaceID_XUL);
+  }
+
+  inline bool IsXULElement(nsIAtom* aTag) const
+  {
+    return IsElement() && mNodeInfo->Equals(aTag, kNameSpaceID_XUL);
+  }
+
+  template<typename First, typename... Args>
+  inline bool IsAnyOfXULElements(First aFirst, Args... aArgs) const
+  {
+    return IsXULElement() && IsNodeInternal(aFirst, aArgs...);
+  }
+
+  inline bool IsMathMLElement() const
+  {
+    return IsElement() && IsInNamespace(kNameSpaceID_MathML);
+  }
+
+  inline bool IsMathMLElement(nsIAtom* aTag) const
+  {
+    return IsElement() && mNodeInfo->Equals(aTag, kNameSpaceID_MathML);
+  }
+
+  template<typename First, typename... Args>
+  inline bool IsAnyOfMathMLElements(First aFirst, Args... aArgs) const
+  {
+    return IsMathMLElement() && IsNodeInternal(aFirst, aArgs...);
   }
 
   /**
@@ -621,7 +701,7 @@ public:
   {
     return InsertChildAt(aKid, GetChildCount(), aNotify);
   }
-  
+
   /**
    * Remove a child from this node.  This method handles calling UnbindFromTree
    * on the child appropriately.
@@ -784,7 +864,7 @@ public:
   virtual void* UnsetProperty(uint16_t aCategory,
                               nsIAtom *aPropertyName,
                               nsresult *aStatus = nullptr);
-  
+
   bool HasProperties() const
   {
     return HasFlag(NODE_HAS_PROPERTIES);
@@ -816,7 +896,7 @@ public:
   {
     return mParent;
   }
-  
+
   /**
    * Get the parent nsINode for this node if it is an Element.
    * @return the parent node
@@ -839,15 +919,20 @@ public:
    */
   nsINode* SubtreeRoot() const;
 
+  nsINode* RootNode() const
+  {
+    return SubtreeRoot();
+  }
+
   /**
    * See nsIDOMEventTarget
    */
   NS_DECL_NSIDOMEVENTTARGET
 
   virtual mozilla::EventListenerManager*
-    GetExistingListenerManager() const MOZ_OVERRIDE;
+    GetExistingListenerManager() const override;
   virtual mozilla::EventListenerManager*
-    GetOrCreateListenerManager() MOZ_OVERRIDE;
+    GetOrCreateListenerManager() override;
 
   using mozilla::dom::EventTarget::RemoveEventListener;
   using nsIDOMEventTarget::AddEventListener;
@@ -855,9 +940,13 @@ public:
                                 mozilla::dom::EventListener* aListener,
                                 bool aUseCapture,
                                 const mozilla::dom::Nullable<bool>& aWantsUntrusted,
-                                mozilla::ErrorResult& aRv) MOZ_OVERRIDE;
+                                mozilla::ErrorResult& aRv) override;
   using nsIDOMEventTarget::AddSystemEventListener;
-  virtual nsIDOMWindow* GetOwnerGlobal() MOZ_OVERRIDE;
+
+  virtual bool HasApzAwareListeners() const override;
+
+  virtual nsPIDOMWindowOuter* GetOwnerGlobalForBindings() override;
+  virtual nsIGlobalObject* GetOwnerGlobal() const override;
 
   /**
    * Adds a mutation observer to be notified when this node, or any of its
@@ -868,6 +957,9 @@ public:
    * adding observers while inside a notification is not a good idea.  An
    * observer that is already observing the node must not be added without
    * being removed first.
+   *
+   * For mutation observers that implement nsIAnimationObserver, use
+   * AddAnimationObserver instead.
    */
   void AddMutationObserver(nsIMutationObserver* aMutationObserver)
   {
@@ -881,12 +973,29 @@ public:
   /**
    * Same as above, but only adds the observer if its not observing
    * the node already.
+   *
+   * For mutation observers that implement nsIAnimationObserver, use
+   * AddAnimationObserverUnlessExists instead.
    */
   void AddMutationObserverUnlessExists(nsIMutationObserver* aMutationObserver)
   {
     nsSlots* s = Slots();
     s->mMutationObservers.AppendElementUnlessExists(aMutationObserver);
   }
+
+  /**
+   * Same as AddMutationObserver, but for nsIAnimationObservers.  This
+   * additionally records on the document that animation observers have
+   * been registered, which is used to determine whether notifications
+   * must be fired when animations are added, removed or changed.
+   */
+  void AddAnimationObserver(nsIAnimationObserver* aAnimationObserver);
+
+  /**
+   * Same as above, but only adds the observer if its not observing
+   * the node already.
+   */
+  void AddAnimationObserverUnlessExists(nsIAnimationObserver* aAnimationObserver);
 
   /**
    * Removes a mutation observer.
@@ -915,11 +1024,7 @@ public:
   class nsSlots
   {
   public:
-    nsSlots()
-      : mChildNodes(nullptr),
-        mWeakReference(nullptr)
-    {
-    }
+    nsSlots();
 
     // If needed we could remove the vtable pointer this dtor causes by
     // putting a DestroySlots function on nsINode
@@ -937,15 +1042,20 @@ public:
      * An object implementing nsIDOMNodeList for this content (childNodes)
      * @see nsIDOMNodeList
      * @see nsGenericHTMLElement::GetChildNodes
-     *
-     * MSVC 7 doesn't like this as an nsRefPtr
      */
-    nsChildContentList* mChildNodes;
+    RefPtr<nsChildContentList> mChildNodes;
 
     /**
-     * Weak reference to this node
+     * Weak reference to this node.  This is cleared by the destructor of
+     * nsNodeWeakReference.
      */
-    nsNodeWeakReference* mWeakReference;
+    nsNodeWeakReference* MOZ_NON_OWNING_REF mWeakReference;
+
+    /**
+     * Number of descendant nodes in the uncomposed document that have been
+     * explicitly set as editable.
+     */
+    uint32_t mEditableDescendantCount;
   };
 
   /**
@@ -980,6 +1090,22 @@ public:
                  "Trying to unset write-only flags");
     nsWrapperCache::UnsetFlags(aFlagsToUnset);
   }
+
+  void ChangeEditableDescendantCount(int32_t aDelta);
+
+  /**
+   * Returns the count of descendant nodes in the uncomposed
+   * document that are explicitly set as editable.
+   */
+  uint32_t EditableDescendantCount();
+
+  /**
+   * Sets the editable descendant count to 0. The editable
+   * descendant count only counts explicitly editable nodes
+   * that are in the uncomposed document so this method
+   * should be called when nodes are are removed from it.
+   */
+  void ResetEditableDescendantCount();
 
   void SetEditableFlag(bool aEditable)
   {
@@ -1021,7 +1147,7 @@ public:
   // Note: This asserts |IsInAnonymousSubtree()|.
   bool IsAnonymousContentInSVGUseSubtree() const;
 
-  // True for native anonymous content and for XBL content if the binging
+  // True for native anonymous content and for XBL content if the binding
   // has chromeOnlyContent="true".
   bool ChromeOnlyAccess() const
   {
@@ -1105,7 +1231,7 @@ protected:
     }
     return nullptr;
   }
-  
+
 public:
   void GetTextContent(nsAString& aTextContent,
                       mozilla::ErrorResult& aError)
@@ -1160,7 +1286,7 @@ public:
   nsresult GetUserData(const nsAString& aKey, nsIVariant** aResult)
   {
     NS_IF_ADDREF(*aResult = GetUserData(aKey));
-  
+
     return NS_OK;
   }
 
@@ -1321,7 +1447,7 @@ private:
     NodeIsCCMarkedRoot,
     // Maybe set if this node is in black subtree.
     NodeIsCCBlackTree,
-    // Maybe set if the node is a root of a subtree 
+    // Maybe set if the node is a root of a subtree
     // which needs to be kept in the purple buffer.
     NodeIsPurpleRoot,
     // Set if the node has an explicit base URI stored
@@ -1365,6 +1491,8 @@ private:
     ElementHasWeirdParserInsertionMode,
     // Parser sets this flag if it has notified about the node.
     ParserHasNotified,
+    // EventListenerManager sets this flag in case we have apz aware listeners.
+    MayHaveApzAwareListeners,
     // Guard value
     BooleanFlagCount
   };
@@ -1472,8 +1600,11 @@ public:
                "ClearHasTextNodeDirectionalityMap on non-text node");
     ClearBoolFlag(NodeHasTextNodeDirectionalityMap);
   }
-  bool HasTextNodeDirectionalityMap() const
-    { return GetBoolFlag(NodeHasTextNodeDirectionalityMap); }
+  bool HasTextNodeDirectionalityMap() const {
+    MOZ_ASSERT(NodeType() == nsIDOMNode::TEXT_NODE,
+               "HasTextNodeDirectionalityMap on non-text node");
+    return GetBoolFlag(NodeHasTextNodeDirectionalityMap);
+  }
 
   void SetHasDirAuto() { SetBoolFlag(NodeHasDirAuto); }
   void ClearHasDirAuto() { ClearBoolFlag(NodeHasDirAuto); }
@@ -1507,6 +1638,12 @@ public:
   void SetHasRelevantHoverRules() { SetBoolFlag(NodeHasRelevantHoverRules); }
   void SetParserHasNotified() { SetBoolFlag(ParserHasNotified); };
   bool HasParserNotified() { return GetBoolFlag(ParserHasNotified); }
+
+  void SetMayHaveApzAwareListeners() { SetBoolFlag(MayHaveApzAwareListeners); }
+  bool NodeMayHaveApzAwareListeners() const
+  {
+    return GetBoolFlag(MayHaveApzAwareListeners);
+  }
 protected:
   void SetParentIsContent(bool aValue) { SetBoolFlag(ParentIsContent, aValue); }
   void SetInDocument() { SetBoolFlag(IsInDocument); }
@@ -1536,7 +1673,7 @@ protected:
   void SetSubtreeRootPointer(nsINode* aSubtreeRoot)
   {
     NS_ASSERTION(aSubtreeRoot, "aSubtreeRoot can never be null!");
-    NS_ASSERTION(!(IsNodeOfType(eCONTENT) && IsInDoc()) &&
+    NS_ASSERTION(!(IsNodeOfType(eCONTENT) && IsInUncomposedDoc()) &&
                  !IsInShadowTree(), "Shouldn't be here!");
     mSubtreeRoot = aSubtreeRoot;
   }
@@ -1553,7 +1690,7 @@ public:
   // aObject alive anymore.
   void UnbindObject(nsISupports* aObject);
 
-  void GetBoundMutationObservers(nsTArray<nsRefPtr<nsDOMMutationObserver> >& aResult);
+  void GetBoundMutationObservers(nsTArray<RefPtr<nsDOMMutationObserver> >& aResult);
 
   /**
    * Returns the length of this node, as specified at
@@ -1594,6 +1731,8 @@ public:
     // The DOM spec says that when nodeValue is defined to be null "setting it
     // has no effect", so we don't throw an exception.
   }
+  void EnsurePreInsertionValidity(nsINode& aNewChild, nsINode* aRefChild,
+                                  mozilla::ErrorResult& aError);
   nsINode* InsertBefore(nsINode& aNode, nsINode* aChild,
                         mozilla::ErrorResult& aError)
   {
@@ -1610,6 +1749,7 @@ public:
   }
   nsINode* RemoveChild(nsINode& aChild, mozilla::ErrorResult& aError);
   already_AddRefed<nsINode> CloneNode(bool aDeep, mozilla::ErrorResult& aError);
+  bool IsSameNode(nsINode* aNode);
   bool IsEqualNode(nsINode* aNode);
   void GetNamespaceURI(nsAString& aNamespaceURI) const
   {
@@ -1621,7 +1761,7 @@ public:
     mNodeInfo->GetPrefix(aPrefix);
   }
 #endif
-  void GetLocalName(mozilla::dom::DOMString& aLocalName)
+  void GetLocalName(mozilla::dom::DOMString& aLocalName) const
   {
     const nsString& localName = LocalName();
     if (localName.IsVoid()) {
@@ -1649,7 +1789,7 @@ public:
     nsINode* parent = GetParentNode();
     mozilla::ErrorResult rv;
     parent->RemoveChild(*this, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   // ChildNode methods
@@ -1665,7 +1805,7 @@ public:
   mozilla::dom::Element* GetLastElementChild() const;
 
   void GetBoxQuads(const BoxQuadOptions& aOptions,
-                   nsTArray<nsRefPtr<DOMQuad> >& aResult,
+                   nsTArray<RefPtr<DOMQuad> >& aResult,
                    mozilla::ErrorResult& aRv);
 
   already_AddRefed<DOMQuad> ConvertQuadFromNode(DOMQuad& aQuad,
@@ -1743,6 +1883,11 @@ protected:
   nsresult CompareDocumentPosition(nsIDOMNode* aOther,
                                    uint16_t* aReturn);
 
+  void EnsurePreInsertionValidity1(nsINode& aNewChild, nsINode* aRefChild,
+                                   mozilla::ErrorResult& aError);
+  void EnsurePreInsertionValidity2(bool aReplace, nsINode& aNewChild,
+                                   nsINode* aRefChild,
+                                   mozilla::ErrorResult& aError);
   nsresult ReplaceOrInsertBefore(bool aReplace, nsIDOMNode *aNewChild,
                                  nsIDOMNode *aRefChild, nsIDOMNode **aReturn);
   nsINode* ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
@@ -1815,33 +1960,65 @@ public:
 #undef TOUCH_EVENT
 #undef EVENT
 
+  ServoNodeData* GetServoNodeData() {
+#ifdef MOZ_STYLO
+    return mServoNodeData;
+#else
+    MOZ_CRASH("Accessing servo node data in non-stylo build");
+#endif
+  }
+
+  void SetServoNodeData(ServoNodeData* aData) {
+#ifdef MOZ_STYLO
+  MOZ_ASSERT(!mServoNodeData);
+  mServoNodeData = aData;
+#else
+    MOZ_CRASH("Setting servo node data in non-stylo build");
+#endif
+  }
+
 protected:
   static bool Traverse(nsINode *tmp, nsCycleCollectionTraversalCallback &cb);
   static void Unlink(nsINode *tmp);
 
-  nsRefPtr<mozilla::dom::NodeInfo> mNodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> mNodeInfo;
 
-  nsINode* mParent;
+  // mParent is an owning ref most of the time, except for the case of document
+  // nodes, so it cannot be represented by nsCOMPtr, so mark is as
+  // MOZ_OWNING_REF.
+  nsINode* MOZ_OWNING_REF mParent;
 
 private:
   // Boolean flags.
   uint32_t mBoolFlags;
 
 protected:
-  nsIContent* mNextSibling;
-  nsIContent* mPreviousSibling;
-  nsIContent* mFirstChild;
+  // These references are non-owning and safe, as they are managed by
+  // nsAttrAndChildArray.
+  nsIContent* MOZ_NON_OWNING_REF mNextSibling;
+  nsIContent* MOZ_NON_OWNING_REF mPreviousSibling;
+  // This reference is non-owning and safe, since in the case of documents,
+  // it is set to null when the document gets destroyed, and in the case of
+  // other nodes, the children keep the parents alive.
+  nsIContent* MOZ_NON_OWNING_REF mFirstChild;
 
   union {
     // Pointer to our primary frame.  Might be null.
     nsIFrame* mPrimaryFrame;
 
     // Pointer to the root of our subtree.  Might be null.
-    nsINode* mSubtreeRoot;
+    // This reference is non-owning and safe, since it either points to the
+    // object itself, or is reset by ClearSubtreeRootPointer.
+    nsINode* MOZ_NON_OWNING_REF mSubtreeRoot;
   };
 
   // Storage for more members that are usually not needed; allocated lazily.
   nsSlots* mSlots;
+
+#ifdef MOZ_STYLO
+  // Layout data managed by Servo.
+  ServoNodeData* mServoNodeData;
+#endif
 };
 
 inline nsIDOMNode* GetAsDOMNode(nsINode* aNode)
@@ -1877,81 +2054,81 @@ ToCanonicalSupports(nsINode* aPointer)
 }
 
 #define NS_FORWARD_NSIDOMNODE_TO_NSINODE_HELPER(...) \
-  NS_IMETHOD GetNodeName(nsAString& aNodeName) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetNodeName(nsAString& aNodeName) __VA_ARGS__ override \
   { \
     aNodeName = nsINode::NodeName(); \
     return NS_OK; \
   } \
-  NS_IMETHOD GetNodeValue(nsAString& aNodeValue) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetNodeValue(nsAString& aNodeValue) __VA_ARGS__ override \
   { \
     nsINode::GetNodeValue(aNodeValue); \
     return NS_OK; \
   } \
-  NS_IMETHOD SetNodeValue(const nsAString& aNodeValue) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD SetNodeValue(const nsAString& aNodeValue) __VA_ARGS__ override \
   { \
     mozilla::ErrorResult rv; \
     nsINode::SetNodeValue(aNodeValue, rv); \
-    return rv.ErrorCode(); \
+    return rv.StealNSResult(); \
   } \
-  NS_IMETHOD GetNodeType(uint16_t* aNodeType) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetNodeType(uint16_t* aNodeType) __VA_ARGS__ override \
   { \
     *aNodeType = nsINode::NodeType(); \
     return NS_OK; \
   } \
-  NS_IMETHOD GetParentNode(nsIDOMNode** aParentNode) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetParentNode(nsIDOMNode** aParentNode) __VA_ARGS__ override \
   { \
     return nsINode::GetParentNode(aParentNode); \
   } \
-  NS_IMETHOD GetParentElement(nsIDOMElement** aParentElement) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetParentElement(nsIDOMElement** aParentElement) __VA_ARGS__ override \
   { \
     return nsINode::GetParentElement(aParentElement); \
   } \
-  NS_IMETHOD GetChildNodes(nsIDOMNodeList** aChildNodes) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetChildNodes(nsIDOMNodeList** aChildNodes) __VA_ARGS__ override \
   { \
     return nsINode::GetChildNodes(aChildNodes); \
   } \
-  NS_IMETHOD GetFirstChild(nsIDOMNode** aFirstChild) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetFirstChild(nsIDOMNode** aFirstChild) __VA_ARGS__ override \
   { \
     return nsINode::GetFirstChild(aFirstChild); \
   } \
-  NS_IMETHOD GetLastChild(nsIDOMNode** aLastChild) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetLastChild(nsIDOMNode** aLastChild) __VA_ARGS__ override \
   { \
     return nsINode::GetLastChild(aLastChild); \
   } \
-  NS_IMETHOD GetPreviousSibling(nsIDOMNode** aPreviousSibling) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetPreviousSibling(nsIDOMNode** aPreviousSibling) __VA_ARGS__ override \
   { \
     return nsINode::GetPreviousSibling(aPreviousSibling); \
   } \
-  NS_IMETHOD GetNextSibling(nsIDOMNode** aNextSibling) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetNextSibling(nsIDOMNode** aNextSibling) __VA_ARGS__ override \
   { \
     return nsINode::GetNextSibling(aNextSibling); \
   } \
-  NS_IMETHOD GetOwnerDocument(nsIDOMDocument** aOwnerDocument) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetOwnerDocument(nsIDOMDocument** aOwnerDocument) __VA_ARGS__ override \
   { \
     return nsINode::GetOwnerDocument(aOwnerDocument); \
   } \
-  NS_IMETHOD InsertBefore(nsIDOMNode* aNewChild, nsIDOMNode* aRefChild, nsIDOMNode** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD InsertBefore(nsIDOMNode* aNewChild, nsIDOMNode* aRefChild, nsIDOMNode** aResult) __VA_ARGS__ override \
   { \
     return ReplaceOrInsertBefore(false, aNewChild, aRefChild, aResult); \
   } \
-  NS_IMETHOD ReplaceChild(nsIDOMNode* aNewChild, nsIDOMNode* aOldChild, nsIDOMNode** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD ReplaceChild(nsIDOMNode* aNewChild, nsIDOMNode* aOldChild, nsIDOMNode** aResult) __VA_ARGS__ override \
   { \
     return ReplaceOrInsertBefore(true, aNewChild, aOldChild, aResult); \
   } \
-  NS_IMETHOD RemoveChild(nsIDOMNode* aOldChild, nsIDOMNode** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD RemoveChild(nsIDOMNode* aOldChild, nsIDOMNode** aResult) __VA_ARGS__ override \
   { \
     return nsINode::RemoveChild(aOldChild, aResult); \
   } \
-  NS_IMETHOD AppendChild(nsIDOMNode* aNewChild, nsIDOMNode** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD AppendChild(nsIDOMNode* aNewChild, nsIDOMNode** aResult) __VA_ARGS__ override \
   { \
     return InsertBefore(aNewChild, nullptr, aResult); \
   } \
-  NS_IMETHOD HasChildNodes(bool* aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD HasChildNodes(bool* aResult) __VA_ARGS__ override \
   { \
     *aResult = nsINode::HasChildNodes(); \
     return NS_OK; \
   } \
-  NS_IMETHOD CloneNode(bool aDeep, uint8_t aArgc, nsIDOMNode** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD CloneNode(bool aDeep, uint8_t aArgc, nsIDOMNode** aResult) __VA_ARGS__ override \
   { \
     if (aArgc == 0) { \
       aDeep = true; \
@@ -1959,91 +2136,91 @@ ToCanonicalSupports(nsINode* aPointer)
     mozilla::ErrorResult rv; \
     nsCOMPtr<nsINode> clone = nsINode::CloneNode(aDeep, rv); \
     if (rv.Failed()) { \
-      return rv.ErrorCode(); \
+      return rv.StealNSResult(); \
     } \
     *aResult = clone.forget().take()->AsDOMNode(); \
     return NS_OK; \
   } \
-  NS_IMETHOD Normalize() __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD Normalize() __VA_ARGS__ override \
   { \
     nsINode::Normalize(); \
     return NS_OK; \
   } \
-  NS_IMETHOD GetNamespaceURI(nsAString& aNamespaceURI) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetNamespaceURI(nsAString& aNamespaceURI) __VA_ARGS__ override \
   { \
     nsINode::GetNamespaceURI(aNamespaceURI); \
     return NS_OK; \
   } \
-  NS_IMETHOD GetPrefix(nsAString& aPrefix) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetPrefix(nsAString& aPrefix) __VA_ARGS__ override \
   { \
     nsINode::GetPrefix(aPrefix); \
     return NS_OK; \
   } \
-  NS_IMETHOD GetLocalName(nsAString& aLocalName) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetLocalName(nsAString& aLocalName) __VA_ARGS__ override \
   { \
     aLocalName = nsINode::LocalName(); \
     return NS_OK; \
   } \
-  NS_IMETHOD UnusedPlaceholder(bool* aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD UnusedPlaceholder(bool* aResult) __VA_ARGS__ override \
   { \
     *aResult = false; \
     return NS_OK; \
   } \
-  NS_IMETHOD GetDOMBaseURI(nsAString& aBaseURI) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetDOMBaseURI(nsAString& aBaseURI) __VA_ARGS__ override \
   { \
     nsINode::GetBaseURI(aBaseURI); \
     return NS_OK; \
   } \
-  NS_IMETHOD CompareDocumentPosition(nsIDOMNode* aOther, uint16_t* aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD CompareDocumentPosition(nsIDOMNode* aOther, uint16_t* aResult) __VA_ARGS__ override \
   { \
     return nsINode::CompareDocumentPosition(aOther, aResult); \
   } \
-  NS_IMETHOD GetTextContent(nsAString& aTextContent) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetTextContent(nsAString& aTextContent) __VA_ARGS__ override \
   { \
     mozilla::ErrorResult rv; \
     nsINode::GetTextContent(aTextContent, rv); \
-    return rv.ErrorCode(); \
+    return rv.StealNSResult(); \
   } \
-  NS_IMETHOD SetTextContent(const nsAString& aTextContent) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD SetTextContent(const nsAString& aTextContent) __VA_ARGS__ override \
   { \
     mozilla::ErrorResult rv; \
     nsINode::SetTextContent(aTextContent, rv); \
-    return rv.ErrorCode(); \
+    return rv.StealNSResult(); \
   } \
-  NS_IMETHOD LookupPrefix(const nsAString& aNamespaceURI, nsAString& aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD LookupPrefix(const nsAString& aNamespaceURI, nsAString& aResult) __VA_ARGS__ override \
   { \
     nsINode::LookupPrefix(aNamespaceURI, aResult); \
     return NS_OK; \
   } \
-  NS_IMETHOD IsDefaultNamespace(const nsAString& aNamespaceURI, bool* aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD IsDefaultNamespace(const nsAString& aNamespaceURI, bool* aResult) __VA_ARGS__ override \
   { \
     *aResult = nsINode::IsDefaultNamespace(aNamespaceURI); \
     return NS_OK; \
   } \
-  NS_IMETHOD LookupNamespaceURI(const nsAString& aPrefix, nsAString& aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD LookupNamespaceURI(const nsAString& aPrefix, nsAString& aResult) __VA_ARGS__ override \
   { \
     nsINode::LookupNamespaceURI(aPrefix, aResult); \
     return NS_OK; \
   } \
-  NS_IMETHOD IsEqualNode(nsIDOMNode* aArg, bool* aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD IsEqualNode(nsIDOMNode* aArg, bool* aResult) __VA_ARGS__ override \
   { \
     return nsINode::IsEqualNode(aArg, aResult); \
   } \
-  NS_IMETHOD SetUserData(const nsAString& aKey, nsIVariant* aData, nsIVariant** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD SetUserData(const nsAString& aKey, nsIVariant* aData, nsIVariant** aResult) __VA_ARGS__ override \
   { \
     return nsINode::SetUserData(aKey, aData, aResult); \
   } \
-  NS_IMETHOD GetUserData(const nsAString& aKey, nsIVariant** aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD GetUserData(const nsAString& aKey, nsIVariant** aResult) __VA_ARGS__ override \
   { \
     return nsINode::GetUserData(aKey, aResult); \
   } \
-  NS_IMETHOD Contains(nsIDOMNode* aOther, bool* aResult) __VA_ARGS__ MOZ_OVERRIDE \
+  NS_IMETHOD Contains(nsIDOMNode* aOther, bool* aResult) __VA_ARGS__ override \
   { \
     return nsINode::Contains(aOther, aResult); \
   }
 
 #define NS_FORWARD_NSIDOMNODE_TO_NSINODE \
-  NS_FORWARD_NSIDOMNODE_TO_NSINODE_HELPER(MOZ_FINAL)
+  NS_FORWARD_NSIDOMNODE_TO_NSINODE_HELPER(final)
 
 #define NS_FORWARD_NSIDOMNODE_TO_NSINODE_OVERRIDABLE \
   NS_FORWARD_NSIDOMNODE_TO_NSINODE_HELPER()

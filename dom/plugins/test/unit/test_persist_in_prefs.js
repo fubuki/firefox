@@ -6,13 +6,9 @@
 Components.utils.import("resource://gre/modules/Services.jsm");
 
 // Plugin registry uses different field delimeters on different platforms
-let DELIM = ":";
-if ("@mozilla.org/windows-registry-key;1" in Components.classes)
-  DELIM = "|";
+var DELIM = mozinfo.os == "win" ? "|" : ":";
 
-let gProfD = do_get_profile_startup();
-let gDirSvc = Cc["@mozilla.org/file/directory_service;1"].
-             getService(Ci.nsIProperties);
+var gProfD = do_get_profile_startup();
 
 // Writes out some plugin registry to the profile
 function write_registry(version, info) {
@@ -30,7 +26,7 @@ function write_registry(version, info) {
   let foStream = Components.classes["@mozilla.org/network/file-output-stream;1"]
                            .createInstance(Components.interfaces.nsIFileOutputStream);
   // write, create, truncate
-  foStream.init(registry, 0x02 | 0x08 | 0x20, 0666, 0);
+  foStream.init(registry, 0x02 | 0x08 | 0x20, 0o666, 0);
 
   let charset = "UTF-8"; // Can be any character encoding name that Mozilla supports
   let os = Cc["@mozilla.org/intl/converter-output-stream;1"].

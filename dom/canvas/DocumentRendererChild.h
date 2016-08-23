@@ -20,7 +20,7 @@ public:
     DocumentRendererChild();
     virtual ~DocumentRendererChild();
 
-    bool RenderDocument(nsIDOMWindow *window,
+    bool RenderDocument(nsPIDOMWindowOuter* window,
                         const nsRect& documentRect, const gfx::Matrix& transform,
                         const nsString& bgcolor,
                         uint32_t renderFlags, bool flushLayout,
@@ -31,7 +31,7 @@ private:
     DISALLOW_EVIL_CONSTRUCTORS(DocumentRendererChild);
 };
 
-}
-}
+} // namespace ipc
+} // namespace mozilla
 
 #endif

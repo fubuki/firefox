@@ -20,8 +20,6 @@
 #include "mozilla/MemoryReporting.h"
 
 class nsIFile;
-class nsCString;
-class nsString;
 class nsAdoptingString;
 class nsAdoptingCString;
 
@@ -34,12 +32,12 @@ namespace mozilla {
 
 namespace dom {
 class PrefSetting;
-}
+} // namespace dom
 
-class Preferences MOZ_FINAL : public nsIPrefService,
-                              public nsIObserver,
-                              public nsIPrefBranchInternal,
-                              public nsSupportsWeakReference
+class Preferences final : public nsIPrefService,
+                          public nsIObserver,
+                          public nsIPrefBranchInternal,
+                          public nsSupportsWeakReference
 {
 public:
   typedef mozilla::dom::PrefSetting PrefSetting;
@@ -204,7 +202,7 @@ public:
   static nsresult SetFloat(const char* aPref, float aValue);
   static nsresult SetCString(const char* aPref, const char* aValue);
   static nsresult SetCString(const char* aPref, const nsACString &aValue);
-  static nsresult SetString(const char* aPref, const char16_t* aValue);
+  static nsresult SetString(const char* aPref, const char16ptr_t aValue);
   static nsresult SetString(const char* aPref, const nsAString &aValue);
 
   static nsresult SetComplex(const char* aPref, const nsIID &aType,
@@ -276,6 +274,10 @@ public:
   static nsresult AddUintVarCache(uint32_t* aVariable,
                                   const char* aPref,
                                   uint32_t aDefault = 0);
+  template <MemoryOrdering Order>
+  static nsresult AddAtomicUintVarCache(Atomic<uint32_t, Order>* aVariable,
+                                        const char* aPref,
+                                        uint32_t aDefault = 0);
   static nsresult AddFloatVarCache(float* aVariable,
                                    const char* aPref,
                                    float aDefault = 0.0f);

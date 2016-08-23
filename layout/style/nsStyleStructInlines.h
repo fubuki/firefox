@@ -14,6 +14,7 @@
 #include "nsIFrame.h"
 #include "nsStyleStruct.h"
 #include "nsIContent.h" // for GetParent()
+#include "nsTextFrame.h" // for nsTextFrame::ShouldSuppressLineBreak
 
 inline void
 nsStyleImage::SetSubImage(uint8_t aIndex, imgIContainer* aSubImage) const
@@ -40,6 +41,14 @@ nsCSSShadowArray*
 nsStyleText::GetTextShadow() const
 {
   return mTextShadow;
+}
+
+bool
+nsStyleText::NewlineIsSignificant(const nsTextFrame* aContextFrame) const
+{
+  NS_ASSERTION(aContextFrame->StyleText() == this, "unexpected aContextFrame");
+  return NewlineIsSignificantStyle() &&
+    !aContextFrame->ShouldSuppressLineBreak();
 }
 
 bool
@@ -116,6 +125,9 @@ nsStyleDisplay::IsFloating(const nsIFrame* aContextFrame) const
   return IsFloatingStyle() && !aContextFrame->IsSVGText();
 }
 
+// If you change this function, also change the corresponding block in
+// nsCSSFrameConstructor::ConstructFrameFromItemInternal that references
+// this function in comments.
 bool
 nsStyleDisplay::HasTransform(const nsIFrame* aContextFrame) const
 {
@@ -124,15 +136,29 @@ nsStyleDisplay::HasTransform(const nsIFrame* aContextFrame) const
 }
 
 bool
-nsStyleDisplay::IsPositioned(const nsIFrame* aContextFrame) const
+nsStyleDisplay::IsFixedPosContainingBlock(const nsIFrame* aContextFrame) const
+{
+  // NOTE: Any CSS properties that influence the output of this function
+  // should have the CSS_PROPERTY_FIXPOS_CB set on them.
+  NS_ASSERTION(aContextFrame->StyleDisplay() == this,
+               "unexpected aContextFrame");
+  return (IsContainPaint() || HasTransform(aContextFrame) ||
+          HasPerspectiveStyle() ||
+          (mWillChangeBitField & NS_STYLE_WILL_CHANGE_FIXPOS_CB) ||
+          aContextFrame->StyleEffects()->HasFilters()) &&
+      !aContextFrame->IsSVGText();
+}
+
+bool
+nsStyleDisplay::IsAbsPosContainingBlock(const nsIFrame* aContextFrame) const
 {
   NS_ASSERTION(aContextFrame->StyleDisplay() == this,
                "unexpected aContextFrame");
-  return (IsAbsolutelyPositionedStyle() ||
-          IsRelativelyPositionedStyle() ||
-          HasTransform(aContextFrame) ||
-          HasPerspectiveStyle()) &&
-         !aContextFrame->IsSVGText();
+  return ((IsAbsolutelyPositionedStyle() ||
+           IsRelativelyPositionedStyle() ||
+           (mWillChangeBitField & NS_STYLE_WILL_CHANGE_ABSPOS_CB)) &&
+          !aContextFrame->IsSVGText()) ||
+         IsFixedPosContainingBlock(aContextFrame);
 }
 
 bool
@@ -150,7 +176,7 @@ nsStyleDisplay::IsAbsolutelyPositioned(const nsIFrame* aContextFrame) const
 }
 
 uint8_t
-nsStyleVisibility::GetEffectivePointerEvents(nsIFrame* aFrame) const
+nsStyleUserInterface::GetEffectivePointerEvents(nsIFrame* aFrame) const
 {
   if (aFrame->GetContent() && !aFrame->GetContent()->GetParent()) {
     // The root element has a cluster of frames associated with it
@@ -159,7 +185,7 @@ nsStyleVisibility::GetEffectivePointerEvents(nsIFrame* aFrame) const
     // frame.
     nsIFrame* f = aFrame->GetContent()->GetPrimaryFrame();
     if (f) {
-      return f->StyleVisibility()->mPointerEvents;
+      return f->StyleUserInterface()->mPointerEvents;
     }
   }
   return mPointerEvents;

@@ -46,7 +46,7 @@ this.AccessFu = { // jshint ignore:line
           this._enableOrDisable();
         });
         aWindow.navigator.mozSettings.addObserver(
-          SCREENREADER_SETTING, this.handleEvent.bind(this));
+          SCREENREADER_SETTING, this.handleEvent);
       }
     }
 
@@ -68,10 +68,19 @@ this.AccessFu = { // jshint ignore:line
       Services.obs.removeObserver(this, 'Accessibility:Settings');
     } else if (Utils.win.navigator.mozSettings) {
       Utils.win.navigator.mozSettings.removeObserver(
-        SCREENREADER_SETTING, this.handleEvent.bind(this));
+        SCREENREADER_SETTING, this.handleEvent);
     }
     delete this._activatePref;
     Utils.uninit();
+  },
+
+  /**
+   * A lazy getter for event handler that binds the scope to AccessFu object.
+   */
+  get handleEvent() {
+    delete this.handleEvent;
+    this.handleEvent = this._handleEvent.bind(this);
+    return this.handleEvent;
   },
 
   /**
@@ -87,8 +96,6 @@ this.AccessFu = { // jshint ignore:line
     Cu.import('resource://gre/modules/accessibility/Utils.jsm');
     Cu.import('resource://gre/modules/accessibility/PointerAdapter.jsm');
     Cu.import('resource://gre/modules/accessibility/Presentation.jsm');
-
-    Logger.info('Enabled');
 
     for (let mm of Utils.AllMessageManagers) {
       this._addMessageListeners(mm);
@@ -134,6 +141,8 @@ this.AccessFu = { // jshint ignore:line
     Services.obs.addObserver(this, 'Accessibility:Focus', false);
     Services.obs.addObserver(this, 'Accessibility:ActivateObject', false);
     Services.obs.addObserver(this, 'Accessibility:LongPress', false);
+    Services.obs.addObserver(this, 'Accessibility:ScrollForward', false);
+    Services.obs.addObserver(this, 'Accessibility:ScrollBackward', false);
     Services.obs.addObserver(this, 'Accessibility:MoveByGranularity', false);
     Utils.win.addEventListener('TabOpen', this);
     Utils.win.addEventListener('TabClose', this);
@@ -144,9 +153,7 @@ this.AccessFu = { // jshint ignore:line
       delete this.readyCallback;
     }
 
-    if (Utils.MozBuildApp !== 'mobile/android') {
-      this.announce('screenReaderStarted');
-    }
+    Logger.info('AccessFu:Enabled');
   },
 
   /**
@@ -159,13 +166,7 @@ this.AccessFu = { // jshint ignore:line
 
     this._enabled = false;
 
-    Logger.info('Disabled');
-
     Utils.win.document.removeChild(this.stylesheet.get());
-
-    if (Utils.MozBuildApp !== 'mobile/android') {
-      this.announce('screenReaderStopped');
-    }
 
     for (let mm of Utils.AllMessageManagers) {
       mm.sendAsyncMessage('AccessFu:Stop');
@@ -187,6 +188,8 @@ this.AccessFu = { // jshint ignore:line
     Services.obs.removeObserver(this, 'Accessibility:Focus');
     Services.obs.removeObserver(this, 'Accessibility:ActivateObject');
     Services.obs.removeObserver(this, 'Accessibility:LongPress');
+    Services.obs.removeObserver(this, 'Accessibility:ScrollForward');
+    Services.obs.removeObserver(this, 'Accessibility:ScrollBackward');
     Services.obs.removeObserver(this, 'Accessibility:MoveByGranularity');
 
     delete this._quicknavModesPref;
@@ -196,6 +199,8 @@ this.AccessFu = { // jshint ignore:line
       this.doneCallback();
       delete this.doneCallback;
     }
+
+    Logger.info('AccessFu:Disabled');
   },
 
   _enableOrDisable: function _enableOrDisable() {
@@ -304,16 +309,26 @@ this.AccessFu = { // jshint ignore:line
         this._enableOrDisable();
         break;
       case 'Accessibility:NextObject':
-        this.Input.moveCursor('moveNext', 'Simple', 'gesture');
-        break;
       case 'Accessibility:PreviousObject':
-        this.Input.moveCursor('movePrevious', 'Simple', 'gesture');
+      {
+        let rule = aData ?
+          aData.substr(0, 1).toUpperCase() + aData.substr(1).toLowerCase() :
+          'Simple';
+        let method = aTopic.replace(/Accessibility:(\w+)Object/, 'move$1');
+        this.Input.moveCursor(method, rule, 'gesture');
         break;
+      }
       case 'Accessibility:ActivateObject':
         this.Input.activateCurrent(JSON.parse(aData));
         break;
       case 'Accessibility:LongPress':
         this.Input.sendContextMenuMessage();
+        break;
+      case 'Accessibility:ScrollForward':
+        this.Input.androidScroll('forward');
+        break;
+      case 'Accessibility:ScrollBackward':
+        this.Input.androidScroll('backward');
         break;
       case 'Accessibility:Focus':
         this._focused = JSON.parse(aData);
@@ -329,7 +344,7 @@ this.AccessFu = { // jshint ignore:line
       {
         // Ignore notifications that aren't from a BrowserOrApp
         let frameLoader = aSubject.QueryInterface(Ci.nsIFrameLoader);
-        if (!frameLoader.ownerIsBrowserOrAppFrame) {
+        if (!frameLoader.ownerIsMozBrowserOrAppFrame) {
           return;
         }
         this._handleMessageManager(frameLoader.messageManager);
@@ -338,7 +353,7 @@ this.AccessFu = { // jshint ignore:line
     }
   },
 
-  handleEvent: function handleEvent(aEvent) {
+  _handleEvent: function _handleEvent(aEvent) {
     switch (aEvent.type) {
       case 'TabOpen':
       {
@@ -417,14 +432,6 @@ this.AccessFu = { // jshint ignore:line
       let dpr = win.devicePixelRatio;
       let offset = { left: -win.mozInnerScreenX, top: -win.mozInnerScreenY };
 
-      if (!aBrowser.contentWindow) {
-        // OOP browser, add offset of browser.
-        // The offset of the browser element in relation to its parent window.
-        let clientRect = aBrowser.getBoundingClientRect();
-        let win = aBrowser.ownerDocument.defaultView;
-        offset.left += clientRect.left + win.mozInnerScreenX;
-        offset.top += clientRect.top + win.mozInnerScreenY;
-      }
       // Add the offset; the offset is in CSS pixels, so multiply the
       // devicePixelRatio back in before adding to preserve unit consistency.
       bounds = bounds.translate(offset.left * dpr, offset.top * dpr);
@@ -516,7 +523,10 @@ var Output = {
 
   stop: function stop() {
     if (this.highlightBox) {
-      Utils.win.document.documentElement.removeChild(this.highlightBox.get());
+      let highlightBox = this.highlightBox.get();
+      if (highlightBox) {
+        highlightBox.remove();
+      }
       delete this.highlightBox;
     }
   },
@@ -532,16 +542,17 @@ var Output = {
       {
         let highlightBox = null;
         if (!this.highlightBox) {
+          let doc = Utils.win.document;
           // Add highlight box
           highlightBox = Utils.win.document.
             createElementNS('http://www.w3.org/1999/xhtml', 'div');
-          Utils.win.document.documentElement.appendChild(highlightBox);
+          let parent = doc.body || doc.documentElement;
+          parent.appendChild(highlightBox);
           highlightBox.id = 'virtual-cursor-box';
 
           // Add highlight inset for inner shadow
           highlightBox.appendChild(
-            Utils.win.document.createElementNS(
-              'http://www.w3.org/1999/xhtml', 'div'));
+            doc.createElementNS('http://www.w3.org/1999/xhtml', 'div'));
 
           this.highlightBox = Cu.getWeakReference(highlightBox);
         } else {
@@ -735,6 +746,12 @@ var Input = {
         this.quickNavMode.previous();
         AccessFu.announce('quicknav_' + this.quickNavMode.current);
         break;
+      case 'tripletap3':
+        Utils.dispatchChromeEvent('accessibility-control', 'toggle-shade');
+        break;
+      case 'tap2':
+        Utils.dispatchChromeEvent('accessibility-control', 'toggle-pause');
+        break;
     }
   },
 
@@ -842,12 +859,19 @@ var Input = {
                           adjustRange: aAdjustRange });
   },
 
+  androidScroll: function androidScroll(aDirection) {
+    let mm = Utils.getMessageManager(Utils.CurrentBrowser);
+    mm.sendAsyncMessage('AccessFu:AndroidScroll',
+                        { direction: aDirection, origin: 'top' });
+  },
+
   moveByGranularity: function moveByGranularity(aDetails) {
-    const MOVEMENT_GRANULARITY_PARAGRAPH = 8;
+    const GRANULARITY_PARAGRAPH = 8;
+    const GRANULARITY_LINE = 4;
 
     if (!this.editState.editing) {
-      if (aDetails.granularity === MOVEMENT_GRANULARITY_PARAGRAPH) {
-        this.moveCursor('move' + aDetails.direction, 'Paragraph', 'gesture');
+      if (aDetails.granularity & (GRANULARITY_PARAGRAPH | GRANULARITY_LINE)) {
+        this.moveCursor('move' + aDetails.direction, 'Simple', 'gesture');
         return;
       }
     } else {

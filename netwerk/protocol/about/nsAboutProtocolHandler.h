@@ -8,17 +8,21 @@
 
 #include "nsIProtocolHandler.h"
 #include "nsSimpleNestedURI.h"
+#include "nsWeakReference.h"
 #include "mozilla/Attributes.h"
 
 class nsIURI;
 
-class nsAboutProtocolHandler : public nsIProtocolHandler
+class nsAboutProtocolHandler : public nsIProtocolHandlerWithDynamicFlags
+                             , public nsIProtocolHandler
+                             , public nsSupportsWeakReference
 {
 public:
     NS_DECL_ISUPPORTS
 
     // nsIProtocolHandler methods:
     NS_DECL_NSIPROTOCOLHANDLER
+    NS_DECL_NSIPROTOCOLHANDLERWITHDYNAMICFLAGS
 
     // nsAboutProtocolHandler methods:
     nsAboutProtocolHandler() {}
@@ -27,7 +31,8 @@ private:
     virtual ~nsAboutProtocolHandler() {}
 };
 
-class nsSafeAboutProtocolHandler MOZ_FINAL : public nsIProtocolHandler
+class nsSafeAboutProtocolHandler final : public nsIProtocolHandler
+                                       , public nsSupportsWeakReference
 {
 public:
     NS_DECL_ISUPPORTS

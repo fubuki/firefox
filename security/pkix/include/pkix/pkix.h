@@ -22,8 +22,8 @@
  * limitations under the License.
  */
 
-#ifndef mozilla_pkix__pkix_h
-#define mozilla_pkix__pkix_h
+#ifndef mozilla_pkix_pkix_h
+#define mozilla_pkix_pkix_h
 
 #include "pkixtypes.h"
 
@@ -116,13 +116,14 @@ Result BuildCertChain(TrustDomain& trustDomain, Input cert,
 // - IP addresses are out of scope of RFC 6125, but this method accepts them for
 //   backward compatibility (see SearchNames in pkixnames.cpp)
 // - A wildcard in a DNS-ID may only appear as the entirety of the first label.
-Result CheckCertHostname(Input cert, Input hostname);
+Result CheckCertHostname(Input cert, Input hostname,
+                         NameMatchingPolicy& nameMatchingPolicy);
 
 // Construct an RFC-6960-encoded OCSP request, ready for submission to a
 // responder, for the provided CertID. The request has no extensions.
 static const size_t OCSP_REQUEST_MAX_LENGTH = 127;
 Result CreateEncodedOCSPRequest(TrustDomain& trustDomain,
-                                const struct CertID& certID,
+                                const CertID& certID,
                                 /*out*/ uint8_t (&out)[OCSP_REQUEST_MAX_LENGTH],
                                 /*out*/ size_t& outLen);
 
@@ -147,6 +148,14 @@ Result VerifyEncodedOCSPResponse(TrustDomain& trustDomain,
               /* optional out */ Time* thisUpdate = nullptr,
               /* optional out */ Time* validThrough = nullptr);
 
+// Check that the TLSFeature extensions in a given end-entity cert (which is
+// assumed to have been already validated with BuildCertChain) are satisfied.
+// The only feature which we cancurrently process a requirement for is
+// status_request (OCSP stapling) so we reject any extension that specifies a
+// requirement for another value. Empty extensions are also rejected.
+Result CheckTLSFeaturesAreSatisfied(Input& cert,
+                                    const Input* stapledOCSPResponse);
+
 } } // namespace mozilla::pkix
 
-#endif // mozilla_pkix__pkix_h
+#endif // mozilla_pkix_pkix_h

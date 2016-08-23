@@ -54,6 +54,8 @@
           iframe.setAttribute("type", "content");
           iframe.setAttribute("class", "social-panel-frame");
           iframe.setAttribute("flex", "1");
+          iframe.setAttribute("message", "true");
+          iframe.setAttribute("messagemanagergroup", "social");
           iframe.setAttribute("tooltip", "aHTMLTooltip");
           iframe.setAttribute("context", "contentAreaContextMenu");
           iframe.setAttribute("origin", provider.origin);
@@ -63,6 +65,12 @@
           this._frame.addEventListener("DOMLinkAdded", this);
           return this._frame;
         ]]></getter>
+      </property>
+
+      <property name="messageManager">
+        <getter>
+          return this.content.QueryInterface(Components.interfaces.nsIFrameLoaderOwner).frameLoader.messageManager;
+        </getter>
       </property>
 
       <property name="contentWindow">
@@ -129,9 +137,17 @@
         // that we can hide
         if (panel.hidePopup) {
           panel.hidePopup();
-          panel.hidden = true;
         }
         this.pageData = null;
+        ]]></body>
+      </method>
+
+      <method name="receiveMessage">
+        <parameter name="message"/>
+        <body><![CDATA[
+        if (message.name != "Social:ErrorPageNotify" || message.target != this.content)
+          return;
+        this.openPanel();
         ]]></body>
       </method>
 
@@ -150,33 +166,30 @@
         let URLTemplate = provider.markURL;
         let _dataFn;
         if (!pageData) {
-          messageManager.addMessageListener("Social:PageDataResult", _dataFn = (msg) => {
-            messageManager.removeMessageListener("Social:PageDataResult", _dataFn);
+          messageManager.addMessageListener("PageMetadata:PageDataResult", _dataFn = (msg) => {
+            messageManager.removeMessageListener("PageMetadata:PageDataResult", _dataFn);
             this.loadPanel(msg.json, target);
           });
-          gBrowser.selectedBrowser.messageManager.sendAsyncMessage("Social:GetPageData");
+          gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetPageData", null, { target });
           return;
         }
-        // if this is a share of a selected item, get any microdata
-        if (!pageData.microdata && target) {
-          messageManager.addMessageListener("Social:PageDataResult", _dataFn = (msg) => {
-            messageManager.removeMessageListener("Social:PageDataResult", _dataFn);
-            pageData.microdata = msg.data;
+        // if this is a share of a selected item, get any microformats
+        if (!pageData.microformats && target) {
+          messageManager.addMessageListener("PageMetadata:MicroformatsResult", _dataFn = (msg) => {
+            messageManager.removeMessageListener("PageMetadata:MicroformatsResult", _dataFn);
+            pageData.microformats = msg.data;
             this.loadPanel(pageData, target);
           });
-          gBrowser.selectedBrowser.messageManager.sendAsyncMessage("Social:GetMicrodata", null, target);
+          gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetMicroformats", null, { target });
           return;
         }
         this.pageData = pageData;
 
         let endpoint = OpenGraphBuilder.generateEndpointURL(URLTemplate, this.pageData);
-
         // setup listeners
         let DOMContentLoaded = (event) => {
-          if (event.target != this.contentDocument)
-            return;
           this._loading = false;
-          this.content.removeEventListener("DOMContentLoaded", DOMContentLoaded, true);
+          this.messageManager.removeMessageListener("DOMContentLoaded", DOMContentLoaded);
           // add our resizer after the dom is ready
           if (this._useDynamicResizer) {
             let DynamicResizeWatcher = Cu.import("resource:///modules/Social.jsm", {}).DynamicResizeWatcher;
@@ -186,10 +199,6 @@
             this._dynamicResizer.stop();
             this._dynamicResizer = null;
           }
-          // send the opengraph data
-          let evt = this.contentDocument.createEvent("CustomEvent");
-          evt.initCustomEvent("OpenGraphData", true, true, JSON.stringify(this.pageData));
-          this.contentDocument.documentElement.dispatchEvent(evt);
 
           let contentWindow = this.contentWindow;
           let markUpdate = function(event) {
@@ -207,34 +216,16 @@
           let unload = () => {
             contentWindow.removeEventListener("unload", unload);
             contentWindow.removeEventListener("socialMarkUpdate", markUpdate);
-            if (this.content.socialErrorListener)
-              this.content.socialErrorListener.remove();
           }
           contentWindow.addEventListener("socialMarkUpdate", markUpdate);
           contentWindow.addEventListener("unload", unload);
+
+          // send the opengraph data
+          this.messageManager.sendAsyncMessage("Social:OpenGraphData", pageData);
         }
-        this.content.addEventListener("DOMContentLoaded", DOMContentLoaded, true);
-        Social.setErrorListener(this.content, this.setErrorMessage.bind(this));
+        this.messageManager.addMessageListener("DOMContentLoaded", DOMContentLoaded);
         this._loading = true;
         this.content.setAttribute("src", endpoint);
-        ]]></body>
-      </method>
-
-      <method name="setErrorMessage">
-        <parameter name="aNotificationFrame"/>
-        <body><![CDATA[
-        if (!aNotificationFrame)
-          return;
-
-        let src = aNotificationFrame.getAttribute("src");
-        aNotificationFrame.removeAttribute("src");
-        let origin = aNotificationFrame.getAttribute("origin");
-        aNotificationFrame.webNavigation.loadURI("about:socialerror?mode=tryAgainOnly&url=" +
-                                                encodeURIComponent(src) + "&origin=" +
-                                                encodeURIComponent(origin),
-                                                null, null, null, null);
-        // ensure the panel is open if error occurs on first click
-        this.openPanel();
         ]]></body>
       </method>
 
@@ -257,7 +248,7 @@
         <body><![CDATA[
         // we always set the src on click if it has not been set for this tab,
         // but we only want to open the panel if it was previously annotated.
-        let openPanel = this.isMarked || aOpenPanel || !this.provider.haveLoggedInUser();
+        let openPanel = this.isMarked || aOpenPanel;
         let src = this.content.getAttribute("src");
         if (!src || src == "about:blank") {
           this.loadPanel();
@@ -299,20 +290,21 @@
         <body><![CDATA[
         // because the panel may be preloaded, we need to size the panel when
         // showing as well as after load
+        if (!this._useDynamicResizer) {
+          return;
+        }
         let sizeSocialPanelToContent = Cu.import("resource:///modules/Social.jsm", {}).sizeSocialPanelToContent;
         if (!this._loading && this.contentDocument &&
             this.contentDocument.readyState == "complete") {
-          this.dispatchPanelEvent("socialFrameShow");
-          if (this._useDynamicResizer)
-            sizeSocialPanelToContent(this.panel, this.content);
+          sizeSocialPanelToContent(this.panel, this.content);
         } else {
-          let panelBrowserOnload = (e) => {
-            this.content.removeEventListener("load", panelBrowserOnload, true);
-            this.dispatchPanelEvent("socialFrameShow");
-            if (this._useDynamicResizer)
-              sizeSocialPanelToContent(this.panel, this.content);
+          let panelBrowserOnload = (message) => {
+            if (message.target != this.content)
+              return;
+            this.messageManager.removeMessageListener("PageVisibility:Show", panelBrowserOnload, true);
+            sizeSocialPanelToContent(this.panel, this.content);
           };
-          this.content.addEventListener("load", panelBrowserOnload, true);
+          this.messageManager.addMessageListener("PageVisibility:Show", panelBrowserOnload);
         }
         ]]></body>
       </method>
@@ -361,7 +353,6 @@
         this.onShown();
       ]]></handler>
       <handler event="popuphidden"><![CDATA[
-        this.dispatchPanelEvent("socialFrameHide");
         this._anchor.removeAttribute("open");
         this.update();
         this.content.removeEventListener("click", this);

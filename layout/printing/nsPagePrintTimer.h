@@ -18,8 +18,8 @@ class nsPrintEngine;
 //---------------------------------------------------
 //-- Page Timer Class
 //---------------------------------------------------
-class nsPagePrintTimer MOZ_FINAL : public nsRunnable,
-                                   public nsITimerCallback
+class nsPagePrintTimer final : public nsRunnable,
+                               public nsITimerCallback
 {
 public:
 
@@ -43,9 +43,12 @@ public:
 
   nsresult Start(nsPrintObject* aPO);
 
-  NS_IMETHOD Run() MOZ_OVERRIDE;
+  NS_IMETHOD Run() override;
 
   void Stop();
+
+  void WaitForRemotePrint();
+  void RemotePrintFinished();
 
 private:
   ~nsPagePrintTimer();
@@ -59,6 +62,7 @@ private:
   nsCOMPtr<nsIDocumentViewerPrint> mDocViewerPrint;
   nsCOMPtr<nsITimer>         mTimer;
   nsCOMPtr<nsITimer>         mWatchDogTimer;
+  nsCOMPtr<nsITimer>         mWaitingForRemotePrint;
   uint32_t                   mDelay;
   uint32_t                   mFiringCount;
   nsPrintObject *            mPrintObj;

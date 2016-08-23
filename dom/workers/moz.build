@@ -6,16 +6,26 @@
 
 # Public stuff.
 EXPORTS.mozilla.dom += [
+    'FileReaderSync.h',
     'ServiceWorkerCommon.h',
     'ServiceWorkerContainer.h',
+    'ServiceWorkerEvents.h',
+    'ServiceWorkerMessageEvent.h',
+    'ServiceWorkerRegistrar.h',
     'ServiceWorkerRegistration.h',
+    'WorkerLocation.h',
+    'WorkerNavigator.h',
+    'WorkerPrefs.h',
     'WorkerPrivate.h',
     'WorkerRunnable.h',
     'WorkerScope.h',
 ]
 
 EXPORTS.mozilla.dom.workers += [
+    'RuntimeService.h',
+    'ServiceWorkerInfo.h',
     'ServiceWorkerManager.h',
+    'ServiceWorkerRegistrationInfo.h',
     'WorkerDebuggerManager.h',
     'Workers.h',
 ]
@@ -24,14 +34,11 @@ EXPORTS.mozilla.dom.workers += [
 EXPORTS.mozilla.dom.workers.bindings += [
     'DataStore.h',
     'DataStoreCursor.h',
-    'FileReaderSync.h',
-    'Location.h',
-    'MessagePort.h',
-    'Navigator.h',
     'Performance.h',
     'ServiceWorker.h',
     'ServiceWorkerClient.h',
     'ServiceWorkerClients.h',
+    'ServiceWorkerWindowClient.h',
     'SharedWorker.h',
     'URL.h',
     'WorkerFeature.h',
@@ -51,9 +58,6 @@ UNIFIED_SOURCES += [
     'DataStore.cpp',
     'DataStoreCursor.cpp',
     'FileReaderSync.cpp',
-    'Location.cpp',
-    'MessagePort.cpp',
-    'Navigator.cpp',
     'Performance.cpp',
     'Principal.cpp',
     'RegisterBindings.cpp',
@@ -64,11 +68,28 @@ UNIFIED_SOURCES += [
     'ServiceWorkerClients.cpp',
     'ServiceWorkerContainer.cpp',
     'ServiceWorkerEvents.cpp',
+    'ServiceWorkerInfo.cpp',
+    'ServiceWorkerJob.cpp',
+    'ServiceWorkerJobQueue.cpp',
     'ServiceWorkerManager.cpp',
+    'ServiceWorkerManagerChild.cpp',
+    'ServiceWorkerManagerParent.cpp',
+    'ServiceWorkerManagerService.cpp',
+    'ServiceWorkerMessageEvent.cpp',
+    'ServiceWorkerPrivate.cpp',
+    'ServiceWorkerRegisterJob.cpp',
+    'ServiceWorkerRegistrar.cpp',
     'ServiceWorkerRegistration.cpp',
+    'ServiceWorkerRegistrationInfo.cpp',
+    'ServiceWorkerScriptCache.cpp',
+    'ServiceWorkerUnregisterJob.cpp',
+    'ServiceWorkerUpdateJob.cpp',
+    'ServiceWorkerWindowClient.cpp',
     'SharedWorker.cpp',
     'URL.cpp',
     'WorkerDebuggerManager.cpp',
+    'WorkerLocation.cpp',
+    'WorkerNavigator.cpp',
     'WorkerPrivate.cpp',
     'WorkerRunnable.cpp',
     'WorkerScope.cpp',
@@ -77,9 +98,10 @@ UNIFIED_SOURCES += [
     'XMLHttpRequestUpload.cpp',
 ]
 
-FAIL_ON_WARNINGS = True
-
-MSVC_ENABLE_PGO = True
+IPDL_SOURCES += [
+    'PServiceWorkerManager.ipdl',
+    'ServiceWorkerRegistrarTypes.ipdlh',
+]
 
 LOCAL_INCLUDES += [
     '../base',
@@ -99,11 +121,21 @@ TEST_DIRS += [
 ]
 
 MOCHITEST_MANIFESTS += [
-    'test/fetch/mochitest.ini',
     'test/mochitest.ini',
     'test/serviceworkers/mochitest.ini',
 ]
 
-MOCHITEST_CHROME_MANIFESTS += ['test/chrome.ini']
+MOCHITEST_CHROME_MANIFESTS += [
+    'test/chrome.ini',
+    'test/serviceworkers/chrome.ini'
+]
+
+BROWSER_CHROME_MANIFESTS += [
+    'test/serviceworkers/browser.ini',
+]
 
 XPCSHELL_TESTS_MANIFESTS += ['test/xpcshell/xpcshell.ini']
+
+BROWSER_CHROME_MANIFESTS += ['test/browser.ini']
+
+TEST_DIRS += ['test/gtest']

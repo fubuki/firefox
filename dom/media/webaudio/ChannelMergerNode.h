@@ -14,7 +14,7 @@ namespace dom {
 
 class AudioContext;
 
-class ChannelMergerNode : public AudioNode
+class ChannelMergerNode final : public AudioNode
 {
 public:
   ChannelMergerNode(AudioContext* aContext,
@@ -22,16 +22,16 @@ public:
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual uint16_t NumberOfInputs() const MOZ_OVERRIDE { return mInputCount; }
+  uint16_t NumberOfInputs() const override { return mInputCount; }
 
-  virtual const char* NodeType() const MOZ_OVERRIDE
+  const char* NodeType() const override
   {
     return "ChannelMergerNode";
   }
 
-  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override
   {
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
@@ -43,8 +43,8 @@ private:
   const uint16_t mInputCount;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

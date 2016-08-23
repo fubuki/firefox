@@ -10,6 +10,8 @@
 #include "nsWrapperCache.h"
 #include "nsCycleCollectionParticipant.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/StaticPtr.h"
+#include "mozilla/StaticMutex.h"
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
 #include "AudioContext.h"
@@ -27,35 +29,48 @@ class AudioContext;
 
 /**
  * An AudioBuffer keeps its data either in the mJSChannels objects, which
- * are Float32Arrays, or in mSharedChannels if the mJSChannels objects have
- * been neutered.
+ * are Float32Arrays, or in mSharedChannels if the mJSChannels objects' buffers
+ * are detached.
  */
-class AudioBuffer MOZ_FINAL : public nsWrapperCache
+class AudioBuffer final : public nsWrapperCache
 {
 public:
+  // If non-null, aInitialContents must have number of channels equal to
+  // aNumberOfChannels and their lengths must be at least aLength.
   static already_AddRefed<AudioBuffer>
   Create(AudioContext* aContext, uint32_t aNumberOfChannels,
          uint32_t aLength, float aSampleRate,
-         JSContext* aJSContext, ErrorResult& aRv);
+         already_AddRefed<ThreadSharedFloatArrayBufferList> aInitialContents,
+         ErrorResult& aRv);
+
+  static already_AddRefed<AudioBuffer>
+  Create(AudioContext* aContext, uint32_t aNumberOfChannels,
+         uint32_t aLength, float aSampleRate,
+         ErrorResult& aRv)
+  {
+    return Create(aContext, aNumberOfChannels, aLength, aSampleRate,
+                  nullptr, aRv);
+  }
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(AudioBuffer)
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(AudioBuffer)
 
-  AudioContext* GetParentObject() const
+  nsPIDOMWindowInner* GetParentObject() const
   {
-    return mContext;
+    nsCOMPtr<nsPIDOMWindowInner> parentObject = do_QueryReferent(mOwnerWindow);
+    return parentObject;
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   float SampleRate() const
   {
     return mSampleRate;
   }
 
-  int32_t Length() const
+  uint32_t Length() const
   {
     return mLength;
   }
@@ -90,34 +105,34 @@ public:
    */
   ThreadSharedFloatArrayBufferList* GetThreadSharedChannelsForRate(JSContext* aContext);
 
-  // This replaces the contents of the JS array for the given channel.
-  // This function needs to be called on an AudioBuffer which has not been
-  // handed off to the content yet, and right after the object has been
-  // initialized.
-  void SetRawChannelContents(uint32_t aChannel, float* aContents);
-
 protected:
   AudioBuffer(AudioContext* aContext, uint32_t aNumberOfChannels,
-              uint32_t aLength, float aSampleRate);
+              uint32_t aLength, float aSampleRate,
+              already_AddRefed<ThreadSharedFloatArrayBufferList>
+                aInitialContents);
   ~AudioBuffer();
 
   bool RestoreJSChannelData(JSContext* aJSContext);
+
+  already_AddRefed<ThreadSharedFloatArrayBufferList>
+  StealJSArrayDataIntoSharedChannels(JSContext* aJSContext);
+
   void ClearJSChannels();
 
-  nsRefPtr<AudioContext> mContext;
+  nsWeakPtr mOwnerWindow;
   // Float32Arrays
-  nsAutoTArray<JS::Heap<JSObject*>, 2> mJSChannels;
+  AutoTArray<JS::Heap<JSObject*>, 2> mJSChannels;
 
   // mSharedChannels aggregates the data from mJSChannels. This is non-null
-  // if and only if the mJSChannels are neutered.
-  nsRefPtr<ThreadSharedFloatArrayBufferList> mSharedChannels;
+  // if and only if the mJSChannels' buffers are detached.
+  RefPtr<ThreadSharedFloatArrayBufferList> mSharedChannels;
 
   uint32_t mLength;
   float mSampleRate;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

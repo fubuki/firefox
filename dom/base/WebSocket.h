@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -28,15 +28,11 @@ class nsIInputStream;
 namespace mozilla {
 namespace dom {
 
-namespace workers {
-class WorkerPrivate;
-}
-
-class File;
+class Blob;
 
 class WebSocketImpl;
 
-class WebSocket MOZ_FINAL : public DOMEventTargetHelper
+class WebSocket final : public DOMEventTargetHelper
 {
   friend class WebSocketImpl;
 
@@ -54,15 +50,15 @@ public:
     WebSocket, DOMEventTargetHelper)
 
   // EventTarget
-  virtual void EventListenerAdded(nsIAtom* aType) MOZ_OVERRIDE;
-  virtual void EventListenerRemoved(nsIAtom* aType) MOZ_OVERRIDE;
+  virtual void EventListenerAdded(nsIAtom* aType) override;
+  virtual void EventListenerRemoved(nsIAtom* aType) override;
 
-  virtual void DisconnectFromOwner() MOZ_OVERRIDE;
+  virtual void DisconnectFromOwner() override;
 
   // nsWrapperCache
-  nsPIDOMWindow* GetParentObject() { return GetOwner(); }
+  nsPIDOMWindowInner* GetParentObject() { return GetOwner(); }
 
-  virtual JSObject* WrapObject(JSContext* cx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto) override;
 
 public: // static helpers:
 
@@ -125,7 +121,7 @@ public: // WebIDL interface:
   // webIDL: void send(DOMString|Blob|ArrayBufferView data);
   void Send(const nsAString& aData,
             ErrorResult& aRv);
-  void Send(File& aData,
+  void Send(Blob& aData,
             ErrorResult& aRv);
   void Send(const ArrayBuffer& aData,
             ErrorResult& aRv);
@@ -133,7 +129,7 @@ public: // WebIDL interface:
             ErrorResult& aRv);
 
 private: // constructor && distructor
-  explicit WebSocket(nsPIDOMWindow* aOwnerWindow);
+  explicit WebSocket(nsPIDOMWindowInner* aOwnerWindow);
   virtual ~WebSocket();
 
   void SetReadyState(uint16_t aReadyState);
@@ -141,9 +137,6 @@ private: // constructor && distructor
   // These methods actually do the dispatch for various events.
   nsresult CreateAndDispatchSimpleEvent(const nsAString& aName);
   nsresult CreateAndDispatchMessageEvent(const nsACString& aData,
-                                         bool aIsBinary);
-  nsresult CreateAndDispatchMessageEvent(JSContext* aCx,
-                                         const nsACString& aData,
                                          bool aIsBinary);
   nsresult CreateAndDispatchCloseEvent(bool aWasClean,
                                        uint16_t aCode,
@@ -181,7 +174,7 @@ private:
   uint32_t mOutgoingBufferedAmount;
 
   // related to the WebSocket constructor steps
-  nsString mOriginalURL;
+  nsString mURI;
   nsString mEffectiveURL;   // after redirects
   nsCString mEstablishedExtensions;
   nsCString mEstablishedProtocol;

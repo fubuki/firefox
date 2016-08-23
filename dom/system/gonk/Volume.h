@@ -38,7 +38,7 @@ public:
 typedef mozilla::ObserverList<Volume*> VolumeObserverList;
 #endif
 
-class Volume MOZ_FINAL
+class Volume final
 {
 public:
   NS_INLINE_DECL_REFCOUNTING(Volume)
@@ -91,6 +91,9 @@ public:
   static void RegisterVolumeObserver(EventObserver* aObserver, const char* aName);
   static void UnregisterVolumeObserver(EventObserver* aObserver, const char* aName);
 
+protected:
+  ~Volume() {}
+
 private:
   friend class AutoMounter;         // Calls StartXxx
   friend class nsVolume;            // Calls UpdateMountLock
@@ -115,6 +118,8 @@ private:
   void SetMediaPresent(bool aMediaPresent);
   void SetMountPoint(const nsCSubstring& aMountPoint);
   void StartCommand(VolumeCommand* aCommand);
+
+  void ResolveAndSetMountPoint(const nsCSubstring& aMountPoint);
 
   bool BoolConfigValue(const nsCString& aConfigValue, bool& aBoolValue);
   void SetConfig(const nsCString& aConfigName, const nsCString& aConfigValue);

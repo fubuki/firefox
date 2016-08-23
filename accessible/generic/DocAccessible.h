@@ -8,8 +8,8 @@
 
 #include "nsIAccessiblePivot.h"
 
-#include "AccEvent.h"
 #include "HyperTextAccessibleWrap.h"
+#include "AccEvent.h"
 
 #include "nsClassHashtable.h"
 #include "nsDataHashtable.h"
@@ -23,8 +23,6 @@
 
 class nsAccessiblePivot;
 
-class nsIScrollableView;
-
 const uint32_t kDefaultCacheLength = 128;
 
 namespace mozilla {
@@ -34,7 +32,7 @@ class DocManager;
 class NotificationController;
 class DocAccessibleChild;
 class RelatedAccIterator;
-template<class Class, class Arg>
+template<class Class, class ... Args>
 class TNotification;
 
 class DocAccessible : public HyperTextAccessibleWrap,
@@ -52,43 +50,42 @@ class DocAccessible : public HyperTextAccessibleWrap,
 
 public:
 
-  DocAccessible(nsIDocument* aDocument, nsIContent* aRootContent,
-                nsIPresShell* aPresShell);
+  DocAccessible(nsIDocument* aDocument, nsIPresShell* aPresShell);
 
   // nsIScrollPositionListener
-  virtual void ScrollPositionWillChange(nscoord aX, nscoord aY) MOZ_OVERRIDE {}
-  virtual void ScrollPositionDidChange(nscoord aX, nscoord aY) MOZ_OVERRIDE;
+  virtual void ScrollPositionWillChange(nscoord aX, nscoord aY) override {}
+  virtual void ScrollPositionDidChange(nscoord aX, nscoord aY) override;
 
   // nsIDocumentObserver
   NS_DECL_NSIDOCUMENTOBSERVER
 
   // Accessible
   virtual void Init();
-  virtual void Shutdown() MOZ_OVERRIDE;
-  virtual nsIFrame* GetFrame() const MOZ_OVERRIDE;
-  virtual nsINode* GetNode() const MOZ_OVERRIDE { return mDocumentNode; }
+  virtual void Shutdown() override;
+  virtual nsIFrame* GetFrame() const override;
+  virtual nsINode* GetNode() const override { return mDocumentNode; }
   nsIDocument* DocumentNode() const { return mDocumentNode; }
 
-  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName) MOZ_OVERRIDE;
-  virtual void Description(nsString& aDescription) MOZ_OVERRIDE;
-  virtual Accessible* FocusedChild() MOZ_OVERRIDE;
-  virtual mozilla::a11y::role NativeRole() MOZ_OVERRIDE;
-  virtual uint64_t NativeState() MOZ_OVERRIDE;
-  virtual uint64_t NativeInteractiveState() const MOZ_OVERRIDE;
-  virtual bool NativelyUnavailable() const MOZ_OVERRIDE;
-  virtual void ApplyARIAState(uint64_t* aState) const MOZ_OVERRIDE;
-  virtual already_AddRefed<nsIPersistentProperties> Attributes() MOZ_OVERRIDE;
+  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName) override;
+  virtual void Description(nsString& aDescription) override;
+  virtual Accessible* FocusedChild() override;
+  virtual mozilla::a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
+  virtual uint64_t NativeInteractiveState() const override;
+  virtual bool NativelyUnavailable() const override;
+  virtual void ApplyARIAState(uint64_t* aState) const override;
+  virtual already_AddRefed<nsIPersistentProperties> Attributes() override;
 
-  virtual void TakeFocus() MOZ_OVERRIDE;
+  virtual void TakeFocus() override;
 
 #ifdef A11Y_LOG
-  virtual nsresult HandleAccEvent(AccEvent* aEvent) MOZ_OVERRIDE;
+  virtual nsresult HandleAccEvent(AccEvent* aEvent) override;
 #endif
 
-  virtual nsRect RelativeBounds(nsIFrame** aRelativeFrame) const MOZ_OVERRIDE;
+  virtual nsRect RelativeBounds(nsIFrame** aRelativeFrame) const override;
 
   // HyperTextAccessible
-  virtual already_AddRefed<nsIEditor> GetEditor() const MOZ_OVERRIDE;
+  virtual already_AddRefed<nsIEditor> GetEditor() const override;
 
   // DocAccessible
 
@@ -190,6 +187,7 @@ public:
    */
   void FireDelayedEvent(AccEvent* aEvent);
   void FireDelayedEvent(uint32_t aEventType, Accessible* aTarget);
+  void FireEventsOnInsertion(Accessible* aContainer, uint32_t aUpdateFlags);
 
   /**
    * Fire value change event on the given accessible if applicable.
@@ -228,7 +226,11 @@ public:
    *
    * @return the accessible object
    */
-  Accessible* GetAccessible(nsINode* aNode) const;
+  Accessible* GetAccessible(nsINode* aNode) const
+  {
+    return aNode == mDocumentNode ?
+      const_cast<DocAccessible*>(this) : mNodeToAccessibleMap.Get(aNode);
+  }
 
   /**
    * Return an accessible for the given node even if the node is not in
@@ -279,9 +281,32 @@ public:
   }
 
   /**
+   * Return an accessible for the given node if any, or an immediate accessible
+   * container for it.
+   */
+  Accessible* AccessibleOrTrueContainer(nsINode* aNode) const;
+
+  /**
    * Return an accessible for the given node or its first accessible descendant.
    */
   Accessible* GetAccessibleOrDescendant(nsINode* aNode) const;
+
+  /**
+   * Returns aria-owns seized child at the given index.
+   */
+  Accessible* ARIAOwnedAt(Accessible* aParent, uint32_t aIndex) const
+  {
+    nsTArray<RefPtr<Accessible> >* children = mARIAOwnsHash.Get(aParent);
+    if (children) {
+      return children->SafeElementAt(aIndex);
+    }
+    return nullptr;
+  }
+  uint32_t ARIAOwnedCount(Accessible* aParent) const
+  {
+    nsTArray<RefPtr<Accessible> >* children = mARIAOwnsHash.Get(aParent);
+    return children ? children->Length() : 0;
+  }
 
   /**
    * Return true if the given ID is referred by relation attribute.
@@ -300,7 +325,8 @@ public:
    * @param  aRoleMapEntry  [in] the role map entry role the ARIA role or nullptr
    *                          if none
    */
-  void BindToDocument(Accessible* aAccessible, nsRoleMapEntry* aRoleMapEntry);
+  void BindToDocument(Accessible* aAccessible,
+                      const nsRoleMapEntry* aRoleMapEntry);
 
   /**
    * Remove from document and shutdown the given accessible.
@@ -338,13 +364,27 @@ public:
    */
   void RecreateAccessible(nsIContent* aContent);
 
+  /**
+   * Schedule ARIA owned element relocation if needed. Return true if relocation
+   * was scheduled.
+   */
+  bool RelocateARIAOwnedIfNeeded(nsIContent* aEl);
+
+  /**
+   * Return a notification controller associated with the document.
+   */
+  NotificationController* Controller() const { return mNotificationController; }
+
+  /**
+   * If this document is in a content process return the object responsible for
+   * communicating with the main process for it.
+   */
+  DocAccessibleChild* IPCDoc() const { return mIPCDoc; }
+
 protected:
   virtual ~DocAccessible();
 
   void LastRelease();
-
-  // Accessible
-  virtual void CacheChildren() MOZ_OVERRIDE;
 
   // DocAccessible
   virtual nsresult AddEventListeners();
@@ -363,6 +403,11 @@ protected:
    * Can be overridden by wrappers to prepare initialization work.
    */
   virtual void DoInitialUpdate();
+
+  /**
+   * Updates root element and picks up ARIA role on it if any.
+   */
+  void UpdateRootElIfNeeded();
 
   /**
    * Process document load notification, fire document load and state busy
@@ -402,7 +447,7 @@ protected:
    * @param aRelProvider [in] accessible that element has relation attribute
    * @param aRelAttr     [in, optional] relation attribute
    */
-  void AddDependentIDsFor(dom::Element* aRelProviderElm,
+  void AddDependentIDsFor(Accessible* aRelProvider,
                           nsIAtom* aRelAttr = nullptr);
 
   /**
@@ -413,7 +458,7 @@ protected:
    * @param aRelProvider [in] accessible that element has relation attribute
    * @param aRelAttr     [in, optional] relation attribute
    */
-  void RemoveDependentIDsFor(dom::Element* aRelProviderElm,
+  void RemoveDependentIDsFor(Accessible* aRelProvider,
                              nsIAtom* aRelAttr = nullptr);
 
   /**
@@ -454,6 +499,8 @@ protected:
    */
   void ProcessContentInserted(Accessible* aContainer,
                               const nsTArray<nsCOMPtr<nsIContent> >* aInsertedContent);
+  void ProcessContentInserted(Accessible* aContainer,
+                              nsIContent* aInsertedContent);
 
   /**
    * Used to notify the document to make it process the invalidation list.
@@ -463,11 +510,6 @@ protected:
    * invalidate their containers later.
    */
   void ProcessInvalidationList();
-
-  /**
-   * Update the tree on content insertion.
-   */
-  void UpdateTreeOnInsertion(Accessible* aContainer);
 
   /**
    * Update the accessible tree for content removal.
@@ -483,9 +525,26 @@ protected:
     eAccessible = 1,
     eAlertAccessible = 2
   };
+  uint32_t UpdateTreeInternal(Accessible* aChild, bool aIsInsert);
 
-  uint32_t UpdateTreeInternal(Accessible* aChild, bool aIsInsert,
-                              AccReorderEvent* aReorderEvent);
+  /**
+   * Validates all aria-owns connections and updates the tree accordingly.
+   */
+  void ValidateARIAOwned();
+
+  /**
+   * Steals or puts back accessible subtrees.
+   */
+  void DoARIAOwnsRelocation(Accessible* aOwner);
+
+  /**
+   * Moves children back under their original parents.
+   */
+  void PutChildrenBack(nsTArray<RefPtr<Accessible> >* aChildren,
+                       uint32_t aStartIdx);
+
+  bool MoveChild(Accessible* aChild, Accessible* aNewParent,
+                 int32_t aIdxInParent);
 
   /**
    * Create accessible tree.
@@ -520,12 +579,6 @@ protected:
    * coalescence).
    */
   bool IsLoadEventTarget() const;
-
-  /**
-   * If this document is in a content process return the object responsible for
-   * communicating with the main process for it.
-   */
-  DocAccessibleChild* IPCDoc() const { return mIPCDoc; }
 
   /*
    * Set the object responsible for communicating with the main process on
@@ -599,12 +652,12 @@ protected:
     bool mStateBitWasOn;
   };
 
-  nsTArray<nsRefPtr<DocAccessible> > mChildDocuments;
+  nsTArray<RefPtr<DocAccessible> > mChildDocuments;
 
   /**
    * The virtual cursor of the document.
    */
-  nsRefPtr<nsAccessiblePivot> mVirtualCursor;
+  RefPtr<nsAccessiblePivot> mVirtualCursor;
 
   /**
    * A storage class for pairing content with one of its relation attributes.
@@ -624,19 +677,12 @@ protected:
     AttrRelProvider& operator =(const AttrRelProvider&);
   };
 
-  typedef nsTArray<nsAutoPtr<AttrRelProvider> > AttrRelProviderArray;
-  typedef nsClassHashtable<nsStringHashKey, AttrRelProviderArray>
-    DependentIDsHashtable;
-
   /**
    * The cache of IDs pointed by relation attributes.
    */
-  DependentIDsHashtable mDependentIDsHash;
-
-  static PLDHashOperator
-    CycleCollectorTraverseDepIDsEntry(const nsAString& aKey,
-                                      AttrRelProviderArray* aProviders,
-                                      void* aUserArg);
+  typedef nsTArray<nsAutoPtr<AttrRelProvider> > AttrRelProviderArray;
+  nsClassHashtable<nsStringHashKey, AttrRelProviderArray>
+    mDependentIDsHash;
 
   friend class RelatedAccIterator;
 
@@ -649,10 +695,16 @@ protected:
   nsTArray<nsIContent*> mInvalidationList;
 
   /**
+   * Holds a list of aria-owns relocations.
+   */
+  nsClassHashtable<nsPtrHashKey<Accessible>, nsTArray<RefPtr<Accessible> > >
+    mARIAOwnsHash;
+
+  /**
    * Used to process notification from core and accessible events.
    */
-  nsRefPtr<NotificationController> mNotificationController;
-  friend class EventQueue;
+  RefPtr<NotificationController> mNotificationController;
+  friend class EventTree;
   friend class NotificationController;
 
 private:

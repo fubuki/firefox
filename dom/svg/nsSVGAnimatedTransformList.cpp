@@ -1,11 +1,14 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsSVGAnimatedTransformList.h"
+
 #include "mozilla/dom/SVGAnimatedTransformList.h"
 #include "mozilla/dom/SVGAnimationElement.h"
+#include "mozilla/Move.h"
 #include "nsCharSeparatedTokenizer.h"
 #include "nsSVGTransform.h"
 #include "nsSMILValue.h"
@@ -43,6 +46,9 @@ nsSVGAnimatedTransformList::SetBaseValue(const SVGTransformList& aValue)
     domWrapper->InternalBaseValListWillChangeLengthTo(aValue.Length());
   }
 
+  // (This bool will be copied to our member-var, if attr-change succeeds.)
+  bool hadTransform = HasTransform();
+
   // We don't need to call DidChange* here - we're only called by
   // nsSVGElement::ParseAttribute under Element::SetAttr,
   // which takes care of notifying.
@@ -54,6 +60,7 @@ nsSVGAnimatedTransformList::SetBaseValue(const SVGTransformList& aValue)
     domWrapper->InternalBaseValListWillChangeLengthTo(mBaseVal.Length());
   } else {
     mIsAttrSet = true;
+    mHadTransformBeforeLastBaseValChange = hadTransform;
   }
   return rv;
 }
@@ -61,6 +68,8 @@ nsSVGAnimatedTransformList::SetBaseValue(const SVGTransformList& aValue)
 void
 nsSVGAnimatedTransformList::ClearBaseValue()
 {
+  mHadTransformBeforeLastBaseValChange = HasTransform();
+
   SVGAnimatedTransformList *domWrapper =
     SVGAnimatedTransformList::GetDOMWrapperIfExists(this);
   if (domWrapper) {
@@ -172,8 +181,8 @@ nsSVGAnimatedTransformList::SMILAnimatedTransformList::ValueFromString(
   bool& aPreventCachingOfSandwich) const
 {
   NS_ENSURE_TRUE(aSrcElement, NS_ERROR_FAILURE);
-  NS_ABORT_IF_FALSE(aValue.IsNull(),
-    "aValue should have been cleared before calling ValueFromString");
+  MOZ_ASSERT(aValue.IsNull(),
+             "aValue should have been cleared before calling ValueFromString");
 
   const nsAttrValue* typeAttr = aSrcElement->GetAnimAttr(nsGkAtoms::type);
   const nsIAtom* transformType = nsGkAtoms::translate; // default val
@@ -198,7 +207,7 @@ nsSVGAnimatedTransformList::SMILAnimatedTransformList::ParseValue(
   const nsIAtom* aTransformType,
   nsSMILValue& aResult)
 {
-  NS_ABORT_IF_FALSE(aResult.IsNull(), "Unexpected type for SMIL value");
+  MOZ_ASSERT(aResult.IsNull(), "Unexpected type for SMIL value");
 
   static_assert(SVGTransformSMILData::NUM_SIMPLE_PARAMS == 3,
                 "nsSVGSMILTransform constructor should be expecting array "
@@ -247,7 +256,7 @@ nsSVGAnimatedTransformList::SMILAnimatedTransformList::ParseValue(
   }
 
   // Success! Populate our outparam with parsed value.
-  aResult.Swap(val);
+  aResult = Move(val);
 }
 
 int32_t
@@ -292,9 +301,8 @@ nsresult
 nsSVGAnimatedTransformList::SMILAnimatedTransformList::SetAnimValue(
   const nsSMILValue& aNewAnimValue)
 {
-  NS_ABORT_IF_FALSE(
-    aNewAnimValue.mType == SVGTransformListSMILType::Singleton(),
-    "Unexpected type to assign animated value");
+  MOZ_ASSERT(aNewAnimValue.mType == SVGTransformListSMILType::Singleton(),
+             "Unexpected type to assign animated value");
   SVGTransformList animVal;
   if (!SVGTransformListSMILType::GetTransforms(aNewAnimValue,
                                                animVal.mItems)) {

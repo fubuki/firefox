@@ -4,12 +4,14 @@
 // found in the LICENSE file.
 //
 
-#ifndef COMPILER_VARIABLE_INFO_H_
-#define COMPILER_VARIABLE_INFO_H_
+#ifndef COMPILER_TRANSLATOR_VARIABLEINFO_H_
+#define COMPILER_TRANSLATOR_VARIABLEINFO_H_
 
 #include <GLSLANG/ShaderLang.h>
 
 #include "compiler/translator/IntermNode.h"
+
+class TSymbolTable;
 
 namespace sh
 {
@@ -19,15 +21,16 @@ class CollectVariables : public TIntermTraverser
 {
   public:
     CollectVariables(std::vector<Attribute> *attribs,
-                     std::vector<Attribute> *outputVariables,
+                     std::vector<OutputVariable> *outputVariables,
                      std::vector<Uniform> *uniforms,
                      std::vector<Varying> *varyings,
                      std::vector<InterfaceBlock> *interfaceBlocks,
-                     ShHashFunction64 hashFunction);
+                     ShHashFunction64 hashFunction,
+                     const TSymbolTable &symbolTable);
 
-    virtual void visitSymbol(TIntermSymbol *symbol);
-    virtual bool visitAggregate(Visit, TIntermAggregate *node);
-    virtual bool visitBinary(Visit visit, TIntermBinary *binaryNode);
+    void visitSymbol(TIntermSymbol *symbol) override;
+    bool visitAggregate(Visit, TIntermAggregate *node) override;
+    bool visitBinary(Visit visit, TIntermBinary *binaryNode) override;
 
   private:
     template <typename VarT>
@@ -37,25 +40,38 @@ class CollectVariables : public TIntermTraverser
     void visitInfoList(const TIntermSequence &sequence, std::vector<VarT> *infoList) const;
 
     std::vector<Attribute> *mAttribs;
-    std::vector<Attribute> *mOutputVariables;
+    std::vector<OutputVariable> *mOutputVariables;
     std::vector<Uniform> *mUniforms;
     std::vector<Varying> *mVaryings;
     std::vector<InterfaceBlock> *mInterfaceBlocks;
 
     std::map<std::string, InterfaceBlockField *> mInterfaceBlockFields;
 
+    bool mDepthRangeAdded;
     bool mPointCoordAdded;
     bool mFrontFacingAdded;
     bool mFragCoordAdded;
 
+    bool mInstanceIDAdded;
+    bool mPositionAdded;
+    bool mPointSizeAdded;
+    bool mLastFragDataAdded;
+    bool mFragColorAdded;
+    bool mFragDataAdded;
+    bool mFragDepthEXTAdded;
+    bool mFragDepthAdded;
+    bool mSecondaryFragColorEXTAdded;
+    bool mSecondaryFragDataEXTAdded;
+
     ShHashFunction64 mHashFunction;
+
+    const TSymbolTable &mSymbolTable;
 };
 
-// Expand struct variables to flattened lists of split variables
-template <typename VarT>
-void ExpandVariables(const std::vector<VarT> &compact,
-                     std::vector<ShaderVariable> *expanded);
+// Expand struct uniforms to flattened lists of split variables
+void ExpandUniforms(const std::vector<Uniform> &compact,
+                    std::vector<ShaderVariable> *expanded);
 
 }
 
-#endif  // COMPILER_VARIABLE_INFO_H_
+#endif  // COMPILER_TRANSLATOR_VARIABLEINFO_H_

@@ -46,8 +46,8 @@ public:
 
 TEST_F(TestSyncRunnable, TestDispatch)
 {
-  nsRefPtr<TestRunnable> r(new TestRunnable());
-  nsRefPtr<SyncRunnable> s(new SyncRunnable(r));
+  RefPtr<TestRunnable> r(new TestRunnable());
+  RefPtr<SyncRunnable> s(new SyncRunnable(r));
   s->DispatchToThread(gThread);
 
   ASSERT_TRUE(r->ran());
@@ -55,23 +55,7 @@ TEST_F(TestSyncRunnable, TestDispatch)
 
 TEST_F(TestSyncRunnable, TestDispatchStatic)
 {
-  nsRefPtr<TestRunnable> r(new TestRunnable());
+  RefPtr<TestRunnable> r(new TestRunnable());
   SyncRunnable::DispatchToThread(gThread, r);
   ASSERT_TRUE(r->ran());
-}
-
-
-#include "mtransport_test_utils.h"
-MtransportTestUtils *test_utils;
-
-int main(int argc, char **argv)
-{
-  test_utils = new MtransportTestUtils();
-  // Start the tests
-  ::testing::InitGoogleTest(&argc, argv);
-
-  int rv = RUN_ALL_TESTS();
-
-  delete test_utils;
-  return rv;
 }

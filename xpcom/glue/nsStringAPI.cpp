@@ -13,7 +13,7 @@
 
 #include <stdio.h>
 
-#ifdef XP_WIN
+#if defined(_MSC_VER) && _MSC_VER < 1900
 #define snprintf _snprintf
 #endif
 
@@ -522,7 +522,7 @@ nsAString::AppendInt(int aInt, int32_t aRadix)
     default:
       NS_ERROR("Unrecognized radix");
       fmt = "";
-  };
+  }
 
   char buf[20];
   int len = snprintf(buf, sizeof(buf), fmt, aInt);
@@ -1002,7 +1002,7 @@ nsACString::AppendInt(int aInt, int32_t aRadix)
     default:
       NS_ERROR("Unrecognized radix");
       fmt = "";
-  };
+  }
 
   char buf[20];
   int len = snprintf(buf, sizeof(buf), fmt, aInt);
@@ -1308,3 +1308,5 @@ ParseString(const nsACString& aSource, char aDelimiter,
 
   return true;
 }
+
+#undef snprintf

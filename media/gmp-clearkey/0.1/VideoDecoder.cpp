@@ -21,9 +21,8 @@
 #include "ClearKeyDecryptionManager.h"
 #include "ClearKeyUtils.h"
 #include "gmp-task-utils.h"
-#include "mozilla/Endian.h"
+#include "Endian.h"
 #include "VideoDecoder.h"
-#include "mozilla/Move.h"
 
 using namespace wmf;
 
@@ -34,12 +33,18 @@ VideoDecoder::VideoDecoder(GMPVideoHost *aHostAPI)
   , mMutex(nullptr)
   , mNumInputTasks(0)
   , mSentExtraData(false)
+  , mIsFlushing(false)
+  , mHasShutdown(false)
 {
+  // We drop the ref in DecodingComplete().
+  AddRef();
 }
 
 VideoDecoder::~VideoDecoder()
 {
-  mMutex->Destroy();
+  if (mMutex) {
+    mMutex->Destroy();
+  }
 }
 
 void
@@ -52,14 +57,16 @@ VideoDecoder::InitDecode(const GMPVideoCodec& aCodecSettings,
   mCallback = aCallback;
   assert(mCallback);
   mDecoder = new WMFH264Decoder();
-  HRESULT hr = mDecoder->Init();
+  HRESULT hr = mDecoder->Init(aCoreCount);
   if (FAILED(hr)) {
+    CK_LOGD("VideoDecoder::InitDecode failed to init WMFH264Decoder");
     mCallback->Error(GMPGenericErr);
     return;
   }
 
   auto err = GetPlatform()->createmutex(&mMutex);
   if (GMP_FAILED(err)) {
+    CK_LOGD("VideoDecoder::InitDecode failed to create GMPMutex");
     mCallback->Error(GMPGenericErr);
     return;
   }
@@ -108,30 +115,32 @@ VideoDecoder::Decode(GMPVideoEncodedFrame* aInputFrame,
   // Note: we don't need the codec specific info on a per-frame basis.
   // It's mostly useful for WebRTC use cases.
 
-  mWorkerThread->Post(WrapTask(this,
-                               &VideoDecoder::DecodeTask,
-                               aInputFrame));
+  // Make a copy of the data, so we can release aInputFrame ASAP,
+  // to avoid too many shmem handles being held by the GMP process.
+  // If the GMP process holds on to too many shmem handles, the Gecko
+  // side can fail to allocate a shmem to send more input. This is
+  // particularly a problem in Gecko mochitests, which can open multiple
+  // actors at once which share the same pool of shmems.
+  DecodeData* data = new DecodeData();
+  Assign(data->mBuffer, aInputFrame->Buffer(), aInputFrame->Size());
+  data->mTimestamp = aInputFrame->TimeStamp();
+  data->mDuration = aInputFrame->Duration();
+  data->mIsKeyframe = (aInputFrame->FrameType() == kGMPKeyFrame);
+  const GMPEncryptedBufferMetadata* crypto = aInputFrame->GetDecryptionData();
+  if (crypto) {
+    data->mCrypto.Init(crypto);
+  }
+  aInputFrame->Destroy();
+  mWorkerThread->Post(WrapTaskRefCounted(this,
+                                         &VideoDecoder::DecodeTask,
+                                         data));
 }
 
-class AutoReleaseVideoFrame {
-public:
-  AutoReleaseVideoFrame(GMPVideoEncodedFrame* aFrame)
-    : mFrame(aFrame)
-  {
-  }
-  ~AutoReleaseVideoFrame()
-  {
-    GetPlatform()->runonmainthread(WrapTask(mFrame, &GMPVideoEncodedFrame::Destroy));
-  }
-private:
-  GMPVideoEncodedFrame* mFrame;
-};
-
 void
-VideoDecoder::DecodeTask(GMPVideoEncodedFrame* aInput)
+VideoDecoder::DecodeTask(DecodeData* aData)
 {
   CK_LOGD("VideoDecoder::DecodeTask");
-  AutoReleaseVideoFrame ensureFrameReleased(aInput);
+  AutoPtr<DecodeData> d(aData);
   HRESULT hr;
 
   {
@@ -140,34 +149,32 @@ VideoDecoder::DecodeTask(GMPVideoEncodedFrame* aInput)
     assert(mNumInputTasks >= 0);
   }
 
-  if (!aInput || !mHostAPI || !mDecoder) {
+  if (mIsFlushing) {
+    CK_LOGD("VideoDecoder::DecodeTask rejecting frame: flushing.");
+    return;
+  }
+
+  if (!aData || !mHostAPI || !mDecoder) {
     CK_LOGE("Decode job not set up correctly!");
     return;
   }
 
-  const uint8_t* inBuffer = aInput->Buffer();
-  if (!inBuffer) {
-    CK_LOGE("No buffer for encoded frame!\n");
-    return;
-  }
-
-  const GMPEncryptedBufferMetadata* crypto = aInput->GetDecryptionData();
-  std::vector<uint8_t> buffer(inBuffer, inBuffer + aInput->Size());
-  if (crypto) {
+  std::vector<uint8_t>& buffer = aData->mBuffer;
+  if (aData->mCrypto.IsValid()) {
     // Plugin host should have set up its decryptor/key sessions
     // before trying to decode!
     GMPErr rv =
-      ClearKeyDecryptionManager::Get()->Decrypt(&buffer[0], buffer.size(), crypto);
+      ClearKeyDecryptionManager::Get()->Decrypt(buffer, aData->mCrypto);
 
     if (GMP_FAILED(rv)) {
-      GetPlatform()->runonmainthread(WrapTask(mCallback, &GMPVideoDecoderCallback::Error, rv));
+      MaybeRunOnMainThread(WrapTask(mCallback, &GMPVideoDecoderCallback::Error, rv));
       return;
     }
   }
 
   AnnexB::ConvertFrameInPlace(buffer);
 
-  if (aInput->FrameType() == kGMPKeyFrame) {
+  if (aData->mIsKeyframe) {
     // We must send the SPS and PPS to Windows Media Foundation's decoder.
     // Note: We do this *after* decryption, otherwise the subsample info
     // would be incorrect.
@@ -176,8 +183,8 @@ VideoDecoder::DecodeTask(GMPVideoEncodedFrame* aInput)
 
   hr = mDecoder->Input(buffer.data(),
                        buffer.size(),
-                       aInput->TimeStamp(),
-                       aInput->Duration());
+                       aData->mTimestamp,
+                       aData->mDuration);
 
   CK_LOGD("VideoDecoder::DecodeTask() Input ret hr=0x%x\n", hr);
   if (FAILED(hr)) {
@@ -192,21 +199,20 @@ VideoDecoder::DecodeTask(GMPVideoEncodedFrame* aInput)
     hr = mDecoder->Output(&output);
     CK_LOGD("VideoDecoder::DecodeTask() output ret=0x%x\n", hr);
     if (hr == S_OK) {
-      GetPlatform()->runonmainthread(
-        WrapTask(this,
-                 &VideoDecoder::ReturnOutput,
-                 CComPtr<IMFSample>(mozilla::Move(output)),
-                 mDecoder->GetFrameWidth(),
-                 mDecoder->GetFrameHeight(),
-                 mDecoder->GetStride()));
-      assert(!output.Get());
+      MaybeRunOnMainThread(
+        WrapTaskRefCounted(this,
+                           &VideoDecoder::ReturnOutput,
+                           CComPtr<IMFSample>(output),
+                           mDecoder->GetFrameWidth(),
+                           mDecoder->GetFrameHeight(),
+                           mDecoder->GetStride()));
     }
     if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
       AutoLock lock(mMutex);
       if (mNumInputTasks == 0) {
         // We have run all input tasks. We *must* notify Gecko so that it will
         // send us more data.
-        GetPlatform()->runonmainthread(
+        MaybeRunOnMainThread(
           WrapTask(mCallback,
                    &GMPVideoDecoderCallback::InputDataExhausted));
       }
@@ -229,11 +235,20 @@ VideoDecoder::ReturnOutput(IMFSample* aSample,
   HRESULT hr;
 
   GMPVideoFrame* f = nullptr;
-  mHostAPI->CreateFrame(kGMPI420VideoFrame, &f);
-  if (!f) {
+  auto err = mHostAPI->CreateFrame(kGMPI420VideoFrame, &f);
+  if (GMP_FAILED(err) || !f) {
     CK_LOGE("Failed to create i420 frame!\n");
     return;
   }
+  if (HasShutdown()) {
+    // Note: GMPVideoHost::CreateFrame() can process messages before returning,
+    // including a message that calls VideoDecoder::DecodingComplete(), i.e.
+    // we can shutdown during the call!
+    CK_LOGD("Shutdown while waiting on GMPVideoHost::CreateFrame()!\n");
+    f->Destroy();
+    return;
+  }
+
   auto vf = static_cast<GMPVideoi420Frame*>(f);
 
   hr = SampleToVideoFrame(aSample, aWidth, aHeight, aStride, vf);
@@ -288,9 +303,10 @@ VideoDecoder::SampleToVideoFrame(IMFSample* aSample,
   int32_t halfStride = (stride + 1) / 2;
   int32_t halfHeight = (aHeight + 1) / 2;
 
-  aVideoFrame->CreateEmptyFrame(stride, aHeight, stride, halfStride, halfStride);
+  auto err = aVideoFrame->CreateEmptyFrame(stride, aHeight, stride, halfStride, halfStride);
+  ENSURE(GMP_SUCCEEDED(err), E_FAIL);
 
-  auto err = aVideoFrame->SetWidth(aWidth);
+  err = aVideoFrame->SetWidth(aWidth);
   ENSURE(GMP_SUCCEEDED(err), E_FAIL);
   err = aVideoFrame->SetHeight(aHeight);
   ENSURE(GMP_SUCCEEDED(err), E_FAIL);
@@ -329,10 +345,28 @@ VideoDecoder::SampleToVideoFrame(IMFSample* aSample,
 }
 
 void
+VideoDecoder::ResetCompleteTask()
+{
+  mIsFlushing = false;
+  if (mCallback) {
+    MaybeRunOnMainThread(WrapTask(mCallback,
+                                  &GMPVideoDecoderCallback::ResetComplete));
+  }
+}
+
+void
 VideoDecoder::Reset()
 {
-  mDecoder->Reset();
-  mCallback->ResetComplete();
+  mIsFlushing = true;
+  if (mDecoder) {
+    mDecoder->Reset();
+  }
+
+  // Schedule ResetComplete callback to run after existing frames have been
+  // flushed out of the task queue.
+  EnsureWorker();
+  mWorkerThread->Post(WrapTaskRefCounted(this,
+                                         &VideoDecoder::ResetCompleteTask));
 }
 
 void
@@ -347,25 +381,30 @@ VideoDecoder::DrainTask()
     hr = mDecoder->Output(&output);
     CK_LOGD("VideoDecoder::DrainTask() output ret=0x%x\n", hr);
     if (hr == S_OK) {
-      GetPlatform()->runonmainthread(
-        WrapTask(this,
-                 &VideoDecoder::ReturnOutput,
-                 CComPtr<IMFSample>(mozilla::Move(output)),
-                 mDecoder->GetFrameWidth(),
-                 mDecoder->GetFrameHeight(),
-                 mDecoder->GetStride()));
-      assert(!output.Get());
+      MaybeRunOnMainThread(
+        WrapTaskRefCounted(this,
+                           &VideoDecoder::ReturnOutput,
+                           CComPtr<IMFSample>(output),
+                           mDecoder->GetFrameWidth(),
+                           mDecoder->GetFrameHeight(),
+                           mDecoder->GetStride()));
     }
   }
-  GetPlatform()->runonmainthread(WrapTask(mCallback, &GMPVideoDecoderCallback::DrainComplete));
+  MaybeRunOnMainThread(WrapTask(mCallback, &GMPVideoDecoderCallback::DrainComplete));
 }
 
 void
 VideoDecoder::Drain()
 {
+  if (!mDecoder) {
+    if (mCallback) {
+      mCallback->DrainComplete();
+    }
+    return;
+  }
   EnsureWorker();
-  mWorkerThread->Post(WrapTask(this,
-                               &VideoDecoder::DrainTask));
+  mWorkerThread->Post(WrapTaskRefCounted(this,
+                                         &VideoDecoder::DrainTask));
 }
 
 void
@@ -374,5 +413,43 @@ VideoDecoder::DecodingComplete()
   if (mWorkerThread) {
     mWorkerThread->Join();
   }
-  delete this;
+  mHasShutdown = true;
+
+  // Release the reference we added in the constructor. There may be
+  // WrapRefCounted tasks that also hold references to us, and keep
+  // us alive a little longer.
+  Release();
+}
+
+void
+VideoDecoder::MaybeRunOnMainThread(GMPTask* aTask)
+{
+  class MaybeRunTask : public GMPTask
+  {
+  public:
+    MaybeRunTask(VideoDecoder* aDecoder, GMPTask* aTask)
+      : mDecoder(aDecoder), mTask(aTask)
+    { }
+
+    virtual void Run(void) {
+      if (mDecoder->HasShutdown()) {
+        CK_LOGD("Trying to dispatch to main thread after VideoDecoder has shut down");
+        return;
+      }
+
+      mTask->Run();
+    }
+
+    virtual void Destroy()
+    {
+      mTask->Destroy();
+      delete this;
+    }
+
+  private:
+    RefPtr<VideoDecoder> mDecoder;
+    GMPTask* mTask;
+  };
+
+  GetPlatform()->runonmainthread(new MaybeRunTask(this, aTask));
 }

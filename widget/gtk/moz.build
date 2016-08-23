@@ -4,7 +4,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-if CONFIG['MOZ_ENABLE_GTK3']:
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3':
     DIRS += ['mozgtk']
 
 EXPORTS += [
@@ -13,14 +13,18 @@ EXPORTS += [
     'nsIImageToPixbuf.h',
 ]
 
+EXPORTS.mozilla += [
+    'WidgetUtilsGtk.h'
+]
+
 UNIFIED_SOURCES += [
+    'IMContextWrapper.cpp',
     'mozcontainer.c',
     'NativeKeyBindings.cpp',
     'nsAppShell.cpp',
     'nsBidiKeyboard.cpp',
     'nsColorPicker.cpp',
     'nsFilePicker.cpp',
-    'nsGtkIMModule.cpp',
     'nsGtkKeyUtils.cpp',
     'nsImageToPixbuf.cpp',
     'nsLookAndFeel.cpp',
@@ -32,6 +36,7 @@ UNIFIED_SOURCES += [
     'nsWidgetFactory.cpp',
     'WakeLockListener.cpp',
     'WidgetTraceEvent.cpp',
+    'WidgetUtilsGtk.cpp',
 ]
 
 SOURCES += [
@@ -60,20 +65,26 @@ if CONFIG['MOZ_X11']:
         'nsDragService.cpp',
     ]
 
-FAIL_ON_WARNINGS = True
+if CONFIG['GNU_CC']:
+    CFLAGS += ['-Wshadow']
 
 if CONFIG['ACCESSIBILITY']:
     UNIFIED_SOURCES += [
         'maiRedundantObjectFactory.c',
     ]
 
-if CONFIG['MOZ_ENABLE_GTK2']:
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk2':
     UNIFIED_SOURCES += [
         'gtk2drawing.c',
     ]
 else:
+    # Ignore GTK3 deprecation warnings while much of the code is still used
+    # with GTK2.
+    DEFINES['GDK_DISABLE_DEPRECATION_WARNINGS'] = True;
     UNIFIED_SOURCES += [
-        'gtk3drawing.c',
+        'gtk3drawing.cpp',
+        'nsApplicationChooser.cpp',
+        'WidgetStyleCache.cpp',
     ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
@@ -97,7 +108,17 @@ DEFINES['CAIRO_GFX'] = True
 DEFINES['MOZ_APP_NAME'] = '"%s"' % CONFIG['MOZ_APP_NAME']
 
 CFLAGS += CONFIG['MOZ_STARTUP_NOTIFICATION_CFLAGS']
-CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+
+# When building with GTK3, the widget code always needs to use
+# system Cairo headers, regardless of whether we are also linked
+# against and using in-tree Cairo. By not using in-tree Cairo
+# headers, we avoid picking up our renamed symbols, and instead
+# use only system Cairo symbols that GTK3 uses. This allows that
+# any Cairo objects created can be freely passed back and forth
+# between the widget code and GTK3.
+if not (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3' and CONFIG['MOZ_TREE_CAIRO']):
+    CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+
 CXXFLAGS += CONFIG['MOZ_STARTUP_NOTIFICATION_CFLAGS']
 
 CFLAGS += CONFIG['TK_CFLAGS']

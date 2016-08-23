@@ -17,19 +17,19 @@ namespace dom {
 class Promise;
 class TVTuner;
 
-class TVManager MOZ_FINAL : public DOMEventTargetHelper
+class TVManager final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TVManager, DOMEventTargetHelper)
 
-  static already_AddRefed<TVManager> Create(nsPIDOMWindow* aWindow);
+  static already_AddRefed<TVManager> Create(nsPIDOMWindowInner* aWindow);
 
   // WebIDL (internal functions)
 
-  virtual JSObject* WrapObject(JSContext *aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  nsresult SetTuners(const nsTArray<nsRefPtr<TVTuner>>& aTuners);
+  nsresult SetTuners(const nsTArray<RefPtr<TVTuner>>& aTuners);
 
   void RejectPendingGetTunersPromises(nsresult aRv);
 
@@ -40,16 +40,16 @@ public:
   already_AddRefed<Promise> GetTuners(ErrorResult& aRv);
 
 private:
-  explicit TVManager(nsPIDOMWindow* aWindow);
+  explicit TVManager(nsPIDOMWindowInner* aWindow);
 
   ~TVManager();
 
   bool Init();
 
   nsCOMPtr<nsITVService> mTVService;
-  nsTArray<nsRefPtr<TVTuner>> mTuners;
+  nsTArray<RefPtr<TVTuner>> mTuners;
   bool mIsReady;
-  nsTArray<nsRefPtr<Promise>> mPendingGetTunersPromises;
+  nsTArray<RefPtr<Promise>> mPendingGetTunersPromises;
 };
 
 } // namespace dom

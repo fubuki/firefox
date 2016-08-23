@@ -6,23 +6,22 @@
 #include "ImageLayerComposite.h"
 #include "CompositableHost.h"           // for CompositableHost
 #include "Layers.h"                     // for WriteSnapshotToDumpFile, etc
-#include "gfx2DGlue.h"                  // for ToFilter, ToMatrix4x4
+#include "gfx2DGlue.h"                  // for ToFilter
+#include "gfxEnv.h"                     // for gfxEnv
 #include "gfxRect.h"                    // for gfxRect
-#include "gfxUtils.h"                   // for gfxUtils, etc
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/gfx/Point.h"          // for IntSize, Point
 #include "mozilla/gfx/Rect.h"           // for Rect
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/Effects.h"     // for EffectChain
+#include "mozilla/layers/ImageHost.h"   // for ImageHost
 #include "mozilla/layers/TextureHost.h"  // for TextureHost, etc
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsAString.h"
-#include "nsAutoPtr.h"                  // for nsRefPtr
+#include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
-#include "nsPoint.h"                    // for nsIntPoint
-#include "nsRect.h"                     // for nsIntRect
 #include "nsString.h"                   // for nsAutoCString
 
 namespace mozilla {
@@ -52,8 +51,7 @@ ImageLayerComposite::SetCompositableHost(CompositableHost* aHost)
 {
   switch (aHost->GetType()) {
     case CompositableType::IMAGE:
-    case CompositableType::IMAGE_OVERLAY:
-      mImageHost = aHost;
+      mImageHost = static_cast<ImageHost*>(aHost);
       return true;
     default:
       return false;
@@ -82,14 +80,24 @@ ImageLayerComposite::GetLayer()
 }
 
 void
-ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
+ImageLayerComposite::SetLayerManager(LayerManagerComposite* aManager)
+{
+  LayerComposite::SetLayerManager(aManager);
+  mManager = aManager;
+  if (mImageHost) {
+    mImageHost->SetCompositor(mCompositor);
+  }
+}
+
+void
+ImageLayerComposite::RenderLayer(const IntRect& aClipRect)
 {
   if (!mImageHost || !mImageHost->IsAttached()) {
     return;
   }
 
 #ifdef MOZ_DUMP_PAINTING
-  if (gfxUtils::sDumpPainting) {
+  if (gfxEnv::DumpCompositorTextures()) {
     RefPtr<gfx::DataSourceSurface> surf = mImageHost->GetAsSurface();
     WriteSnapshotToDumpFile(this, surf);
   }
@@ -97,17 +105,15 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
   mCompositor->MakeCurrent();
 
-  EffectChain effectChain(this);
-  LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
-  AddBlendModeEffect(effectChain);
-
-  gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
-  mImageHost->SetCompositor(mCompositor);
-  mImageHost->Composite(effectChain,
-                        GetEffectiveOpacity(),
-                        GetEffectiveTransformForBuffer(),
-                        GetEffectFilter(),
-                        clipRect);
+  RenderWithAllMasks(this, mCompositor, aClipRect,
+                     [&](EffectChain& effectChain, const Rect& clipRect) {
+    mImageHost->SetCompositor(mCompositor);
+    mImageHost->Composite(this, effectChain,
+                          GetEffectiveOpacity(),
+                          GetEffectiveTransformForBuffer(),
+                          GetEffectFilter(),
+                          clipRect);
+  });
   mImageHost->BumpFlashCounter();
 }
 
@@ -145,7 +151,38 @@ ImageLayerComposite::ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransform
     mEffectiveTransformForBuffer = mEffectiveTransform;
   }
 
-  ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+  ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
+}
+
+bool
+ImageLayerComposite::IsOpaque()
+{
+  if (!mImageHost ||
+      !mImageHost->IsAttached()) {
+    return false;
+  }
+
+  if (mScaleMode == ScaleMode::STRETCH) {
+    return mImageHost->IsOpaque();
+  }
+  return false;
+}
+
+nsIntRegion
+ImageLayerComposite::GetFullyRenderedRegion()
+{
+  if (!mImageHost ||
+      !mImageHost->IsAttached()) {
+    return GetShadowVisibleRegion().ToUnknownRegion();
+  }
+
+  if (mScaleMode == ScaleMode::STRETCH) {
+    nsIntRegion shadowVisibleRegion;
+    shadowVisibleRegion.And(GetShadowVisibleRegion().ToUnknownRegion(), nsIntRegion(gfx::IntRect(0, 0, mScaleToSize.width, mScaleToSize.height)));
+    return shadowVisibleRegion;
+  }
+
+  return GetShadowVisibleRegion().ToUnknownRegion();
 }
 
 CompositableHost*
@@ -162,6 +199,7 @@ void
 ImageLayerComposite::CleanupResources()
 {
   if (mImageHost) {
+    mImageHost->CleanupResources();
     mImageHost->Detach(this);
   }
   mImageHost = nullptr;
@@ -170,7 +208,7 @@ ImageLayerComposite::CleanupResources()
 gfx::Filter
 ImageLayerComposite::GetEffectFilter()
 {
-  return gfx::ToFilter(mFilter);
+  return mFilter;
 }
 
 void
@@ -192,5 +230,5 @@ ImageLayerComposite::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
 }
 
-} /* layers */
-} /* mozilla */
+} // namespace layers
+} // namespace mozilla

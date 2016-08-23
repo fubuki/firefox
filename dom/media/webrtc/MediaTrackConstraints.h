@@ -9,109 +9,250 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
+#include "mozilla/dom/MediaTrackConstraintSetBinding.h"
+#include "mozilla/dom/MediaTrackSupportedConstraintsBinding.h"
+
+#include <map>
 
 namespace mozilla {
 
-// Normalized internal version of MediaTrackConstraints to simplify downstream
-// processing. This implementation-only helper is included as needed by both
-// MediaManager (for gUM camera selection) and MediaEngine (for applyConstraints).
-
-template<typename T>
-class MediaTrackConstraintsN : public dom::MediaTrackConstraints
-{
-public:
-  typedef T Kind;
-  dom::Sequence<Kind> mRequireN;
-  bool mUnsupportedRequirement;
-  MediaTrackConstraintSet mRequired;
-  dom::Sequence<MediaTrackConstraintSet> mNonrequired;
-
-  MediaTrackConstraintsN(const dom::MediaTrackConstraints &aOther,
-                         const dom::EnumEntry* aStrings)
-  : dom::MediaTrackConstraints(aOther)
-  , mUnsupportedRequirement(false)
-  , mStrings(aStrings)
-  {
-    if (mRequire.WasPassed()) {
-      auto& array = mRequire.Value();
-      for (uint32_t i = 0; i < array.Length(); i++) {
-        auto value = ToEnum(array[i]);
-        if (value != Kind::Other) {
-          mRequireN.AppendElement(value);
-        } else {
-          mUnsupportedRequirement = true;
-        }
-      }
-    }
-
-    // treat MediaSource special because it's always required
-    mRequired.mMediaSource = mMediaSource;
-
-    // we guarantee (int) equivalence from MediaSourceEnum ->MediaSourceType
-    // (but not the other way)
-    if (mMediaSource != dom::MediaSourceEnum::Camera && mAdvanced.WasPassed()) {
-      // iterate through advanced, forcing mediaSource to match "root"
-      auto& array = mAdvanced.Value();
-      for (uint32_t i = 0; i < array.Length(); i++) {
-        if (array[i].mMediaSource == dom::MediaSourceEnum::Camera) {
-          array[i].mMediaSource = mMediaSource;
-        }
-      }
-    }
-  }
-protected:
-  MediaTrackConstraintSet& Triage(const Kind kind) {
-    if (mRequireN.IndexOf(kind) != mRequireN.NoIndex) {
-      return mRequired;
-    } else {
-      mNonrequired.AppendElement(MediaTrackConstraintSet());
-      return mNonrequired[mNonrequired.Length()-1];
-    }
-  }
-private:
-  Kind ToEnum(const nsAString& aSrc) {
-    for (size_t i = 0; mStrings[i].value; i++) {
-      if (aSrc.EqualsASCII(mStrings[i].value)) {
-        return Kind(i);
-      }
-    }
-    return Kind::Other;
-  }
-  const dom::EnumEntry* mStrings;
-};
-
-struct AudioTrackConstraintsN :
-  public MediaTrackConstraintsN<dom::SupportedAudioConstraints>
-{
-  MOZ_IMPLICIT AudioTrackConstraintsN(const dom::MediaTrackConstraints &aOther)
-  : MediaTrackConstraintsN<dom::SupportedAudioConstraints>(aOther, // B2G ICS compiler bug
-                           dom::SupportedAudioConstraintsValues::strings) {}
-};
-
-struct VideoTrackConstraintsN :
-    public MediaTrackConstraintsN<dom::SupportedVideoConstraints>
-{
-  MOZ_IMPLICIT VideoTrackConstraintsN(const dom::MediaTrackConstraints &aOther)
-  : MediaTrackConstraintsN<dom::SupportedVideoConstraints>(aOther,
-                           dom::SupportedVideoConstraintsValues::strings) {
-    if (mFacingMode.WasPassed()) {
-      Triage(Kind::FacingMode).mFacingMode.Construct(mFacingMode.Value());
-    }
-    // Reminder: add handling for new constraints both here & SatisfyConstraintSet
-    Triage(Kind::Width).mWidth = mWidth;
-    Triage(Kind::Height).mHeight = mHeight;
-    Triage(Kind::FrameRate).mFrameRate = mFrameRate;
-    if (mBrowserWindow.WasPassed()) {
-      Triage(Kind::BrowserWindow).mBrowserWindow.Construct(mBrowserWindow.Value());
-    }
-    if (mScrollWithPage.WasPassed()) {
-      Triage(Kind::ScrollWithPage).mScrollWithPage.Construct(mScrollWithPage.Value());
-    }
-    // treat MediaSource special because it's always required
-    mRequired.mMediaSource = mMediaSource;
-  }
-};
-
+template<class EnumValuesStrings, class Enum>
+static const char* EnumToASCII(const EnumValuesStrings& aStrings, Enum aValue) {
+  return aStrings[uint32_t(aValue)].value;
 }
+
+template<class EnumValuesStrings, class Enum>
+static Enum StringToEnum(const EnumValuesStrings& aStrings,
+                         const nsAString& aValue, Enum aDefaultValue) {
+  for (size_t i = 0; aStrings[i].value; i++) {
+    if (aValue.EqualsASCII(aStrings[i].value)) {
+      return Enum(i);
+    }
+  }
+  return aDefaultValue;
+}
+
+// Helper classes for orthogonal constraints without interdependencies.
+// Instead of constraining values, constrain the constraints themselves.
+
+struct NormalizedConstraintSet
+{
+  template<class ValueType>
+  struct Range
+  {
+    ValueType mMin, mMax;
+    dom::Optional<ValueType> mIdeal;
+
+    Range(ValueType aMin, ValueType aMax) : mMin(aMin), mMax(aMax) {}
+
+    template<class ConstrainRange>
+    void SetFrom(const ConstrainRange& aOther);
+    ValueType Clamp(ValueType n) const { return std::max(mMin, std::min(n, mMax)); }
+    ValueType Get(ValueType defaultValue) const {
+      return Clamp(mIdeal.WasPassed() ? mIdeal.Value() : defaultValue);
+    }
+    bool Intersects(const Range& aOther) const {
+      return mMax >= aOther.mMin && mMin <= aOther.mMax;
+    }
+    void Intersect(const Range& aOther) {
+      MOZ_ASSERT(Intersects(aOther));
+      mMin = std::max(mMin, aOther.mMin);
+      mMax = std::min(mMax, aOther.mMax);
+    }
+  };
+
+  struct LongRange : public Range<int32_t>
+  {
+    LongRange(const dom::OwningLongOrConstrainLongRange& aOther, bool advanced);
+  };
+
+  struct DoubleRange : public Range<double>
+  {
+    DoubleRange(const dom::OwningDoubleOrConstrainDoubleRange& aOther,
+                bool advanced);
+  };
+
+  struct BooleanRange : public Range<bool>
+  {
+    BooleanRange(const dom::OwningBooleanOrConstrainBooleanParameters& aOther,
+                 bool advanced);
+  };
+
+  // Do you need to add your constraint here? Only if your code uses flattening
+  LongRange mWidth, mHeight;
+  DoubleRange mFrameRate;
+  LongRange mViewportOffsetX, mViewportOffsetY, mViewportWidth, mViewportHeight;
+  BooleanRange mEchoCancellation, mMozNoiseSuppression, mMozAutoGainControl;
+
+  NormalizedConstraintSet(const dom::MediaTrackConstraintSet& aOther,
+                          bool advanced)
+  : mWidth(aOther.mWidth, advanced)
+  , mHeight(aOther.mHeight, advanced)
+  , mFrameRate(aOther.mFrameRate, advanced)
+  , mViewportOffsetX(aOther.mViewportOffsetX, advanced)
+  , mViewportOffsetY(aOther.mViewportOffsetY, advanced)
+  , mViewportWidth(aOther.mViewportWidth, advanced)
+  , mViewportHeight(aOther.mViewportHeight, advanced)
+  , mEchoCancellation(aOther.mEchoCancellation, advanced)
+  , mMozNoiseSuppression(aOther.mMozNoiseSuppression, advanced)
+  , mMozAutoGainControl(aOther.mMozAutoGainControl, advanced) {}
+};
+
+struct FlattenedConstraints : public NormalizedConstraintSet
+{
+  explicit FlattenedConstraints(const dom::MediaTrackConstraints& aOther);
+};
+
+// A helper class for MediaEngines
+
+class MediaConstraintsHelper
+{
+protected:
+  template<class ValueType, class ConstrainRange>
+  static uint32_t FitnessDistance(ValueType aN, const ConstrainRange& aRange);
+  static uint32_t FitnessDistance(int32_t aN,
+      const dom::OwningLongOrConstrainLongRange& aConstraint, bool aAdvanced);
+  static uint32_t FitnessDistance(double aN,
+      const dom::OwningDoubleOrConstrainDoubleRange& aConstraint, bool aAdvanced);
+  static uint32_t FitnessDistance(nsString aN,
+    const dom::OwningStringOrStringSequenceOrConstrainDOMStringParameters& aConstraint,
+    bool aAdvanced);
+  static uint32_t FitnessDistance(nsString aN,
+      const dom::ConstrainDOMStringParameters& aParams);
+
+  static uint32_t
+  GetMinimumFitnessDistance(const dom::MediaTrackConstraintSet &aConstraints,
+                            bool aAdvanced,
+                            const nsString& aDeviceId);
+
+  template<class DeviceType>
+  static bool
+  SomeSettingsFit(const dom::MediaTrackConstraints &aConstraints,
+                  nsTArray<RefPtr<DeviceType>>& aSources)
+  {
+    nsTArray<const dom::MediaTrackConstraintSet*> aggregateConstraints;
+    aggregateConstraints.AppendElement(&aConstraints);
+
+    MOZ_ASSERT(aSources.Length());
+    for (auto& source : aSources) {
+      if (source->GetBestFitnessDistance(aggregateConstraints) != UINT32_MAX) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+public:
+  // Apply constrains to a supplied list of sources (removes items from the list)
+
+  template<class DeviceType>
+  static const char*
+  SelectSettings(const dom::MediaTrackConstraints &aConstraints,
+                 nsTArray<RefPtr<DeviceType>>& aSources)
+  {
+    auto& c = aConstraints;
+
+    // First apply top-level constraints.
+
+    // Stack constraintSets that pass, starting with the required one, because the
+    // whole stack must be re-satisfied each time a capability-set is ruled out
+    // (this avoids storing state or pushing algorithm into the lower-level code).
+    nsTArray<RefPtr<DeviceType>> unsatisfactory;
+    nsTArray<const dom::MediaTrackConstraintSet*> aggregateConstraints;
+    aggregateConstraints.AppendElement(&c);
+
+    std::multimap<uint32_t, RefPtr<DeviceType>> ordered;
+
+    for (uint32_t i = 0; i < aSources.Length();) {
+      uint32_t distance = aSources[i]->GetBestFitnessDistance(aggregateConstraints);
+      if (distance == UINT32_MAX) {
+        unsatisfactory.AppendElement(aSources[i]);
+        aSources.RemoveElementAt(i);
+      } else {
+        ordered.insert(std::pair<uint32_t, RefPtr<DeviceType>>(distance,
+                                                                 aSources[i]));
+        ++i;
+      }
+    }
+    if (!aSources.Length()) {
+      // None selected. The spec says to report a constraint that satisfies NONE
+      // of the sources. Unfortunately, this is a bit laborious to find out, and
+      // requires updating as new constraints are added!
+
+      if (!unsatisfactory.Length() ||
+          !SomeSettingsFit(dom::MediaTrackConstraints(), unsatisfactory)) {
+        return "";
+      }
+      if (c.mDeviceId.IsConstrainDOMStringParameters()) {
+        dom::MediaTrackConstraints fresh;
+        fresh.mDeviceId = c.mDeviceId;
+        if (!SomeSettingsFit(fresh, unsatisfactory)) {
+          return "deviceId";
+        }
+      }
+      if (c.mWidth.IsConstrainLongRange()) {
+        dom::MediaTrackConstraints fresh;
+        fresh.mWidth = c.mWidth;
+        if (!SomeSettingsFit(fresh, unsatisfactory)) {
+          return "width";
+        }
+      }
+      if (c.mHeight.IsConstrainLongRange()) {
+        dom::MediaTrackConstraints fresh;
+        fresh.mHeight = c.mHeight;
+        if (!SomeSettingsFit(fresh, unsatisfactory)) {
+          return "height";
+        }
+      }
+      if (c.mFrameRate.IsConstrainDoubleRange()) {
+        dom::MediaTrackConstraints fresh;
+        fresh.mFrameRate = c.mFrameRate;
+        if (!SomeSettingsFit(fresh, unsatisfactory)) {
+          return "frameRate";
+        }
+      }
+      if (c.mFacingMode.IsConstrainDOMStringParameters()) {
+        dom::MediaTrackConstraints fresh;
+        fresh.mFacingMode = c.mFacingMode;
+        if (!SomeSettingsFit(fresh, unsatisfactory)) {
+          return "facingMode";
+        }
+      }
+      return "";
+    }
+
+    // Order devices by shortest distance
+    for (auto& ordinal : ordered) {
+      aSources.RemoveElement(ordinal.second);
+      aSources.AppendElement(ordinal.second);
+    }
+
+    // Then apply advanced constraints.
+
+    if (c.mAdvanced.WasPassed()) {
+      auto &array = c.mAdvanced.Value();
+
+      for (int i = 0; i < int(array.Length()); i++) {
+        aggregateConstraints.AppendElement(&array[i]);
+        nsTArray<RefPtr<DeviceType>> rejects;
+        for (uint32_t j = 0; j < aSources.Length();) {
+          if (aSources[j]->GetBestFitnessDistance(aggregateConstraints) == UINT32_MAX) {
+            rejects.AppendElement(aSources[j]);
+            aSources.RemoveElementAt(j);
+          } else {
+            ++j;
+          }
+        }
+        if (!aSources.Length()) {
+          aSources.AppendElements(Move(rejects));
+          aggregateConstraints.RemoveElementAt(aggregateConstraints.Length() - 1);
+        }
+      }
+    }
+    return nullptr;
+  }
+};
+
+} // namespace mozilla
 
 #endif /* MEDIATRACKCONSTRAINTS_H_ */

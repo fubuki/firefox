@@ -8,10 +8,9 @@
 
 #include "EditTxn.h"                    // for EditTxn, NS_DECL_EDITTXN
 #include "nsAutoPtr.h"                  // for nsRefPtr
-#include "mozilla/CSSStyleSheet.h"      // for mozilla::CSSStyleSheet
+#include "mozilla/StyleSheetHandle.h"   // for mozilla::StyleSheetHandle
 #include "nsCycleCollectionParticipant.h"
 #include "nsID.h"                       // for REFNSIID
-#include "nsISupportsImpl.h"            // for CSSStyleSheet::Release
 #include "nscore.h"                     // for NS_IMETHOD
 
 class nsIEditor;
@@ -23,20 +22,19 @@ public:
     * @param aEditor the object providing core editing operations
     * @param aSheet   the stylesheet to add
     */
-  NS_IMETHOD Init(nsIEditor* aEditor,
-                  mozilla::CSSStyleSheet* aSheet);
+  NS_IMETHOD Init(nsIEditor* aEditor, mozilla::StyleSheetHandle aSheet);
 
   AddStyleSheetTxn();
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(AddStyleSheetTxn, EditTxn)
-  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) MOZ_OVERRIDE;
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
 
   NS_DECL_EDITTXN
 
 protected:
 
   nsIEditor* mEditor;                      // the editor that created this transaction
-  nsRefPtr<mozilla::CSSStyleSheet> mSheet; // the style sheet to add
+  mozilla::StyleSheetHandle::RefPtr mSheet; // the style sheet to add
 
 };
 
@@ -48,20 +46,19 @@ public:
     * @param aEditor the object providing core editing operations
     * @param aSheet   the stylesheet to remove
     */
-  NS_IMETHOD Init(nsIEditor* aEditor,
-                  mozilla::CSSStyleSheet* aSheet);
+  NS_IMETHOD Init(nsIEditor* aEditor, mozilla::StyleSheetHandle aSheet);
 
   RemoveStyleSheetTxn();
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(RemoveStyleSheetTxn, EditTxn)
-  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) MOZ_OVERRIDE;
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
 
   NS_DECL_EDITTXN
 
 protected:
 
   nsIEditor* mEditor;                      // the editor that created this transaction
-  nsRefPtr<mozilla::CSSStyleSheet> mSheet; // the style sheet to remove
+  mozilla::StyleSheetHandle::RefPtr mSheet; // the style sheet to remove
 
 };
 

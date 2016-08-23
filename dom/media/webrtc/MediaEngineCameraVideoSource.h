@@ -16,7 +16,8 @@
 
 namespace mozilla {
 
-class MediaEngineCameraVideoSource : public MediaEngineVideoSource
+class MediaEngineCameraVideoSource : public MediaEngineVideoSource,
+                                     private MediaConstraintsHelper
 {
 public:
   explicit MediaEngineCameraVideoSource(int aIndex,
@@ -27,84 +28,103 @@ public:
     , mHeight(0)
     , mInitDone(false)
     , mHasDirectListeners(false)
+    , mNrAllocations(0)
     , mCaptureIndex(aIndex)
     , mTrackID(0)
-    , mFps(-1)
   {}
 
 
-  virtual void GetName(nsAString& aName) MOZ_OVERRIDE;
-  virtual void GetUUID(nsAString& aUUID) MOZ_OVERRIDE;
-  virtual void SetDirectListeners(bool aHasListeners) MOZ_OVERRIDE;
-  virtual nsresult Config(bool aEchoOn, uint32_t aEcho,
-                          bool aAgcOn, uint32_t aAGC,
-                          bool aNoiseOn, uint32_t aNoise,
-                          int32_t aPlayoutDelay) MOZ_OVERRIDE
-  {
-    return NS_OK;
-  };
+  void GetName(nsAString& aName) override;
+  void GetUUID(nsACString& aUUID) override;
+  void SetDirectListeners(bool aHasListeners) override;
 
-  virtual bool IsFake() MOZ_OVERRIDE
+  bool IsFake() override
   {
     return false;
   }
 
-  virtual const MediaSourceType GetMediaSource() MOZ_OVERRIDE {
-      return MediaSourceType::Camera;
-  }
-
-  virtual nsresult TakePhoto(PhotoCallback* aCallback) MOZ_OVERRIDE
+  nsresult TakePhoto(MediaEnginePhotoCallback* aCallback) override
   {
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
+  uint32_t GetBestFitnessDistance(
+      const nsTArray<const dom::MediaTrackConstraintSet*>& aConstraintSets,
+      const nsString& aDeviceId) override;
+
+  void Shutdown() override {};
+
 protected:
+  struct CapabilityCandidate {
+    explicit CapabilityCandidate(uint8_t index, uint32_t distance = 0)
+    : mIndex(index), mDistance(distance) {}
+
+    size_t mIndex;
+    uint32_t mDistance;
+  };
+  typedef nsTArray<CapabilityCandidate> CapabilitySet;
+
   ~MediaEngineCameraVideoSource() {}
 
   // guts for appending data to the MSG track
   virtual bool AppendToTrack(SourceMediaStream* aSource,
                              layers::Image* aImage,
                              TrackID aID,
-                             StreamTime delta);
-
-  static bool IsWithin(int32_t n, const dom::ConstrainLongRange& aRange);
-  static bool IsWithin(double n, const dom::ConstrainDoubleRange& aRange);
-  static int32_t Clamp(int32_t n, const dom::ConstrainLongRange& aRange);
-  static bool AreIntersecting(const dom::ConstrainLongRange& aA,
-                              const dom::ConstrainLongRange& aB);
-  static bool Intersect(dom::ConstrainLongRange& aA, const dom::ConstrainLongRange& aB);
-  void GuessCapability(const VideoTrackConstraintsN& aConstraints,
-                       const MediaEnginePrefs& aPrefs);
+                             StreamTime delta,
+                             const PrincipalHandle& aPrincipalHandle);
+  uint32_t GetFitnessDistance(const webrtc::CaptureCapability& aCandidate,
+                              const dom::MediaTrackConstraintSet &aConstraints,
+                              bool aAdvanced,
+                              const nsString& aDeviceId);
+  static void TrimLessFitCandidates(CapabilitySet& set);
+  static void LogConstraints(const dom::MediaTrackConstraintSet& aConstraints,
+                             bool aAdvanced);
+  static void LogCapability(const char* aHeader,
+                            const webrtc::CaptureCapability &aCapability,
+                            uint32_t aDistance);
+  virtual size_t NumCapabilities();
+  virtual void GetCapability(size_t aIndex, webrtc::CaptureCapability& aOut);
+  virtual bool ChooseCapability(const dom::MediaTrackConstraints &aConstraints,
+                        const MediaEnginePrefs &aPrefs,
+                        const nsString& aDeviceId);
+  void SetName(nsString aName);
+  void SetUUID(const char* aUUID);
+  const nsCString& GetUUID(); // protected access
 
   // Engine variables.
 
   // mMonitor protects mImage access/changes, and transitions of mState
   // from kStarted to kStopped (which are combined with EndTrack() and
   // image changes).
-  // mMonitor also protects mSources[] access/changes.
-  // mSources[] is accessed from webrtc threads.
+  // mMonitor also protects mSources[] and mPrincipalHandles[] access/changes.
+  // mSources[] and mPrincipalHandles[] are accessed from webrtc threads.
 
   // All the mMonitor accesses are from the child classes.
   Monitor mMonitor; // Monitor for processing Camera frames.
-  nsTArray<nsRefPtr<SourceMediaStream>> mSources; // When this goes empty, we shut down HW
-  nsRefPtr<layers::Image> mImage;
-  nsRefPtr<layers::ImageContainer> mImageContainer;
+  nsTArray<RefPtr<SourceMediaStream>> mSources; // When this goes empty, we shut down HW
+  nsTArray<PrincipalHandle> mPrincipalHandles; // Directly mapped to mSources.
+  RefPtr<layers::Image> mImage;
+  RefPtr<layers::ImageContainer> mImageContainer;
   int mWidth, mHeight; // protected with mMonitor on Gonk due to different threading
   // end of data protected by mMonitor
 
 
   bool mInitDone;
   bool mHasDirectListeners;
+  int mNrAllocations; // When this becomes 0, we shut down HW
   int mCaptureIndex;
   TrackID mTrackID;
-  int mFps; // Track rate (30 fps by default)
 
-  webrtc::CaptureCapability mCapability; // Doesn't work on OS X.
+  webrtc::CaptureCapability mCapability;
 
+  nsTArray<webrtc::CaptureCapability> mHardcodedCapabilities; // For OSX & B2G
+private:
   nsString mDeviceName;
-  nsString mUniqueId;
+  nsCString mUniqueId;
+  nsString mFacingMode;
 };
 
 
 } // namespace mozilla
+
 #endif // MediaEngineCameraVideoSource_h

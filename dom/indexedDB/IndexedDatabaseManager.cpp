@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,9 +8,12 @@
 
 #include "nsIConsoleService.h"
 #include "nsIDiskSpaceWatcher.h"
+#include "nsIDOMWindow.h"
+#include "nsIEventTarget.h"
 #include "nsIFile.h"
 #include "nsIObserverService.h"
 #include "nsIScriptError.h"
+#include "nsIScriptGlobalObject.h"
 
 #include "jsapi.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -19,27 +22,26 @@
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
-#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/ErrorEventBinding.h"
-#include "mozilla/dom/PBlobChild.h"
-#include "mozilla/dom/quota/OriginOrPatternString.h"
 #include "mozilla/dom/quota/QuotaManager.h"
-#include "mozilla/dom/quota/Utilities.h"
-#include "mozilla/dom/TabContext.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsThreadUtils.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
+#include "FileInfo.h"
+#include "FileManager.h"
 #include "IDBEvents.h"
 #include "IDBFactory.h"
 #include "IDBKeyRange.h"
 #include "IDBRequest.h"
 #include "ProfilerHelpers.h"
+#include "ScriptErrorHelper.h"
 #include "WorkerScope.h"
 #include "WorkerPrivate.h"
 
@@ -56,6 +58,11 @@
 #include "mozilla/dom/IDBTransactionBinding.h"
 #include "mozilla/dom/IDBVersionChangeEventBinding.h"
 
+#ifdef ENABLE_INTL_API
+#include "nsCharSeparatedTokenizer.h"
+#include "unicode/locid.h"
+#endif
+
 #define IDB_STR "indexedDB"
 
 // The two possible values for the data argument when receiving the disk space
@@ -69,6 +76,7 @@ namespace indexedDB {
 
 using namespace mozilla::dom::quota;
 using namespace mozilla::dom::workers;
+using namespace mozilla::ipc;
 
 class FileManagerInfo
 {
@@ -101,26 +109,35 @@ public:
                                  const nsAString& aName);
 
 private:
-  nsTArray<nsRefPtr<FileManager> >&
+  nsTArray<RefPtr<FileManager> >&
   GetArray(PersistenceType aPersistenceType);
 
-  const nsTArray<nsRefPtr<FileManager> >&
+  const nsTArray<RefPtr<FileManager> >&
   GetImmutableArray(PersistenceType aPersistenceType) const
   {
     return const_cast<FileManagerInfo*>(this)->GetArray(aPersistenceType);
   }
 
-  nsTArray<nsRefPtr<FileManager> > mPersistentStorageFileManagers;
-  nsTArray<nsRefPtr<FileManager> > mTemporaryStorageFileManagers;
-  nsTArray<nsRefPtr<FileManager> > mDefaultStorageFileManagers;
+  nsTArray<RefPtr<FileManager> > mPersistentStorageFileManagers;
+  nsTArray<RefPtr<FileManager> > mTemporaryStorageFileManagers;
+  nsTArray<RefPtr<FileManager> > mDefaultStorageFileManagers;
 };
 
+} // namespace indexedDB
+
+using namespace mozilla::dom::indexedDB;
+
 namespace {
+
+NS_DEFINE_IID(kIDBRequestIID, PRIVATE_IDBREQUEST_IID);
+
+const uint32_t kDeleteTimeoutMs = 1000;
 
 #define IDB_PREF_BRANCH_ROOT "dom.indexedDB."
 
 const char kTestingPref[] = IDB_PREF_BRANCH_ROOT "testing";
 const char kPrefExperimental[] = IDB_PREF_BRANCH_ROOT "experimental";
+const char kPrefFileHandle[] = "dom.fileHandle.enabled";
 
 #define IDB_PREF_LOGGING_BRANCH_ROOT IDB_PREF_BRANCH_ROOT "logging."
 
@@ -141,66 +158,81 @@ Atomic<bool> gInitialized(false);
 Atomic<bool> gClosed(false);
 Atomic<bool> gTestingMode(false);
 Atomic<bool> gExperimentalFeaturesEnabled(false);
+Atomic<bool> gFileHandleEnabled(false);
 
-class AsyncDeleteFileRunnable MOZ_FINAL : public nsIRunnable
+class DeleteFilesRunnable final
+  : public nsIRunnable
+  , public OpenDirectoryListener
 {
+  typedef mozilla::dom::quota::DirectoryLock DirectoryLock;
+
+  enum State
+  {
+    // Just created on the main thread. Next step is State_DirectoryOpenPending.
+    State_Initial,
+
+    // Waiting for directory open allowed on the main thread. The next step is
+    // State_DatabaseWorkOpen.
+    State_DirectoryOpenPending,
+
+    // Waiting to do/doing work on the QuotaManager IO thread. The next step is
+    // State_UnblockingOpen.
+    State_DatabaseWorkOpen,
+
+    // Notifying the QuotaManager that it can proceed to the next operation on
+    // the main thread. Next step is State_Completed.
+    State_UnblockingOpen,
+
+    // All done.
+    State_Completed
+  };
+
+  nsCOMPtr<nsIEventTarget> mBackgroundThread;
+
+  RefPtr<FileManager> mFileManager;
+  nsTArray<int64_t> mFileIds;
+
+  RefPtr<DirectoryLock> mDirectoryLock;
+
+  nsCOMPtr<nsIFile> mDirectory;
+  nsCOMPtr<nsIFile> mJournalDirectory;
+
+  State mState;
+
 public:
+  DeleteFilesRunnable(nsIEventTarget* aBackgroundThread,
+                      FileManager* aFileManager,
+                      nsTArray<int64_t>& aFileIds);
+
+  void
+  Dispatch();
+
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIRUNNABLE
 
-  AsyncDeleteFileRunnable(FileManager* aFileManager, int64_t aFileId);
+  virtual void
+  DirectoryLockAcquired(DirectoryLock* aLock) override;
+
+  virtual void
+  DirectoryLockFailed() override;
 
 private:
-  ~AsyncDeleteFileRunnable() {}
-
-  nsRefPtr<FileManager> mFileManager;
-  int64_t mFileId;
-};
-
-class GetFileReferencesHelper MOZ_FINAL : public nsIRunnable
-{
-public:
-  NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_NSIRUNNABLE
-
-  GetFileReferencesHelper(PersistenceType aPersistenceType,
-                          const nsACString& aOrigin,
-                          const nsAString& aDatabaseName,
-                          int64_t aFileId)
-  : mPersistenceType(aPersistenceType),
-    mOrigin(aOrigin),
-    mDatabaseName(aDatabaseName),
-    mFileId(aFileId),
-    mMutex(IndexedDatabaseManager::FileMutex()),
-    mCondVar(mMutex, "GetFileReferencesHelper::mCondVar"),
-    mMemRefCnt(-1),
-    mDBRefCnt(-1),
-    mSliceRefCnt(-1),
-    mResult(false),
-    mWaiting(true)
-  { }
+  ~DeleteFilesRunnable() {}
 
   nsresult
-  DispatchAndReturnFileReferences(int32_t* aMemRefCnt,
-                                  int32_t* aDBRefCnt,
-                                  int32_t* aSliceRefCnt,
-                                  bool* aResult);
+  Open();
 
-private:
-  ~GetFileReferencesHelper() {}
+  nsresult
+  DeleteFile(int64_t aFileId);
 
-  PersistenceType mPersistenceType;
-  nsCString mOrigin;
-  nsString mDatabaseName;
-  int64_t mFileId;
+  nsresult
+  DoDatabaseWork();
 
-  mozilla::Mutex& mMutex;
-  mozilla::CondVar mCondVar;
-  int32_t mMemRefCnt;
-  int32_t mDBRefCnt;
-  int32_t mSliceRefCnt;
-  bool mResult;
-  bool mWaiting;
+  void
+  Finish();
+
+  void
+  UnblockOpen();
 };
 
 void
@@ -212,10 +244,11 @@ AtomicBoolPrefChangedCallback(const char* aPrefName, void* aClosure)
   *static_cast<Atomic<bool>*>(aClosure) = Preferences::GetBool(aPrefName);
 }
 
-} // anonymous namespace
+} // namespace
 
 IndexedDatabaseManager::IndexedDatabaseManager()
-: mFileMutex("IndexedDatabaseManager.mFileMutex")
+  : mFileMutex("IndexedDatabaseManager.mFileMutex")
+  , mBackgroundActor(nullptr)
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 }
@@ -223,12 +256,17 @@ IndexedDatabaseManager::IndexedDatabaseManager()
 IndexedDatabaseManager::~IndexedDatabaseManager()
 {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+
+  if (mBackgroundActor) {
+    mBackgroundActor->SendDeleteMeInternal();
+    MOZ_ASSERT(!mBackgroundActor, "SendDeleteMeInternal should have cleared!");
+  }
 }
 
 bool IndexedDatabaseManager::sIsMainProcess = false;
 bool IndexedDatabaseManager::sFullSynchronousMode = false;
 
-PRLogModuleInfo* IndexedDatabaseManager::sLoggingModule;
+mozilla::LazyLogModule IndexedDatabaseManager::sLoggingModule("IndexedDB");
 
 Atomic<IndexedDatabaseManager::LoggingMode>
   IndexedDatabaseManager::sLoggingMode(
@@ -248,11 +286,7 @@ IndexedDatabaseManager::GetOrCreate()
   }
 
   if (!gDBManager) {
-    sIsMainProcess = XRE_GetProcessType() == GeckoProcessType_Default;
-
-    if (!sLoggingModule) {
-      sLoggingModule = PR_NewLogModule("IndexedDB");
-    }
+    sIsMainProcess = XRE_IsParentProcess();
 
     if (sIsMainProcess && Preferences::GetBool("disk_space_watcher.enabled", false)) {
       // See if we're starting up in low disk space conditions.
@@ -272,7 +306,7 @@ IndexedDatabaseManager::GetOrCreate()
       }
     }
 
-    nsRefPtr<IndexedDatabaseManager> instance(new IndexedDatabaseManager());
+    RefPtr<IndexedDatabaseManager> instance(new IndexedDatabaseManager());
 
     nsresult rv = instance->Init();
     NS_ENSURE_SUCCESS(rv, nullptr);
@@ -311,6 +345,9 @@ IndexedDatabaseManager::Init()
     nsresult rv =
       obs->AddObserver(this, DISKSPACEWATCHER_OBSERVER_TOPIC, false);
     NS_ENSURE_SUCCESS(rv, rv);
+
+    mDeleteTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+    NS_ENSURE_STATE(mDeleteTimer);
   }
 
   Preferences::RegisterCallbackAndCall(AtomicBoolPrefChangedCallback,
@@ -319,6 +356,9 @@ IndexedDatabaseManager::Init()
   Preferences::RegisterCallbackAndCall(AtomicBoolPrefChangedCallback,
                                        kPrefExperimental,
                                        &gExperimentalFeaturesEnabled);
+  Preferences::RegisterCallbackAndCall(AtomicBoolPrefChangedCallback,
+                                       kPrefFileHandle,
+                                       &gFileHandleEnabled);
 
   // By default IndexedDB uses SQLite with PRAGMA synchronous = NORMAL. This
   // guarantees (unlike synchronous = OFF) atomicity and consistency, but not
@@ -337,6 +377,27 @@ IndexedDatabaseManager::Init()
   Preferences::RegisterCallbackAndCall(LoggingModePrefChangedCallback,
                                        kPrefLoggingEnabled);
 
+#ifdef ENABLE_INTL_API
+  const nsAdoptingCString& acceptLang =
+    Preferences::GetLocalizedCString("intl.accept_languages");
+
+  // Split values on commas.
+  nsCCharSeparatedTokenizer langTokenizer(acceptLang, ',');
+  while (langTokenizer.hasMoreTokens()) {
+    nsAutoCString lang(langTokenizer.nextToken());
+    icu::Locale locale = icu::Locale::createCanonical(lang.get());
+    if (!locale.isBogus()) {
+      // icu::Locale::getBaseName is always ASCII as per BCP 47
+      mLocale.AssignASCII(locale.getBaseName());
+      break;
+    }
+  }
+
+  if (mLocale.IsEmpty()) {
+    mLocale.AssignLiteral("en_US");
+  }
+#endif
+
   return NS_OK;
 }
 
@@ -349,12 +410,23 @@ IndexedDatabaseManager::Destroy()
     NS_ERROR("Shutdown more than once?!");
   }
 
+  if (sIsMainProcess && mDeleteTimer) {
+    if (NS_FAILED(mDeleteTimer->Cancel())) {
+      NS_WARNING("Failed to cancel timer!");
+    }
+
+    mDeleteTimer = nullptr;
+  }
+
   Preferences::UnregisterCallback(AtomicBoolPrefChangedCallback,
                                   kTestingPref,
                                   &gTestingMode);
   Preferences::UnregisterCallback(AtomicBoolPrefChangedCallback,
                                   kPrefExperimental,
                                   &gExperimentalFeaturesEnabled);
+  Preferences::UnregisterCallback(AtomicBoolPrefChangedCallback,
+                                  kPrefFileHandle,
+                                  &gFileHandleEnabled);
 
   Preferences::UnregisterCallback(LoggingModePrefChangedCallback,
                                   kPrefLoggingDetails);
@@ -370,49 +442,51 @@ IndexedDatabaseManager::Destroy()
 
 // static
 nsresult
-IndexedDatabaseManager::CommonPostHandleEvent(
-                                             DOMEventTargetHelper* aEventTarget,
-                                             IDBFactory* aFactory,
-                                             EventChainPostVisitor& aVisitor)
+IndexedDatabaseManager::CommonPostHandleEvent(EventChainPostVisitor& aVisitor,
+                                              IDBFactory* aFactory)
 {
-  MOZ_ASSERT(aEventTarget);
-  MOZ_ASSERT(aFactory);
   MOZ_ASSERT(aVisitor.mDOMEvent);
+  MOZ_ASSERT(aFactory);
 
   if (aVisitor.mEventStatus == nsEventStatus_eConsumeNoDefault) {
     return NS_OK;
   }
 
-  nsString type;
-  nsresult rv = aVisitor.mDOMEvent->GetType(type);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
+  Event* internalEvent = aVisitor.mDOMEvent->InternalDOMEvent();
+  MOZ_ASSERT(internalEvent);
 
-  NS_NAMED_LITERAL_STRING(errorType, "error");
-
-  MOZ_ASSERT(nsDependentString(kErrorEventType) == errorType);
-
-  if (type != errorType) {
+  if (!internalEvent->IsTrusted()) {
     return NS_OK;
   }
 
-  nsCOMPtr<EventTarget> eventTarget =
-    aVisitor.mDOMEvent->InternalDOMEvent()->GetTarget();
+  nsString type;
+  MOZ_ALWAYS_SUCCEEDS(internalEvent->GetType(type));
+
+  MOZ_ASSERT(nsDependentString(kErrorEventType).EqualsLiteral("error"));
+  if (!type.EqualsLiteral("error")) {
+    return NS_OK;
+  }
+
+  nsCOMPtr<EventTarget> eventTarget = internalEvent->GetTarget();
   MOZ_ASSERT(eventTarget);
 
-  auto* request = static_cast<IDBRequest*>(eventTarget.get());
+  // Only mess with events that were originally targeted to an IDBRequest.
+  RefPtr<IDBRequest> request;
+  if (NS_FAILED(eventTarget->QueryInterface(kIDBRequestIID,
+                                            getter_AddRefs(request))) ||
+      !request) {
+    return NS_OK;
+  }
 
-  nsRefPtr<DOMError> error = request->GetErrorAfterResult();
+  RefPtr<DOMError> error = request->GetErrorAfterResult();
 
   nsString errorName;
   if (error) {
     error->GetName(errorName);
   }
 
-  ThreadsafeAutoJSContext cx;
-  RootedDictionary<ErrorEventInit> init(cx);
-  request->GetCallerLocation(init.mFilename, &init.mLineno);
+  RootedDictionary<ErrorEventInit> init(nsContentUtils::RootingCxForThread());
+  request->GetCallerLocation(init.mFilename, &init.mLineno, &init.mColno);
 
   init.mMessage = errorName;
   init.mCancelable = true;
@@ -421,7 +495,8 @@ IndexedDatabaseManager::CommonPostHandleEvent(
   nsEventStatus status = nsEventStatus_eIgnore;
 
   if (NS_IsMainThread()) {
-    if (nsPIDOMWindow* window = aEventTarget->GetOwner()) {
+    nsCOMPtr<nsIDOMWindow> window = do_QueryInterface(eventTarget->GetOwnerGlobal());
+    if (window) {
       nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(window);
       MOZ_ASSERT(sgo);
 
@@ -437,11 +512,13 @@ IndexedDatabaseManager::CommonPostHandleEvent(
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);
 
-    nsRefPtr<WorkerGlobalScope> globalScope = workerPrivate->GlobalScope();
+    RefPtr<WorkerGlobalScope> globalScope = workerPrivate->GlobalScope();
     MOZ_ASSERT(globalScope);
 
-    nsRefPtr<ErrorEvent> errorEvent =
-      ErrorEvent::Constructor(globalScope, errorType, init);
+    RefPtr<ErrorEvent> errorEvent =
+      ErrorEvent::Constructor(globalScope,
+                              nsDependentString(kErrorEventType),
+                              init);
     MOZ_ASSERT(errorEvent);
 
     errorEvent->SetTrusted(true);
@@ -462,75 +539,24 @@ IndexedDatabaseManager::CommonPostHandleEvent(
     return NS_OK;
   }
 
-  nsAutoCString category;
-  if (aFactory->IsChrome()) {
-    category.AssignLiteral("chrome ");
-  } else {
-    category.AssignLiteral("content ");
-  }
-  category.AppendLiteral("javascript");
-
   // Log the error to the error console.
-  nsCOMPtr<nsIConsoleService> consoleService =
-    do_GetService(NS_CONSOLESERVICE_CONTRACTID);
-  MOZ_ASSERT(consoleService);
-
-  nsCOMPtr<nsIScriptError> scriptError =
-    do_CreateInstance(NS_SCRIPTERROR_CONTRACTID);
-  MOZ_ASSERT(consoleService);
-
-  if (uint64_t innerWindowID = aFactory->InnerWindowID()) {
-    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-      scriptError->InitWithWindowID(errorName,
-                                    init.mFilename,
-                                    /* aSourceLine */ EmptyString(),
-                                    init.mLineno,
-                                    /* aColumnNumber */ 0,
-                                    nsIScriptError::errorFlag,
-                                    category,
-                                    innerWindowID)));
-  } else {
-    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
-      scriptError->Init(errorName,
-                        init.mFilename,
-                        /* aSourceLine */ EmptyString(),
-                        init.mLineno,
-                        /* aColumnNumber */ 0,
-                        nsIScriptError::errorFlag,
-                        category.get())));
-  }
-
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(consoleService->LogMessage(scriptError)));
+  ScriptErrorHelper::Dump(errorName,
+                          init.mFilename,
+                          init.mLineno,
+                          init.mColno,
+                          nsIScriptError::errorFlag,
+                          aFactory->IsChrome(),
+                          aFactory->InnerWindowID());
 
   return NS_OK;
 }
 
 // static
 bool
-IndexedDatabaseManager::TabContextMayAccessOrigin(const TabContext& aContext,
-                                                  const nsACString& aOrigin)
-{
-  NS_ASSERTION(!aOrigin.IsEmpty(), "Empty origin!");
-
-  // If aContext is for a browser element, it's allowed only to access other
-  // browser elements.  But if aContext is not for a browser element, it may
-  // access both browser and non-browser elements.
-  nsAutoCString pattern;
-  QuotaManager::GetOriginPatternStringMaybeIgnoreBrowser(
-                                                aContext.OwnOrContainingAppId(),
-                                                aContext.IsBrowserElement(),
-                                                pattern);
-
-  return PatternMatchesOrigin(pattern, aOrigin);
-}
-
-// static
-bool
-IndexedDatabaseManager::DefineIndexedDB(JSContext* aCx,
-                                        JS::Handle<JSObject*> aGlobal)
+IndexedDatabaseManager::ResolveSandboxBinding(JSContext* aCx,
+                                              JS::Handle<JSObject*> aGlobal)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(nsContentUtils::IsCallerChrome(), "Only for chrome!");
   MOZ_ASSERT(js::GetObjectClass(aGlobal)->flags & JSCLASS_DOM_GLOBAL,
              "Passed object is not a global object!");
 
@@ -546,6 +572,7 @@ IndexedDatabaseManager::DefineIndexedDB(JSContext* aCx,
       !IDBFactoryBinding::GetConstructorObject(aCx, aGlobal) ||
       !IDBIndexBinding::GetConstructorObject(aCx, aGlobal) ||
       !IDBKeyRangeBinding::GetConstructorObject(aCx, aGlobal) ||
+      !IDBLocaleAwareKeyRangeBinding::GetConstructorObject(aCx, aGlobal) ||
       !IDBMutableFileBinding::GetConstructorObject(aCx, aGlobal) ||
       !IDBObjectStoreBinding::GetConstructorObject(aCx, aGlobal) ||
       !IDBOpenDBRequestBinding::GetConstructorObject(aCx, aGlobal) ||
@@ -556,10 +583,22 @@ IndexedDatabaseManager::DefineIndexedDB(JSContext* aCx,
     return false;
   }
 
-  nsRefPtr<IDBFactory> factory;
-  if (NS_FAILED(IDBFactory::CreateForChromeJS(aCx,
-                                              aGlobal,
-                                              getter_AddRefs(factory)))) {
+  return true;
+}
+
+// static
+bool
+IndexedDatabaseManager::DefineIndexedDB(JSContext* aCx,
+                                        JS::Handle<JSObject*> aGlobal)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(js::GetObjectClass(aGlobal)->flags & JSCLASS_DOM_GLOBAL,
+             "Passed object is not a global object!");
+
+  RefPtr<IDBFactory> factory;
+  if (NS_FAILED(IDBFactory::CreateForMainThreadJS(aCx,
+                                                  aGlobal,
+                                                  getter_AddRefs(factory)))) {
     return false;
   }
 
@@ -588,7 +627,7 @@ IndexedDatabaseManager::IsMainProcess()
 {
   NS_ASSERTION(gDBManager,
                "IsMainProcess() called before indexedDB has been initialized!");
-  NS_ASSERTION((XRE_GetProcessType() == GeckoProcessType_Default) ==
+  NS_ASSERTION((XRE_IsParentProcess()) ==
                sIsMainProcess, "XRE_GetProcessType changed its tune!");
   return sIsMainProcess;
 }
@@ -615,7 +654,7 @@ IndexedDatabaseManager::GetLoggingMode()
 }
 
 // static
-PRLogModuleInfo*
+mozilla::LogModule*
 IndexedDatabaseManager::GetLoggingModule()
 {
   MOZ_ASSERT(gDBManager,
@@ -649,8 +688,7 @@ IndexedDatabaseManager::FullSynchronous()
 
 // static
 bool
-IndexedDatabaseManager::ExperimentalFeaturesEnabled(JSContext* aCx,
-                                                    JSObject* aGlobal)
+IndexedDatabaseManager::ExperimentalFeaturesEnabled()
 {
   if (NS_IsMainThread()) {
     if (NS_WARN_IF(!GetOrCreate())) {
@@ -665,6 +703,59 @@ IndexedDatabaseManager::ExperimentalFeaturesEnabled(JSContext* aCx,
   return gExperimentalFeaturesEnabled;
 }
 
+// static
+bool
+IndexedDatabaseManager::ExperimentalFeaturesEnabled(JSContext* aCx, JSObject* aGlobal)
+{
+  // If, in the child process, properties of the global object are enumerated
+  // before the chrome registry (and thus the value of |intl.accept_languages|)
+  // is ready, calling IndexedDatabaseManager::Init will permanently break
+  // that preference. We can retrieve gExperimentalFeaturesEnabled without
+  // actually going through IndexedDatabaseManager.
+  // See Bug 1198093 comment 14 for detailed explanation.
+  if (IsNonExposedGlobal(aCx, js::GetGlobalForObjectCrossCompartment(aGlobal),
+                         GlobalNames::BackstagePass)) {
+    MOZ_ASSERT(NS_IsMainThread());
+    static bool featureRetrieved = false;
+    if (!featureRetrieved) {
+      gExperimentalFeaturesEnabled = Preferences::GetBool(kPrefExperimental);
+      featureRetrieved = true;
+    }
+    return gExperimentalFeaturesEnabled;
+  }
+
+  return ExperimentalFeaturesEnabled();
+}
+
+// static
+bool
+IndexedDatabaseManager::IsFileHandleEnabled()
+{
+  MOZ_ASSERT(gDBManager,
+             "IsFileHandleEnabled() called before indexedDB has been "
+             "initialized!");
+
+  return gFileHandleEnabled;
+}
+
+void
+IndexedDatabaseManager::ClearBackgroundActor()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  mBackgroundActor = nullptr;
+}
+
+void
+IndexedDatabaseManager::NoteBackgroundThread(nsIEventTarget* aBackgroundThread)
+{
+  MOZ_ASSERT(IsMainProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aBackgroundThread);
+
+  mBackgroundThread = aBackgroundThread;
+}
+
 already_AddRefed<FileManager>
 IndexedDatabaseManager::GetFileManager(PersistenceType aPersistenceType,
                                        const nsACString& aOrigin,
@@ -677,7 +768,7 @@ IndexedDatabaseManager::GetFileManager(PersistenceType aPersistenceType,
     return nullptr;
   }
 
-  nsRefPtr<FileManager> fileManager =
+  RefPtr<FileManager> fileManager =
     info->GetFileManager(aPersistenceType, aDatabaseName);
 
   return fileManager.forget();
@@ -703,31 +794,19 @@ IndexedDatabaseManager::InvalidateAllFileManagers()
 {
   AssertIsOnIOThread();
 
-  class MOZ_STACK_CLASS Helper MOZ_FINAL
-  {
-  public:
-    static PLDHashOperator
-    Enumerate(const nsACString& aKey,
-              FileManagerInfo* aValue,
-              void* aUserArg)
-    {
-      AssertIsOnIOThread();
-      MOZ_ASSERT(!aKey.IsEmpty());
-      MOZ_ASSERT(aValue);
+  for (auto iter = mFileManagerInfos.ConstIter(); !iter.Done(); iter.Next()) {
+    auto value = iter.Data();
+    MOZ_ASSERT(value);
 
-      aValue->InvalidateAllFileManagers();
-      return PL_DHASH_NEXT;
-    }
-  };
+    value->InvalidateAllFileManagers();
+  }
 
-  mFileManagerInfos.EnumerateRead(Helper::Enumerate, nullptr);
   mFileManagerInfos.Clear();
 }
 
 void
-IndexedDatabaseManager::InvalidateFileManagers(
-                                  PersistenceType aPersistenceType,
-                                  const nsACString& aOrigin)
+IndexedDatabaseManager::InvalidateFileManagers(PersistenceType aPersistenceType,
+                                               const nsACString& aOrigin)
 {
   AssertIsOnIOThread();
   MOZ_ASSERT(!aOrigin.IsEmpty());
@@ -767,27 +846,30 @@ nsresult
 IndexedDatabaseManager::AsyncDeleteFile(FileManager* aFileManager,
                                         int64_t aFileId)
 {
-  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+  MOZ_ASSERT(IsMainProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aFileManager);
+  MOZ_ASSERT(aFileId > 0);
+  MOZ_ASSERT(mDeleteTimer);
 
-  NS_ENSURE_ARG_POINTER(aFileManager);
-
-  QuotaManager* quotaManager = QuotaManager::Get();
-  NS_ASSERTION(quotaManager, "Shouldn't be null!");
-
-  // See if we're currently clearing the storages for this origin. If so then
-  // we pretend that we've already deleted everything.
-  if (quotaManager->IsClearOriginPending(
-                             aFileManager->Origin(),
-                             Nullable<PersistenceType>(aFileManager->Type()))) {
-    return NS_OK;
+  nsresult rv = mDeleteTimer->Cancel();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
   }
 
-  nsRefPtr<AsyncDeleteFileRunnable> runnable =
-    new AsyncDeleteFileRunnable(aFileManager, aFileId);
+  rv = mDeleteTimer->InitWithCallback(this, kDeleteTimeoutMs,
+                                      nsITimer::TYPE_ONE_SHOT);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
 
-  nsresult rv =
-    quotaManager->IOThread()->Dispatch(runnable, NS_DISPATCH_NORMAL);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsTArray<int64_t>* array;
+  if (!mPendingDeleteInfos.Get(aFileManager, &array)) {
+    array = new nsTArray<int64_t>();
+    mPendingDeleteInfos.Put(aFileManager, array);
+  }
+
+  array->AppendElement(aFileId);
 
   return NS_OK;
 }
@@ -803,35 +885,69 @@ IndexedDatabaseManager::BlockAndGetFileReferences(
                                                int32_t* aSliceRefCnt,
                                                bool* aResult)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (NS_WARN_IF(!InTestingMode())) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  if (!mBackgroundActor) {
+    PBackgroundChild* bgActor = BackgroundChild::GetForCurrentThread();
+    if (NS_WARN_IF(!bgActor)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    BackgroundUtilsChild* actor = new BackgroundUtilsChild(this);
+
+    mBackgroundActor =
+      static_cast<BackgroundUtilsChild*>(
+        bgActor->SendPBackgroundIndexedDBUtilsConstructor(actor));
+  }
+
+  if (NS_WARN_IF(!mBackgroundActor)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!mBackgroundActor->SendGetFileReferences(aPersistenceType,
+                                               nsCString(aOrigin),
+                                               nsString(aDatabaseName),
+                                               aFileId,
+                                               aRefCnt,
+                                               aDBRefCnt,
+                                               aSliceRefCnt,
+                                               aResult)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
+nsresult
+IndexedDatabaseManager::FlushPendingFileDeletions()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
   if (NS_WARN_IF(!InTestingMode())) {
     return NS_ERROR_UNEXPECTED;
   }
 
   if (IsMainProcess()) {
-    nsRefPtr<GetFileReferencesHelper> helper =
-      new GetFileReferencesHelper(aPersistenceType, aOrigin, aDatabaseName,
-                                  aFileId);
+    nsresult rv = mDeleteTimer->Cancel();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
 
-    nsresult rv =
-      helper->DispatchAndReturnFileReferences(aRefCnt, aDBRefCnt,
-                                              aSliceRefCnt, aResult);
+    rv = Notify(mDeleteTimer);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
   } else {
-    ContentChild* contentChild = ContentChild::GetSingleton();
-    if (NS_WARN_IF(!contentChild)) {
+    PBackgroundChild* bgActor = BackgroundChild::GetForCurrentThread();
+    if (NS_WARN_IF(!bgActor)) {
       return NS_ERROR_FAILURE;
     }
 
-    if (!contentChild->SendGetFileReferences(aPersistenceType,
-                                             nsCString(aOrigin),
-                                             nsString(aDatabaseName),
-                                             aFileId,
-                                             aRefCnt,
-                                             aDBRefCnt,
-                                             aSliceRefCnt,
-                                             aResult)) {
+    if (!bgActor->SendFlushPendingFileDeletions()) {
       return NS_ERROR_FAILURE;
     }
   }
@@ -852,7 +968,7 @@ IndexedDatabaseManager::LoggingModePrefChangedCallback(
     return;
   }
 
-  bool useProfiler = 
+  bool useProfiler =
 #if defined(DEBUG) || defined(MOZ_ENABLE_PROFILER_SPS)
     Preferences::GetBool(kPrefLoggingProfiler);
 #if !defined(MOZ_ENABLE_PROFILER_SPS)
@@ -877,9 +993,21 @@ IndexedDatabaseManager::LoggingModePrefChangedCallback(
   }
 }
 
+#ifdef ENABLE_INTL_API
+// static
+const nsCString&
+IndexedDatabaseManager::GetLocale()
+{
+  IndexedDatabaseManager* idbManager = Get();
+  MOZ_ASSERT(idbManager, "IDBManager is not ready!");
+
+  return idbManager->mLocale;
+}
+#endif
+
 NS_IMPL_ADDREF(IndexedDatabaseManager)
 NS_IMPL_RELEASE_WITH_DESTROY(IndexedDatabaseManager, Destroy())
-NS_IMPL_QUERY_INTERFACE(IndexedDatabaseManager, nsIObserver)
+NS_IMPL_QUERY_INTERFACE(IndexedDatabaseManager, nsIObserver, nsITimerCallback)
 
 NS_IMETHODIMP
 IndexedDatabaseManager::Observe(nsISupports* aSubject, const char* aTopic,
@@ -908,7 +1036,31 @@ IndexedDatabaseManager::Observe(nsISupports* aSubject, const char* aTopic,
 
    NS_NOTREACHED("Unknown topic!");
    return NS_ERROR_UNEXPECTED;
- }
+}
+
+NS_IMETHODIMP
+IndexedDatabaseManager::Notify(nsITimer* aTimer)
+{
+  MOZ_ASSERT(IsMainProcess());
+  MOZ_ASSERT(NS_IsMainThread());
+
+  for (auto iter = mPendingDeleteInfos.ConstIter(); !iter.Done(); iter.Next()) {
+    auto key = iter.Key();
+    auto value = iter.Data();
+    MOZ_ASSERT(!value->IsEmpty());
+
+    RefPtr<DeleteFilesRunnable> runnable =
+      new DeleteFilesRunnable(mBackgroundThread, key, *value);
+
+    MOZ_ASSERT(value->IsEmpty());
+
+    runnable->Dispatch();
+  }
+
+  mPendingDeleteInfos.Clear();
+
+  return NS_OK;
+}
 
 already_AddRefed<FileManager>
 FileManagerInfo::GetFileManager(PersistenceType aPersistenceType,
@@ -916,14 +1068,14 @@ FileManagerInfo::GetFileManager(PersistenceType aPersistenceType,
 {
   AssertIsOnIOThread();
 
-  const nsTArray<nsRefPtr<FileManager> >& managers =
+  const nsTArray<RefPtr<FileManager> >& managers =
     GetImmutableArray(aPersistenceType);
 
   for (uint32_t i = 0; i < managers.Length(); i++) {
-    const nsRefPtr<FileManager>& fileManager = managers[i];
+    const RefPtr<FileManager>& fileManager = managers[i];
 
     if (fileManager->DatabaseName() == aName) {
-      nsRefPtr<FileManager> result = fileManager;
+      RefPtr<FileManager> result = fileManager;
       return result.forget();
     }
   }
@@ -936,7 +1088,7 @@ FileManagerInfo::AddFileManager(FileManager* aFileManager)
 {
   AssertIsOnIOThread();
 
-  nsTArray<nsRefPtr<FileManager> >& managers = GetArray(aFileManager->Type());
+  nsTArray<RefPtr<FileManager> >& managers = GetArray(aFileManager->Type());
 
   NS_ASSERTION(!managers.Contains(aFileManager), "Adding more than once?!");
 
@@ -969,7 +1121,7 @@ FileManagerInfo::InvalidateAndRemoveFileManagers(
 {
   AssertIsOnIOThread();
 
-  nsTArray<nsRefPtr<FileManager > >& managers = GetArray(aPersistenceType);
+  nsTArray<RefPtr<FileManager > >& managers = GetArray(aPersistenceType);
 
   for (uint32_t i = 0; i < managers.Length(); i++) {
     managers[i]->Invalidate();
@@ -985,10 +1137,10 @@ FileManagerInfo::InvalidateAndRemoveFileManager(
 {
   AssertIsOnIOThread();
 
-  nsTArray<nsRefPtr<FileManager > >& managers = GetArray(aPersistenceType);
+  nsTArray<RefPtr<FileManager > >& managers = GetArray(aPersistenceType);
 
   for (uint32_t i = 0; i < managers.Length(); i++) {
-    nsRefPtr<FileManager>& fileManager = managers[i];
+    RefPtr<FileManager>& fileManager = managers[i];
     if (fileManager->DatabaseName() == aName) {
       fileManager->Invalidate();
       managers.RemoveElementAt(i);
@@ -997,7 +1149,7 @@ FileManagerInfo::InvalidateAndRemoveFileManager(
   }
 }
 
-nsTArray<nsRefPtr<FileManager> >&
+nsTArray<RefPtr<FileManager> >&
 FileManagerInfo::GetArray(PersistenceType aPersistenceType)
 {
   switch (aPersistenceType) {
@@ -1014,24 +1166,120 @@ FileManagerInfo::GetArray(PersistenceType aPersistenceType)
   }
 }
 
-AsyncDeleteFileRunnable::AsyncDeleteFileRunnable(FileManager* aFileManager,
-                                                 int64_t aFileId)
-: mFileManager(aFileManager), mFileId(aFileId)
+DeleteFilesRunnable::DeleteFilesRunnable(nsIEventTarget* aBackgroundThread,
+                                         FileManager* aFileManager,
+                                         nsTArray<int64_t>& aFileIds)
+  : mBackgroundThread(aBackgroundThread)
+  , mFileManager(aFileManager)
+  , mState(State_Initial)
 {
+  mFileIds.SwapElements(aFileIds);
 }
 
-NS_IMPL_ISUPPORTS(AsyncDeleteFileRunnable,
-                  nsIRunnable)
+void
+DeleteFilesRunnable::Dispatch()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(mState == State_Initial);
+
+  MOZ_ALWAYS_SUCCEEDS(mBackgroundThread->Dispatch(this, NS_DISPATCH_NORMAL));
+}
+
+NS_IMPL_ISUPPORTS(DeleteFilesRunnable, nsIRunnable)
 
 NS_IMETHODIMP
-AsyncDeleteFileRunnable::Run()
+DeleteFilesRunnable::Run()
 {
-  AssertIsOnIOThread();
+  nsresult rv;
 
-  nsCOMPtr<nsIFile> directory = mFileManager->GetDirectory();
-  NS_ENSURE_TRUE(directory, NS_ERROR_FAILURE);
+  switch (mState) {
+    case State_Initial:
+      rv = Open();
+      break;
 
-  nsCOMPtr<nsIFile> file = mFileManager->GetFileForId(directory, mFileId);
+    case State_DatabaseWorkOpen:
+      rv = DoDatabaseWork();
+      break;
+
+    case State_UnblockingOpen:
+      UnblockOpen();
+      return NS_OK;
+
+    case State_DirectoryOpenPending:
+    default:
+      MOZ_CRASH("Should never get here!");
+  }
+
+  if (NS_WARN_IF(NS_FAILED(rv)) && mState != State_UnblockingOpen) {
+    Finish();
+  }
+
+  return NS_OK;
+}
+
+void
+DeleteFilesRunnable::DirectoryLockAcquired(DirectoryLock* aLock)
+{
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(mState == State_DirectoryOpenPending);
+  MOZ_ASSERT(!mDirectoryLock);
+
+  mDirectoryLock = aLock;
+
+  QuotaManager* quotaManager = QuotaManager::Get();
+  MOZ_ASSERT(quotaManager);
+
+  // Must set this before dispatching otherwise we will race with the IO thread
+  mState = State_DatabaseWorkOpen;
+
+  nsresult rv = quotaManager->IOThread()->Dispatch(this, NS_DISPATCH_NORMAL);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    Finish();
+    return;
+  }
+}
+
+void
+DeleteFilesRunnable::DirectoryLockFailed()
+{
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(mState == State_DirectoryOpenPending);
+  MOZ_ASSERT(!mDirectoryLock);
+
+  Finish();
+}
+
+nsresult
+DeleteFilesRunnable::Open()
+{
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(mState == State_Initial);
+
+  QuotaManager* quotaManager = QuotaManager::Get();
+  if (NS_WARN_IF(!quotaManager)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  mState = State_DirectoryOpenPending;
+
+  quotaManager->OpenDirectory(mFileManager->Type(),
+                              mFileManager->Group(),
+                              mFileManager->Origin(),
+                              mFileManager->IsApp(),
+                              Client::IDB,
+                              /* aExclusive */ false,
+                              this);
+
+  return NS_OK;
+}
+
+nsresult
+DeleteFilesRunnable::DeleteFile(int64_t aFileId)
+{
+  MOZ_ASSERT(mDirectory);
+  MOZ_ASSERT(mJournalDirectory);
+
+  nsCOMPtr<nsIFile> file = mFileManager->GetFileForId(mDirectory, aFileId);
   NS_ENSURE_TRUE(file, NS_ERROR_FAILURE);
 
   nsresult rv;
@@ -1054,10 +1302,7 @@ AsyncDeleteFileRunnable::Run()
                                          mFileManager->Origin(), fileSize);
   }
 
-  directory = mFileManager->GetJournalDirectory();
-  NS_ENSURE_TRUE(directory, NS_ERROR_FAILURE);
-
-  file = mFileManager->GetFileForId(directory, mFileId);
+  file = mFileManager->GetFileForId(mJournalDirectory, aFileId);
   NS_ENSURE_TRUE(file, NS_ERROR_FAILURE);
 
   rv = file->Remove(false);
@@ -1067,71 +1312,54 @@ AsyncDeleteFileRunnable::Run()
 }
 
 nsresult
-GetFileReferencesHelper::DispatchAndReturnFileReferences(int32_t* aMemRefCnt,
-                                                         int32_t* aDBRefCnt,
-                                                         int32_t* aSliceRefCnt,
-                                                         bool* aResult)
-{
-  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
-
-  QuotaManager* quotaManager = QuotaManager::Get();
-  NS_ASSERTION(quotaManager, "Shouldn't be null!");
-
-  nsresult rv =
-    quotaManager->IOThread()->Dispatch(this, NS_DISPATCH_NORMAL);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  mozilla::MutexAutoLock autolock(mMutex);
-  while (mWaiting) {
-    mCondVar.Wait();
-  }
-
-  *aMemRefCnt = mMemRefCnt;
-  *aDBRefCnt = mDBRefCnt;
-  *aSliceRefCnt = mSliceRefCnt;
-  *aResult = mResult;
-
-  return NS_OK;
-}
-
-NS_IMPL_ISUPPORTS(GetFileReferencesHelper,
-                  nsIRunnable)
-
-NS_IMETHODIMP
-GetFileReferencesHelper::Run()
+DeleteFilesRunnable::DoDatabaseWork()
 {
   AssertIsOnIOThread();
+  MOZ_ASSERT(mState == State_DatabaseWorkOpen);
 
-  IndexedDatabaseManager* mgr = IndexedDatabaseManager::Get();
-  NS_ASSERTION(mgr, "This should never fail!");
+  if (!mFileManager->Invalidated()) {
+    mDirectory = mFileManager->GetDirectory();
+    if (NS_WARN_IF(!mDirectory)) {
+      return NS_ERROR_FAILURE;
+    }
 
-  nsRefPtr<FileManager> fileManager =
-    mgr->GetFileManager(mPersistenceType, mOrigin, mDatabaseName);
+    mJournalDirectory = mFileManager->GetJournalDirectory();
+    if (NS_WARN_IF(!mJournalDirectory)) {
+      return NS_ERROR_FAILURE;
+    }
 
-  if (fileManager) {
-    nsRefPtr<FileInfo> fileInfo = fileManager->GetFileInfo(mFileId);
-
-    if (fileInfo) {
-      fileInfo->GetReferences(&mMemRefCnt, &mDBRefCnt, &mSliceRefCnt);
-
-      if (mMemRefCnt != -1) {
-        // We added an extra temp ref, so account for that accordingly.
-        mMemRefCnt--;
+    for (int64_t fileId : mFileIds) {
+      if (NS_FAILED(DeleteFile(fileId))) {
+        NS_WARNING("Failed to delete file!");
       }
-
-      mResult = true;
     }
   }
 
-  mozilla::MutexAutoLock lock(mMutex);
-  NS_ASSERTION(mWaiting, "Huh?!");
-
-  mWaiting = false;
-  mCondVar.Notify();
+  Finish();
 
   return NS_OK;
 }
 
-} // namespace indexedDB
+void
+DeleteFilesRunnable::Finish()
+{
+  // Must set mState before dispatching otherwise we will race with the main
+  // thread.
+  mState = State_UnblockingOpen;
+
+  MOZ_ALWAYS_SUCCEEDS(mBackgroundThread->Dispatch(this, NS_DISPATCH_NORMAL));
+}
+
+void
+DeleteFilesRunnable::UnblockOpen()
+{
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(mState == State_UnblockingOpen);
+
+  mDirectoryLock = nullptr;
+
+  mState = State_Completed;
+}
+
 } // namespace dom
 } // namespace mozilla

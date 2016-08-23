@@ -124,8 +124,11 @@ ContactDB.prototype = {
         }
       }
 
-      let chan = jsm.NetUtil.newChannel(contactsFile);
-      let stream = chan.open();
+      let chan = jsm.NetUtil.newChannel({
+        uri: NetUtil.newURI(contactsFile),
+        loadUsingSystemPrincipal: true});
+
+      let stream = chan.open2();
       // Obtain a converter to read from a UTF-8 encoded input stream.
       let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
                       .createInstance(Ci.nsIScriptableUnicodeConverter);
@@ -944,7 +947,8 @@ ContactDB.prototype = {
       if (DEBUG) debug("No object ID passed");
       return;
     }
-    this.newTxn("readwrite", STORE_NAME, function(txn, store) {
+    this.newTxn("readwrite", this.dbStoreNames, function(txn, stores) {
+      let store = txn.objectStore(SAVED_GETALL_STORE_NAME);
       store.openCursor().onsuccess = function(e) {
         let cursor = e.target.result;
         if (cursor) {
@@ -961,10 +965,7 @@ ContactDB.prototype = {
           aCallback(txn);
         }
       }.bind(this);
-    }.bind(this), null,
-    function(errorMsg) {
-      aFailureCb(errorMsg);
-    });
+    }.bind(this), null, aFailureCb);
   },
 
   incrementRevision: function CDB_incrementRevision(txn) {
@@ -1038,7 +1039,7 @@ ContactDB.prototype = {
           contactsArray.push(aContacts[i]);
         }
 
-        let contactIdsArray = contactsArray.map(function(el) el.id);
+        let contactIdsArray = contactsArray.map(el => el.id);
 
         // save contact ids in cache
         this.newTxn("readwrite", SAVED_GETALL_STORE_NAME, function(txn, store) {

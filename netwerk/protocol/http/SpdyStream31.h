@@ -7,12 +7,13 @@
 #define mozilla_net_SpdyStream31_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/UniquePtr.h"
 #include "nsAHttpTransaction.h"
 
 namespace mozilla { namespace net {
 
 class SpdyStream31 : public nsAHttpSegmentReader
-  , public nsAHttpSegmentWriter
+                   , public nsAHttpSegmentWriter
 {
 public:
   NS_DECL_NSAHTTPSEGMENTREADER
@@ -42,9 +43,9 @@ public:
   bool HasRegisteredID() { return mStreamID != 0; }
 
   nsAHttpTransaction *Transaction() { return mTransaction; }
-  virtual nsILoadGroupConnectionInfo *LoadGroupConnectionInfo()
+  virtual nsISchedulingContext *SchedulingContext()
   {
-    return mTransaction ? mTransaction->LoadGroupConnectionInfo() : nullptr;
+    return mTransaction ? mTransaction->SchedulingContext() : nullptr;
   }
 
   void Close(nsresult reason);
@@ -54,6 +55,12 @@ public:
 
   void SetRecvdData(bool aStatus) { mReceivedData = aStatus ? 1 : 0; }
   bool RecvdData() { return mReceivedData; }
+
+  void SetQueued(bool aStatus) { mQueued = aStatus ? 1 : 0; }
+  bool Queued() { return mQueued; }
+
+  void SetCountAsActive(bool aStatus) { mCountAsActive = aStatus ? 1 : 0; }
+  bool CountAsActive() { return mCountAsActive; }
 
   void UpdateTransportSendEvents(uint32_t count);
   void UpdateTransportReadEvents(uint32_t count);
@@ -81,6 +88,7 @@ public:
   int64_t  LocalWindow()  { return mLocalWindow; }
 
   bool     BlockedOnRwin() { return mBlockedOnRwin; }
+  bool     ChannelPipeFull();
 
   // A pull stream has an implicit sink, a pushed stream has a sink
   // once it is matched to a pull stream.
@@ -118,23 +126,28 @@ protected:
   // sending_request_body for each SPDY chunk in the upload.
   enum stateType mUpstreamState;
 
-  // Flag is set when all http request headers have been read and ID is stable
-  uint32_t                     mSynFrameComplete     : 1;
+  // Flag is set when all http request headers have been read
+  uint32_t                     mRequestHeadersDone   : 1;
+
+  // Flag is set when stream ID is stable
+  uint32_t                     mSynFrameGenerated    : 1;
 
   // Flag is set when a FIN has been placed on a data or syn packet
   // (i.e after the client has closed)
   uint32_t                     mSentFinOnData        : 1;
+
+  // Flag is set when stream is queued inside the session due to
+  // concurrency limits being exceeded
+  uint32_t                     mQueued               : 1;
 
   void     ChangeState(enum stateType);
 
 private:
   friend class nsAutoPtr<SpdyStream31>;
 
-  static PLDHashOperator hdrHashEnumerate(const nsACString &,
-                                          nsAutoPtr<nsCString> &,
-                                          void *);
-
   nsresult ParseHttpRequestHeaders(const char *, uint32_t, uint32_t *);
+  nsresult GenerateSynFrame();
+
   void     AdjustInitialWindow();
   nsresult TransmitFrame(const char *, uint32_t *, bool forceCommitment);
   void     GenerateDataFrameHeader(uint32_t, bool);
@@ -150,7 +163,7 @@ private:
   // in the SpdySession31 mStreamTransactionHash so it is important to
   // keep a reference to it as long as this stream is a member of that hash.
   // (i.e. don't change it or release it after it is set in the ctor).
-  nsRefPtr<nsAHttpTransaction> mTransaction;
+  RefPtr<nsAHttpTransaction> mTransaction;
 
   // The underlying socket transport object is needed to propogate some events
   nsISocketTransport         *mSocketTransport;
@@ -185,9 +198,12 @@ private:
   // Flag is set after TCP send autotuning has been disabled
   uint32_t                     mSetTCPSocketBuffer   : 1;
 
+  // Flag is set when stream is counted towards MAX_CONCURRENT streams in session
+  uint32_t                     mCountAsActive        : 1;
+
   // The InlineFrame and associated data is used for composing control
   // frames and data frame headers.
-  nsAutoArrayPtr<uint8_t>      mTxInlineFrame;
+  UniquePtr<uint8_t[]>         mTxInlineFrame;
   uint32_t                     mTxInlineFrameSize;
   uint32_t                     mTxInlineFrameUsed;
 
@@ -206,7 +222,7 @@ private:
   uint32_t             mDecompressBufferSize;
   uint32_t             mDecompressBufferUsed;
   uint32_t             mDecompressedBytes;
-  nsAutoArrayPtr<char> mDecompressBuffer;
+  UniquePtr<char[]>    mDecompressBuffer;
 
   // Track the content-length of a request body so that we can
   // place the fin flag on the last data packet instead of waiting
@@ -259,6 +275,7 @@ private:
   bool mPlainTextTunnel;
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // mozilla_net_SpdyStream31_h

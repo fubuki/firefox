@@ -4,12 +4,13 @@
 
 this.EXPORTED_SYMBOLS = ['PasswordEngine', 'LoginRec'];
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://services-sync/record.js");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/engines.js");
 Cu.import("resource://services-sync/util.js");
+Cu.import("resource://services-common/async.js");
 
 this.LoginRec = function LoginRec(collection, id) {
   CryptoWrapper.call(this, collection, id);
@@ -22,6 +23,7 @@ LoginRec.prototype = {
 Utils.deferGetSet(LoginRec, "cleartext", [
     "hostname", "formSubmitURL",
     "httpRealm", "username", "password", "usernameField", "passwordField",
+    "timeCreated", "timePasswordChanged",
     ]);
 
 
@@ -67,7 +69,10 @@ PasswordEngine.prototype = {
         Svc.Prefs.set("deletePwdFxA", true);
         Svc.Prefs.reset("deletePwd"); // The old prefname we previously used.
       } catch (ex) {
-        this._log.debug("Password deletes failed: " + Utils.exceptionStr(ex));
+        if (Async.isShutdownException(ex)) {
+          throw ex;
+        }
+        this._log.debug("Password deletes failed", ex);
       }
     }
   },
@@ -83,7 +88,7 @@ PasswordEngine.prototype = {
     this._store._sleep(0); // Yield back to main thread after synchronous operation.
 
     // Look for existing logins that match the hostname, but ignore the password.
-    for each (let local in logins) {
+    for (let local of logins) {
       if (login.matches(local, true) && local instanceof Ci.nsILoginMetaInfo) {
         return local.guid;
       }
@@ -98,16 +103,26 @@ function PasswordStore(name, engine) {
 PasswordStore.prototype = {
   __proto__: Store.prototype,
 
+  _newPropertyBag: function () {
+    return Cc["@mozilla.org/hash-property-bag;1"].createInstance(Ci.nsIWritablePropertyBag2);
+  },
+
+  /**
+   * Return an instance of nsILoginInfo (and, implicitly, nsILoginMetaInfo).
+   */
   _nsLoginInfoFromRecord: function (record) {
+    function nullUndefined(x) {
+      return (x == undefined) ? null : x;
+    }
+
     if (record.formSubmitURL && record.httpRealm) {
       this._log.warn("Record " + record.id + " has both formSubmitURL and httpRealm. Skipping.");
       return null;
     }
-    
+
     // Passing in "undefined" results in an empty string, which later
     // counts as a value. Explicitly `|| null` these fields according to JS
     // truthiness. Records with empty strings or null will be unmolested.
-    function nullUndefined(x) (x == undefined) ? null : x;
     let info = new this._nsLoginInfo(record.hostname,
                                      nullUndefined(record.formSubmitURL),
                                      nullUndefined(record.httpRealm),
@@ -115,13 +130,21 @@ PasswordStore.prototype = {
                                      record.password,
                                      record.usernameField,
                                      record.passwordField);
+
     info.QueryInterface(Ci.nsILoginMetaInfo);
     info.guid = record.id;
+    if (record.timeCreated) {
+      info.timeCreated = record.timeCreated;
+    }
+    if (record.timePasswordChanged) {
+      info.timePasswordChanged = record.timePasswordChanged;
+    }
+
     return info;
   },
 
   _getLoginFromGUID: function (id) {
-    let prop = Cc["@mozilla.org/hash-property-bag;1"].createInstance(Ci.nsIWritablePropertyBag2);
+    let prop = this._newPropertyBag();
     prop.setPropertyAsAUTF8String("guid", id);
 
     let logins = Services.logins.searchLogins({}, prop);
@@ -166,8 +189,7 @@ PasswordStore.prototype = {
       return;
     }
 
-    let prop = Cc["@mozilla.org/hash-property-bag;1"]
-                 .createInstance(Ci.nsIWritablePropertyBag2);
+    let prop = this._newPropertyBag();
     prop.setPropertyAsAUTF8String("guid", newID);
 
     Services.logins.modifyLogin(oldLogin, prop);
@@ -194,6 +216,11 @@ PasswordStore.prototype = {
     record.usernameField = login.usernameField;
     record.passwordField = login.passwordField;
 
+    // Optional fields.
+    login.QueryInterface(Ci.nsILoginMetaInfo);
+    record.timeCreated = login.timeCreated;
+    record.timePasswordChanged = login.timePasswordChanged;
+
     return record;
   },
 
@@ -209,8 +236,7 @@ PasswordStore.prototype = {
     try {
       Services.logins.addLogin(login);
     } catch(ex) {
-      this._log.debug("Adding record " + record.id +
-                      " resulted in exception " + Utils.exceptionStr(ex));
+      this._log.debug(`Adding record ${record.id} resulted in exception`, ex);
     }
   },
 
@@ -242,9 +268,7 @@ PasswordStore.prototype = {
     try {
       Services.logins.modifyLogin(loginItem, newinfo);
     } catch(ex) {
-      this._log.debug("Modifying record " + record.id +
-                      " resulted in exception " + Utils.exceptionStr(ex) +
-                      ". Not modifying.");
+      this._log.debug(`Modifying record ${record.id} resulted in exception; not modifying`, ex);
     }
   },
 

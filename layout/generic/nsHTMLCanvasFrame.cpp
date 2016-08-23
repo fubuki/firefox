@@ -13,6 +13,7 @@
 #include "nsDisplayList.h"
 #include "nsLayoutUtils.h"
 #include "nsStyleUtil.h"
+#include "ImageLayers.h"
 #include "Layers.h"
 #include "ActiveLayerTracker.h"
 
@@ -74,7 +75,7 @@ public:
   NS_DISPLAY_DECL_NAME("nsDisplayCanvas", TYPE_CANVAS)
 
   virtual nsRegion GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
-                                   bool* aSnap) MOZ_OVERRIDE {
+                                   bool* aSnap) override {
     *aSnap = false;
     nsHTMLCanvasFrame* f = static_cast<nsHTMLCanvasFrame*>(Frame());
     HTMLCanvasElement* canvas =
@@ -103,7 +104,7 @@ public:
   }
 
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) MOZ_OVERRIDE {
+                           bool* aSnap) override {
     *aSnap = true;
     nsHTMLCanvasFrame* f = static_cast<nsHTMLCanvasFrame*>(Frame());
     return f->GetInnerArea() + ToReferenceFrame();
@@ -111,14 +112,14 @@ public:
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE
+                                             const ContainerLayerParameters& aContainerParameters) override
   {
     return static_cast<nsHTMLCanvasFrame*>(mFrame)->
       BuildLayer(aBuilder, aManager, this, aContainerParameters);
   }
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) MOZ_OVERRIDE
+                                   const ContainerLayerParameters& aParameters) override
   {
     if (HTMLCanvasElement::FromContent(mFrame->GetContent())->ShouldForceInactiveLayer(aManager))
       return LAYER_INACTIVE;
@@ -251,6 +252,7 @@ nsHTMLCanvasFrame::Reflow(nsPresContext*           aPresContext,
                           const nsHTMLReflowState& aReflowState,
                           nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsHTMLCanvasFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
@@ -337,7 +339,7 @@ nsHTMLCanvasFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
 
   CanvasLayer* oldLayer = static_cast<CanvasLayer*>
     (aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, aItem));
-  nsRefPtr<CanvasLayer> layer = element->GetCanvasLayer(aBuilder, oldLayer, aManager);
+  RefPtr<Layer> layer = element->GetCanvasLayer(aBuilder, oldLayer, aManager);
   if (!layer)
     return nullptr;
 
@@ -356,7 +358,13 @@ nsHTMLCanvasFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   transform.PreScale(destGFXRect.Width() / canvasSizeInPx.width,
                      destGFXRect.Height() / canvasSizeInPx.height);
   layer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
-  layer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(this));
+  if (layer->GetType() == layers::Layer::TYPE_CANVAS) {
+    RefPtr<CanvasLayer> canvasLayer = static_cast<CanvasLayer*>(layer.get());
+    canvasLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(this));
+  } else if (layer->GetType() == layers::Layer::TYPE_IMAGE) {
+    RefPtr<ImageLayer> imageLayer = static_cast<ImageLayer*>(layer.get());
+    imageLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(this));
+  }
 
   return layer.forget();
 }

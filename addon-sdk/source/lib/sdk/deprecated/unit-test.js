@@ -7,14 +7,13 @@ module.metadata = {
   "stability": "deprecated"
 };
 
-const memory = require("./memory");
 const timer = require("../timers");
 const cfxArgs = require("../test/options");
-const { getTabs, closeTab, getURI } = require("../tabs/utils");
+const { getTabs, closeTab, getURI, getTabId, getSelectedTab } = require("../tabs/utils");
 const { windows, isBrowser, getMostRecentBrowserWindow } = require("../window/utils");
 const { defer, all, Debugging: PromiseDebugging, resolve } = require("../core/promise");
 const { getInnerId } = require("../window/utils");
-const { cleanUI } = require("../test/utils")
+const { cleanUI } = require("../test/utils");
 
 const findAndRunTests = function findAndRunTests(options) {
   var TestFinder = require("./unit-test-finder").TestFinder;
@@ -34,14 +33,19 @@ const findAndRunTests = function findAndRunTests(options) {
 };
 exports.findAndRunTests = findAndRunTests;
 
-let runnerWindows = new WeakMap();
+var runnerWindows = new WeakMap();
+var runnerTabs = new WeakMap();
 
 const TestRunner = function TestRunner(options) {
   options = options || {};
-  runnerWindows.set(this, getInnerId(getMostRecentBrowserWindow()));
+
+  // remember the id's for the open window and tab
+  let window = getMostRecentBrowserWindow();
+  runnerWindows.set(this, getInnerId(window));
+  runnerTabs.set(this, getTabId(getSelectedTab(window)));
+
   this.fs = options.fs;
   this.console = options.console || console;
-  memory.track(this);
   this.passed = 0;
   this.failed = 0;
   this.testRunSummary = [];
@@ -50,7 +54,9 @@ const TestRunner = function TestRunner(options) {
 };
 
 TestRunner.prototype = {
-  toString: function toString() "[object TestRunner]",
+  toString: function toString() {
+    return "[object TestRunner]";
+  },
 
   DEFAULT_PAUSE_TIMEOUT: (cfxArgs.parseable ? 300000 : 15000), //Five minutes (5*60*1000ms)
   PAUSE_DELAY: 500,
@@ -277,56 +283,75 @@ TestRunner.prototype = {
     }
 
     this.isDone = true;
+    this.pass("This test is done.");
+
     if (this.test.teardown) {
       this.test.teardown(this);
     }
+
     if (this.waitTimeout !== null) {
       timer.clearTimeout(this.waitTimeout);
       this.waitTimeout = null;
     }
+
     // Do not leave any callback set when calling to `waitUntil`
     this.waitUntilCallback = null;
     if (this.test.passed == 0 && this.test.failed == 0) {
       this._logTestFailed("empty test");
+
       if ("testMessage" in this.console) {
         this.console.testMessage(false, false, this.test.name, "Empty test");
       }
       else {
         this.console.error("fail:", "Empty test")
       }
+
       this.failed++;
       this.test.failed++;
     }
 
     let wins = windows(null, { includePrivate: true });
-    let winPromises = wins.map(win =>  {
-      let { promise, resolve } = defer();
-      if (["interactive", "complete"].indexOf(win.document.readyState) >= 0) {
-        resolve()
-      }
-      else {
-        win.addEventListener("DOMContentLoaded", function onLoad() {
-          win.removeEventListener("DOMContentLoaded", onLoad, false);
-          resolve();
-        }, false);
-      }
-      return promise;
+    let winPromises = wins.map(win => {
+      return new Promise(resolve => {
+        if (["interactive", "complete"].indexOf(win.document.readyState) >= 0) {
+          resolve()
+        }
+        else {
+          win.addEventListener("DOMContentLoaded", function onLoad() {
+            win.removeEventListener("DOMContentLoaded", onLoad, false);
+            resolve();
+          }, false);
+        }
+      });
     });
 
     PromiseDebugging.flushUncaughtErrors();
+    PromiseDebugging.removeUncaughtErrorObserver(this._uncaughtErrorObserver);
+
 
     return all(winPromises).then(() => {
       let browserWins = wins.filter(isBrowser);
       let tabs = browserWins.reduce((tabs, window) => tabs.concat(getTabs(window)), []);
-
-      if (wins.length != 1 || getInnerId(wins[0]) !== runnerWindows.get(this))
-        this.fail("Should not be any unexpected windows open");
-
+      let newTabID = getTabId(getSelectedTab(wins[0]));
+      let oldTabID = runnerTabs.get(this);
       let hasMoreTabsOpen = browserWins.length && tabs.length != 1;
-      if (hasMoreTabsOpen)
-        this.fail("Should not be any unexpected tabs open");
+      let failure = false;
 
-      if (hasMoreTabsOpen || wins.length != 1) {
+      if (wins.length != 1 || getInnerId(wins[0]) !== runnerWindows.get(this)) {
+        failure = true;
+        this.fail("Should not be any unexpected windows open");
+      }
+      else if (hasMoreTabsOpen) {
+        failure = true;
+        this.fail("Should not be any unexpected tabs open");
+      }
+      else if (oldTabID != newTabID) {
+        failure = true;
+        runnerTabs.set(this, newTabID);
+        this.fail("Should not be any new tabs left open, old id: " + oldTabID + " new id: " + newTabID);
+      }
+
+      if (failure) {
         console.log("Windows open:");
         for (let win of wins) {
           if (isBrowser(win)) {
@@ -339,15 +364,23 @@ TestRunner.prototype = {
         }
       }
 
-      return null;
+      return failure;
     }).
-    then(cleanUI).
+    then(failure => {
+      if (!failure) {
+        this.pass("There was a clean UI.");
+        return null;
+      }
+      return cleanUI().then(() => {
+        this.pass("There is a clean UI.");
+      });
+    }).
     then(() => {
       this.testRunSummary.push({
         name: this.test.name,
         passed: this.test.passed,
         failed: this.test.failed,
-        errors: [error for (error in this.test.errors)].join(", ")
+        errors: Object.keys(this.test.errors).join(", ")
       });
 
       if (this.onDone !== null) {
@@ -356,7 +389,7 @@ TestRunner.prototype = {
         timer.setTimeout(_ => onDone(this));
       }
     }).
-    catch(e => console.exception(e));
+    catch(console.exception);
   },
 
   // Set of assertion functions to wait for an assertion to become true
@@ -520,7 +553,8 @@ TestRunner.prototype = {
     this.test.errors = {};
     this.test.last = 'START';
     PromiseDebugging.clearUncaughtErrorObservers();
-    PromiseDebugging.addUncaughtErrorObserver(this._uncaughtErrorObserver.bind(this));
+    this._uncaughtErrorObserver = this._uncaughtErrorObserver.bind(this);
+    PromiseDebugging.addUncaughtErrorObserver(this._uncaughtErrorObserver);
 
     this.isDone = false;
     this.onDone = function(self) {

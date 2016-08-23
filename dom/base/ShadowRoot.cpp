@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,18 +17,11 @@
 #include "mozilla/dom/HTMLContentElement.h"
 #include "mozilla/dom/HTMLShadowElement.h"
 #include "nsXBLPrototypeBinding.h"
+#include "mozilla/StyleSheetHandle.h"
+#include "mozilla/StyleSheetHandleInlines.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-static PLDHashOperator
-IdentifierMapEntryTraverse(nsIdentifierMapEntry *aEntry, void *aArg)
-{
-  nsCycleCollectionTraversalCallback *cb =
-    static_cast<nsCycleCollectionTraversalCallback*>(aArg);
-  aEntry->Traverse(cb);
-  return PL_DHASH_NEXT;
-}
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(ShadowRoot)
 
@@ -38,7 +32,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ShadowRoot,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOlderShadow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mYoungerShadow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAssociatedBinding)
-  tmp->mIdentifierMap.EnumerateEntries(IdentifierMapEntryTraverse, &cb);
+  for (auto iter = tmp->mIdentifierMap.ConstIter(); !iter.Done();
+       iter.Next()) {
+    iter.Get()->Traverse(&cb);
+  }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ShadowRoot,
@@ -67,7 +64,7 @@ ShadowRoot::ShadowRoot(nsIContent* aContent,
                        nsXBLPrototypeBinding* aProtoBinding)
   : DocumentFragment(aNodeInfo), mPoolHost(aContent),
     mProtoBinding(aProtoBinding), mShadowElement(nullptr),
-    mInsertionPointChanged(false)
+    mInsertionPointChanged(false), mIsComposedDocParticipant(false)
 {
   SetHost(aContent);
 
@@ -104,9 +101,9 @@ ShadowRoot::~ShadowRoot()
 }
 
 JSObject*
-ShadowRoot::WrapObject(JSContext* aCx)
+ShadowRoot::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return mozilla::dom::ShadowRootBinding::Wrap(aCx, this);
+  return mozilla::dom::ShadowRootBinding::Wrap(aCx, this, aGivenProto);
 }
 
 ShadowRoot*
@@ -135,7 +132,7 @@ ShadowRoot::StyleSheetChanged()
 }
 
 void
-ShadowRoot::InsertSheet(CSSStyleSheet* aSheet,
+ShadowRoot::InsertSheet(StyleSheetHandle aSheet,
                         nsIContent* aLinkingContent)
 {
   nsCOMPtr<nsIStyleSheetLinkingElement>
@@ -153,8 +150,8 @@ ShadowRoot::InsertSheet(CSSStyleSheet* aSheet,
       break;
     }
 
-    nsINode* sheetOwnerNode = mProtoBinding->StyleSheetAt(i)->GetOwnerNode();
-    if (nsContentUtils::PositionIsBefore(aLinkingContent, sheetOwnerNode)) {
+    nsINode* sheetOwningNode = mProtoBinding->StyleSheetAt(i)->GetOwnerNode();
+    if (nsContentUtils::PositionIsBefore(aLinkingContent, sheetOwningNode)) {
       mProtoBinding->InsertStyleSheetAt(i, aSheet);
       break;
     }
@@ -166,7 +163,7 @@ ShadowRoot::InsertSheet(CSSStyleSheet* aSheet,
 }
 
 void
-ShadowRoot::RemoveSheet(CSSStyleSheet* aSheet)
+ShadowRoot::RemoveSheet(StyleSheetHandle aSheet)
 {
   mProtoBinding->RemoveStyleSheet(aSheet);
 
@@ -224,7 +221,7 @@ ShadowRoot::RemoveFromIdTable(Element* aElement, nsIAtom* aId)
   if (entry) {
     entry->RemoveIdElement(aElement);
     if (entry->IsEmpty()) {
-      mIdentifierMap.RawRemoveEntry(entry);
+      mIdentifierMap.RemoveEntry(entry);
     }
   }
 }
@@ -321,7 +318,7 @@ ShadowRoot::DistributeSingleNode(nsIContent* aContent)
     if (!isIndexFound) {
       // We have still not found an index in the insertion point,
       // thus it must be at the end.
-      MOZ_ASSERT(childIterator.Seek(aContent),
+      MOZ_ASSERT(childIterator.Seek(aContent, nullptr),
                  "Trying to match a node that is not a candidate to be matched");
       insertionPoint->AppendMatchedNode(aContent);
     }
@@ -565,7 +562,7 @@ ShadowRoot::ChangePoolHost(nsIContent* aNewHost)
 bool
 ShadowRoot::IsShadowInsertionPoint(nsIContent* aContent)
 {
-  if (aContent && aContent->IsHTML(nsGkAtoms::shadow)) {
+  if (aContent && aContent->IsHTMLElement(nsGkAtoms::shadow)) {
     HTMLShadowElement* shadowElem = static_cast<HTMLShadowElement*>(aContent);
     return shadowElem->IsInsertionPoint();
   }
@@ -597,7 +594,7 @@ ShadowRoot::IsPooledNode(nsIContent* aContent, nsIContent* aContainer,
     return true;
   }
 
-  if (aContainer && aContainer->IsHTML(nsGkAtoms::content)) {
+  if (aContainer && aContainer->IsHTMLElement(nsGkAtoms::content)) {
     // Fallback content will end up in pool if its parent is a child of the host.
     HTMLContentElement* content = static_cast<HTMLContentElement*>(aContainer);
     return content->IsInsertionPoint() && content->MatchedNodes().IsEmpty() &&
@@ -612,7 +609,8 @@ ShadowRoot::AttributeChanged(nsIDocument* aDocument,
                              Element* aElement,
                              int32_t aNameSpaceID,
                              nsIAtom* aAttribute,
-                             int32_t aModType)
+                             int32_t aModType,
+                             const nsAttrValue* aOldValue)
 {
   if (!IsPooledNode(aElement, aElement->GetParent(), mPoolHost)) {
     return;
@@ -711,6 +709,22 @@ ShadowRoot::ContentRemoved(nsIDocument* aDocument,
   }
 }
 
+nsresult
+ShadowRoot::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
+{
+  *aResult = nullptr;
+  return NS_ERROR_DOM_DATA_CLONE_ERR;
+}
+
+void
+ShadowRoot::DestroyContent()
+{
+  if (mOlderShadow) {
+    mOlderShadow->DestroyContent();
+  }
+  DocumentFragment::DestroyContent();
+}
+
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ShadowRootStyleSheetList, StyleSheetList,
                                    mShadowRoot)
 
@@ -740,7 +754,14 @@ ShadowRootStyleSheetList::IndexedGetter(uint32_t aIndex, bool& aFound)
     return nullptr;
   }
 
-  return mShadowRoot->mProtoBinding->StyleSheetAt(aIndex);
+  // XXXheycam Return null until ServoStyleSheet implements the right
+  // DOM interfaces.
+  StyleSheetHandle sheet = mShadowRoot->mProtoBinding->StyleSheetAt(aIndex);
+  if (sheet->IsServo()) {
+    NS_ERROR("stylo: can't return ServoStyleSheets to script yet");
+    return nullptr;
+  }
+  return sheet->AsGecko();
 }
 
 uint32_t

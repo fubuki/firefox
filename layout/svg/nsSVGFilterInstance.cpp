@@ -76,8 +76,8 @@ nsSVGFilterInstance::ComputeBounds()
 
   // Set the user space bounds (i.e. the filter region in user space).
   nsSVGLength2 XYWH[4];
-  NS_ABORT_IF_FALSE(sizeof(mFilterElement->mLengthAttributes) == sizeof(XYWH),
-                    "XYWH size incorrect");
+  static_assert(sizeof(mFilterElement->mLengthAttributes) == sizeof(XYWH),
+                "XYWH size incorrect");
   memcpy(XYWH, mFilterElement->mLengthAttributes,
     sizeof(mFilterElement->mLengthAttributes));
   XYWH[0] = *mFilterFrame->GetLengthValue(SVGFilterElement::ATTR_X);
@@ -230,13 +230,13 @@ nsSVGFilterInstance::ComputeFilterPrimitiveSubregion(nsSVGFE* aFilterElement,
       int32_t inputIndex = aInputIndices[i];
       bool isStandardInput = inputIndex < 0 || inputIndex == mSourceGraphicIndex;
       IntRect inputSubregion = isStandardInput ?
-        ToIntRect(mFilterSpaceBounds) :
+        mFilterSpaceBounds :
         aPrimitiveDescrs[inputIndex].PrimitiveSubregion();
 
       defaultFilterSubregion = defaultFilterSubregion.Union(inputSubregion);
     }
   } else {
-    defaultFilterSubregion = ToIntRect(mFilterSpaceBounds);
+    defaultFilterSubregion = mFilterSpaceBounds;
   }
 
   gfxRect feArea = nsSVGUtils::GetRelativeRect(mPrimitiveUnits,
@@ -327,7 +327,7 @@ nsSVGFilterInstance::GetSourceIndices(nsSVGFE* aPrimitiveElement,
                                       const nsDataHashtable<nsStringHashKey, int32_t>& aImageTable,
                                       nsTArray<int32_t>& aSourceIndices)
 {
-  nsAutoTArray<nsSVGStringInfo,2> sources;
+  AutoTArray<nsSVGStringInfo,2> sources;
   aPrimitiveElement->GetSourceImageNames(sources);
 
   for (uint32_t j = 0; j < sources.Length(); j++) {
@@ -361,22 +361,22 @@ nsSVGFilterInstance::GetSourceIndices(nsSVGFE* aPrimitiveElement,
 
 nsresult
 nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrimitiveDescrs,
-                                     nsTArray<mozilla::RefPtr<SourceSurface>>& aInputImages)
+                                     nsTArray<RefPtr<SourceSurface>>& aInputImages)
 {
   mSourceGraphicIndex = GetLastResultIndex(aPrimitiveDescrs);
 
   // Clip previous filter's output to this filter's filter region.
   if (mSourceGraphicIndex >= 0) {
     FilterPrimitiveDescription& sourceDescr = aPrimitiveDescrs[mSourceGraphicIndex];
-    sourceDescr.SetPrimitiveSubregion(sourceDescr.PrimitiveSubregion().Intersect(ToIntRect(mFilterSpaceBounds)));
+    sourceDescr.SetPrimitiveSubregion(sourceDescr.PrimitiveSubregion().Intersect(mFilterSpaceBounds));
   }
 
   // Get the filter primitive elements.
-  nsTArray<nsRefPtr<nsSVGFE> > primitives;
+  nsTArray<RefPtr<nsSVGFE> > primitives;
   for (nsIContent* child = mFilterElement->nsINode::GetFirstChild();
        child;
        child = child->GetNextSibling()) {
-    nsRefPtr<nsSVGFE> primitive;
+    RefPtr<nsSVGFE> primitive;
     CallQueryInterface(child, (nsSVGFE**)getter_AddRefs(primitive));
     if (primitive) {
       primitives.AppendElement(primitive);
@@ -394,7 +394,7 @@ nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrim
        ++primitiveElementIndex) {
     nsSVGFE* filter = primitives[primitiveElementIndex];
 
-    nsAutoTArray<int32_t,2> sourceIndices;
+    AutoTArray<int32_t,2> sourceIndices;
     nsresult rv = GetSourceIndices(filter, aPrimitiveDescrs, imageTable, sourceIndices);
     if (NS_FAILED(rv)) {
       return rv;
@@ -410,7 +410,7 @@ nsSVGFilterInstance::BuildPrimitives(nsTArray<FilterPrimitiveDescription>& aPrim
       filter->GetPrimitiveDescription(this, primitiveSubregion, sourcesAreTainted, aInputImages);
 
     descr.SetIsTainted(filter->OutputIsTainted(sourcesAreTainted, principal));
-    descr.SetFilterSpaceBounds(ToIntRect(mFilterSpaceBounds));
+    descr.SetFilterSpaceBounds(mFilterSpaceBounds);
     descr.SetPrimitiveSubregion(primitiveSubregion.Intersect(descr.FilterSpaceBounds()));
 
     for (uint32_t i = 0; i < sourceIndices.Length(); i++) {

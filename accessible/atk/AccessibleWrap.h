@@ -52,20 +52,16 @@ public:
   virtual ~AccessibleWrap();
   void ShutdownAtkObject();
 
-  virtual void Shutdown();
+  virtual void Shutdown() override;
 
   // return the atk object for this AccessibleWrap
-  virtual void GetNativeInterface(void** aOutAccessible) MOZ_OVERRIDE;
-  virtual nsresult HandleAccEvent(AccEvent* aEvent);
+  virtual void GetNativeInterface(void** aOutAccessible) override;
+  virtual nsresult HandleAccEvent(AccEvent* aEvent) override;
 
   AtkObject * GetAtkObject(void);
   static AtkObject* GetAtkObject(Accessible* aAccessible);
 
   bool IsValidObject();
-
-  // get/set the MaiHyperlink object for this AccessibleWrap
-  MaiHyperlink* GetMaiHyperlink(bool aCreate = true);
-  void SetMaiHyperlink(MaiHyperlink* aMaiHyperlink);
 
   static const char * ReturnString(nsAString &aString) {
     static nsCString returnedString;
@@ -73,30 +69,20 @@ public:
     return returnedString.get();
   }
 
+  static void GetKeyBinding(Accessible* aAccessible, nsAString& aResult);
+
+  static Accessible* GetColumnHeader(TableAccessible* aAccessible,
+                                     int32_t aColIdx);
+  static Accessible* GetRowHeader(TableAccessible* aAccessible,
+                                  int32_t aRowIdx);
 protected:
 
   nsresult FireAtkStateChangeEvent(AccEvent* aEvent, AtkObject *aObject);
   nsresult FireAtkTextChangedEvent(AccEvent* aEvent, AtkObject *aObject);
-  nsresult FireAtkShowHideEvent(AccEvent* aEvent, AtkObject *aObject,
-                                bool aIsAdded);
 
   AtkObject *mAtkObject;
 
 private:
-
-  /*
-   * do we have text-remove and text-insert signals if not we need to use
-   * text-changed see AccessibleWrap::FireAtkTextChangedEvent() and
-   * bug 619002
-   */
-  enum EAvailableAtkSignals {
-    eUnknown,
-    eHaveNewAtkTextSignals,
-    eNoNewAtkSignals
-  };
-
-  static EAvailableAtkSignals gAvailableAtkSignals;
-
   uint16_t CreateMaiInterfaces();
 };
 

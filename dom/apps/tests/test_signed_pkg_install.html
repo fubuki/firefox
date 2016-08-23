@@ -8,6 +8,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=880043
   <title>Test for Bug 880043 Packaged apps installation and update</title>
   <script type="text/javascript" src="/MochiKit/MochiKit.js"></script>
   <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
+  <script type="text/javascript" src="common.js"></script>
   <script type="text/javascript" src="test_packaged_app_common.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 </head>
@@ -94,7 +95,6 @@ var steps = [
       var url = SimpleTest.getTestFileURL("chromeAddCert.js");
       var script = SpecialPowers.loadChromeScript(url);
       script.addMessageListener("addCertCompleted", function() {
-        SpecialPowers.setAllAppsLaunchable(true);
         SpecialPowers.addPermission("webapps-manage", true, document);
         info("Test CA Certificate Selected");
         PackagedTestHelper.next();
@@ -269,7 +269,7 @@ var steps = [
 PackagedTestHelper.setSteps(steps);
 PackagedTestHelper.gSJSPath = gSJSPath;
 
-addLoadEvent(PackagedTestHelper.start);
+addLoadEvent(() => prepareEnv(() => PackagedTestHelper.start()));
 
 </script>
 </pre>

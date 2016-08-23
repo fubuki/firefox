@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,9 +23,11 @@
 #define WEBCRYPTO_ALG_SHA384        "SHA-384"
 #define WEBCRYPTO_ALG_SHA512        "SHA-512"
 #define WEBCRYPTO_ALG_HMAC          "HMAC"
+#define WEBCRYPTO_ALG_HKDF          "HKDF"
 #define WEBCRYPTO_ALG_PBKDF2        "PBKDF2"
 #define WEBCRYPTO_ALG_RSASSA_PKCS1  "RSASSA-PKCS1-v1_5"
 #define WEBCRYPTO_ALG_RSA_OAEP      "RSA-OAEP"
+#define WEBCRYPTO_ALG_RSA_PSS       "RSA-PSS"
 #define WEBCRYPTO_ALG_ECDH          "ECDH"
 #define WEBCRYPTO_ALG_ECDSA         "ECDSA"
 #define WEBCRYPTO_ALG_DH            "DH"
@@ -86,6 +88,10 @@
 #define JWK_ALG_RSA_OAEP_256        "RSA-OAEP-256"
 #define JWK_ALG_RSA_OAEP_384        "RSA-OAEP-384"
 #define JWK_ALG_RSA_OAEP_512        "RSA-OAEP-512"
+#define JWK_ALG_PS1                 "PS1"      // RSA-PSS
+#define JWK_ALG_PS256               "PS256"
+#define JWK_ALG_PS384               "PS384"
+#define JWK_ALG_PS512               "PS512"
 #define JWK_ALG_ECDSA_P_256         "ES256"
 #define JWK_ALG_ECDSA_P_384         "ES384"
 #define JWK_ALG_ECDSA_P_521         "ES521"
@@ -152,7 +158,7 @@ ReadBuffer(JSStructuredCloneReader* aReader, CryptoBuffer& aBuffer)
   }
 
   if (length > 0) {
-    if (!aBuffer.SetLength(length)) {
+    if (!aBuffer.SetLength(length, fallible)) {
       return false;
     }
     ret = JS_ReadBytes(aReader, aBuffer.Elements(), aBuffer.Length());
@@ -161,13 +167,19 @@ ReadBuffer(JSStructuredCloneReader* aReader, CryptoBuffer& aBuffer)
 }
 
 inline bool
-WriteBuffer(JSStructuredCloneWriter* aWriter, const CryptoBuffer& aBuffer)
+WriteBuffer(JSStructuredCloneWriter* aWriter, const uint8_t* aBuffer, size_t aLength)
 {
-  bool ret = JS_WriteUint32Pair(aWriter, aBuffer.Length(), 0);
-  if (ret && aBuffer.Length() > 0) {
-    ret = JS_WriteBytes(aWriter, aBuffer.Elements(), aBuffer.Length());
+  bool ret = JS_WriteUint32Pair(aWriter, aLength, 0);
+  if (ret && aLength > 0) {
+    ret = JS_WriteBytes(aWriter, aBuffer, aLength);
   }
   return ret;
+}
+
+inline bool
+WriteBuffer(JSStructuredCloneWriter* aWriter, const CryptoBuffer& aBuffer)
+{
+  return WriteBuffer(aWriter, aBuffer.Elements(), aBuffer.Length());
 }
 
 inline CK_MECHANISM_TYPE
@@ -198,6 +210,8 @@ MapAlgorithmNameToMechanism(const nsString& aName)
     mechanism = CKM_RSA_PKCS;
   } else if (aName.EqualsLiteral(WEBCRYPTO_ALG_RSA_OAEP)) {
     mechanism = CKM_RSA_PKCS_OAEP;
+  } else if (aName.EqualsLiteral(WEBCRYPTO_ALG_RSA_PSS)) {
+    mechanism = CKM_RSA_PKCS_PSS;
   } else if (aName.EqualsLiteral(WEBCRYPTO_ALG_ECDH)) {
     mechanism = CKM_ECDH1_DERIVE;
   } else if (aName.EqualsLiteral(WEBCRYPTO_ALG_DH)) {
@@ -232,12 +246,16 @@ NormalizeToken(const nsString& aName, nsString& aDest)
     aDest.AssignLiteral(WEBCRYPTO_ALG_SHA512);
   } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_HMAC)) {
     aDest.AssignLiteral(WEBCRYPTO_ALG_HMAC);
+  } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_HKDF)) {
+    aDest.AssignLiteral(WEBCRYPTO_ALG_HKDF);
   } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_PBKDF2)) {
     aDest.AssignLiteral(WEBCRYPTO_ALG_PBKDF2);
   } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_RSASSA_PKCS1)) {
     aDest.AssignLiteral(WEBCRYPTO_ALG_RSASSA_PKCS1);
   } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_RSA_OAEP)) {
     aDest.AssignLiteral(WEBCRYPTO_ALG_RSA_OAEP);
+  } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_RSA_PSS)) {
+    aDest.AssignLiteral(WEBCRYPTO_ALG_RSA_PSS);
   } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_ECDH)) {
     aDest.AssignLiteral(WEBCRYPTO_ALG_ECDH);
   } else if (NORMALIZED_EQUALS(aName, WEBCRYPTO_ALG_ECDSA)) {
@@ -287,6 +305,7 @@ CheckEncodedECParameters(const SECItem* aEcParams)
 inline SECItem*
 CreateECParamsForCurve(const nsString& aNamedCurve, PLArenaPool* aArena)
 {
+  MOZ_ASSERT(aArena);
   SECOidTag curveOIDTag;
 
   if (aNamedCurve.EqualsLiteral(WEBCRYPTO_NAMED_CURVE_P256)) {

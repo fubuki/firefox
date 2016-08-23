@@ -271,10 +271,11 @@ GfxInfo::GetGfxDriverInfo()
 }
 
 nsresult
-GfxInfo::GetFeatureStatusImpl(int32_t aFeature, 
-                              int32_t *aStatus, 
-                              nsAString & aSuggestedDriverVersion, 
-                              const nsTArray<GfxDriverInfo>& aDriverInfo, 
+GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
+                              int32_t *aStatus,
+                              nsAString & aSuggestedDriverVersion,
+                              const nsTArray<GfxDriverInfo>& aDriverInfo,
+                              nsACString& aFailureId,
                               OperatingSystem* aOS /* = nullptr */)
 
 {
@@ -292,6 +293,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
     // We better block them, rather than rely on them to fail gracefully, because they don't!
     // see bug 696636
     *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+    aFailureId = "FEATURE_FAILURE_OPENGL_1";
     return NS_OK;
   }
 
@@ -305,6 +307,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
       // Disable OpenGL layers when we don't have texture_from_pixmap because it regresses performance. 
       if (aFeature == nsIGfxInfo::FEATURE_OPENGL_LAYERS && !mHasTextureFromPixmap) {
         *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+        aFailureId = "FEATURE_FAILURE_NO_PIXMAP";
         aSuggestedDriverVersion.AssignLiteral("<Anything with EXT_texture_from_pixmap support>");
         return NS_OK;
       }
@@ -325,24 +328,29 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
       if (mIsMesa) {
         if (mIsNouveau && version(mMajorVersion, mMinorVersion) < version(8,0)) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aFailureId = "FEATURE_FAILURE_MESA_1";
           aSuggestedDriverVersion.AssignLiteral("Mesa 8.0");
         }
         else if (version(mMajorVersion, mMinorVersion, mRevisionVersion) < version(7,10,3)) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aFailureId = "FEATURE_FAILURE_MESA_2";
           aSuggestedDriverVersion.AssignLiteral("Mesa 7.10.3");
         }
         else if (mIsOldSwrast) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aFailureId = "FEATURE_FAILURE_SW_RAST";
         }
         else if (mIsLlvmpipe && version(mMajorVersion, mMinorVersion) < version(9, 1)) {
           // bug 791905, Mesa bug 57733, fixed in Mesa 9.1 according to
           // https://bugs.freedesktop.org/show_bug.cgi?id=57733#c3
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aFailureId = "FEATURE_FAILURE_MESA_3";
         }
         else if (aFeature == nsIGfxInfo::FEATURE_WEBGL_MSAA)
         {
           if (mIsIntel && version(mMajorVersion, mMinorVersion) < version(8,1)) {
             *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+            aFailureId = "FEATURE_FAILURE_MESA_4";
             aSuggestedDriverVersion.AssignLiteral("Mesa 8.1");
           }
         }
@@ -350,6 +358,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
       } else if (mIsNVIDIA) {
         if (version(mMajorVersion, mMinorVersion, mRevisionVersion) < version(257,21)) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aFailureId = "FEATURE_FAILURE_OLD_NV";
           aSuggestedDriverVersion.AssignLiteral("NVIDIA 257.21");
         }
       } else if (mIsFGLRX) {
@@ -357,6 +366,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
         // by requiring OpenGL 3, we effectively require recent drivers.
         if (version(mMajorVersion, mMinorVersion, mRevisionVersion) < version(3, 0)) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION;
+          aFailureId = "FEATURE_FAILURE_OLD_FGLRX";
           aSuggestedDriverVersion.AssignLiteral("<Something recent>");
         }
         // Bug 724640: FGLRX + Linux 2.6.32 is a crashy combo
@@ -365,6 +375,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
                      mOSRelease.Find("2.6.32") != -1;
         if (unknownOS || badOS) {
           *aStatus = nsIGfxInfo::FEATURE_BLOCKED_OS_VERSION;
+          aFailureId = "FEATURE_FAILURE_OLD_OS";
         }
       } else {
         // like on windows, let's block unknown vendors. Think of virtual machines.
@@ -374,7 +385,7 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
     }
   }
 
-  return GfxInfoBase::GetFeatureStatusImpl(aFeature, aStatus, aSuggestedDriverVersion, aDriverInfo, &os);
+  return GfxInfoBase::GetFeatureStatusImpl(aFeature, aStatus, aSuggestedDriverVersion, aDriverInfo, aFailureId, &os);
 }
 
 
@@ -390,21 +401,18 @@ GfxInfo::GetDWriteEnabled(bool *aEnabled)
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString DWriteVersion; */
 NS_IMETHODIMP
 GfxInfo::GetDWriteVersion(nsAString & aDwriteVersion)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString cleartypeParameters; */
 NS_IMETHODIMP
 GfxInfo::GetCleartypeParameters(nsAString & aCleartypeParams)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterDescription; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription(nsAString & aAdapterDescription)
 {
@@ -413,14 +421,12 @@ GfxInfo::GetAdapterDescription(nsAString & aAdapterDescription)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDescription2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription2(nsAString & aAdapterDescription)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterRAM; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM(nsAString & aAdapterRAM)
 {
@@ -428,14 +434,12 @@ GfxInfo::GetAdapterRAM(nsAString & aAdapterRAM)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterRAM2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM2(nsAString & aAdapterRAM)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterDriver; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver(nsAString & aAdapterDriver)
 {
@@ -443,14 +447,12 @@ GfxInfo::GetAdapterDriver(nsAString & aAdapterDriver)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriver2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver2(nsAString & aAdapterDriver)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterDriverVersion; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion(nsAString & aAdapterDriverVersion)
 {
@@ -459,14 +461,12 @@ GfxInfo::GetAdapterDriverVersion(nsAString & aAdapterDriverVersion)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverVersion2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion2(nsAString & aAdapterDriverVersion)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterDriverDate; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate(nsAString & aAdapterDriverDate)
 {
@@ -474,14 +474,12 @@ GfxInfo::GetAdapterDriverDate(nsAString & aAdapterDriverDate)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverDate2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate2(nsAString & aAdapterDriverDate)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterVendorID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID(nsAString & aAdapterVendorID)
 {
@@ -490,14 +488,12 @@ GfxInfo::GetAdapterVendorID(nsAString & aAdapterVendorID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterVendorID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID2(nsAString & aAdapterVendorID)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterDeviceID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID(nsAString & aAdapterDeviceID)
 {
@@ -506,28 +502,24 @@ GfxInfo::GetAdapterDeviceID(nsAString & aAdapterDeviceID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDeviceID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID2(nsAString & aAdapterDeviceID)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterSubsysID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID(nsAString & aAdapterSubsysID)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute DOMString adapterSubsysID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID2(nsAString & aAdapterSubsysID)
 {
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute boolean isGPU2Active; */
 NS_IMETHODIMP
 GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
 {
@@ -539,28 +531,24 @@ GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
 // Implement nsIGfxInfoDebug
 // We don't support spoofing anything on Linux
 
-/* void spoofVendorID (in DOMString aVendorID); */
 NS_IMETHODIMP GfxInfo::SpoofVendorID(const nsAString & aVendorID)
 {
   CopyUTF16toUTF8(aVendorID, mVendor);
   return NS_OK;
 }
 
-/* void spoofDeviceID (in unsigned long aDeviceID); */
 NS_IMETHODIMP GfxInfo::SpoofDeviceID(const nsAString & aDeviceID)
 {
   CopyUTF16toUTF8(aDeviceID, mRenderer);
   return NS_OK;
 }
 
-/* void spoofDriverVersion (in DOMString aDriverVersion); */
 NS_IMETHODIMP GfxInfo::SpoofDriverVersion(const nsAString & aDriverVersion)
 {
   CopyUTF16toUTF8(aDriverVersion, mVersion);
   return NS_OK;
 }
 
-/* void spoofOSVersion (in unsigned long aVersion); */
 NS_IMETHODIMP GfxInfo::SpoofOSVersion(uint32_t aVersion)
 {
   // We don't support OS versioning on Linux. There's just "Linux".

@@ -5,26 +5,32 @@
 // First do searches with typed behavior forced to false, so later tests will
 // ensure autocomplete is able to dinamically switch behavior.
 
+const FAVICON_HREF = NetUtil.newURI(do_get_file("../favicons/favicon-normal16.png")).spec;
+
 add_task(function* test_domain() {
-  do_log_info("Searching for domain should autoFill it");
+  do_print("Searching for domain should autoFill it");
   Services.prefs.setBoolPref("browser.urlbar.autoFill.typed", false);
-  yield promiseAddVisits(NetUtil.newURI("http://mozilla.org/link/"));
+  yield PlacesTestUtils.addVisits(NetUtil.newURI("http://mozilla.org/link/"));
+  yield setFaviconForHref("http://mozilla.org/link/", FAVICON_HREF);
   yield check_autocomplete({
     search: "moz",
     autofilled: "mozilla.org/",
-    completed:  "mozilla.org/"
+    completed: "mozilla.org/",
+    icon: "moz-anno:favicon:" + FAVICON_HREF
   });
   yield cleanup();
 });
 
 add_task(function* test_url() {
-  do_log_info("Searching for url should autoFill it");
+  do_print("Searching for url should autoFill it");
   Services.prefs.setBoolPref("browser.urlbar.autoFill.typed", false);
-  yield promiseAddVisits(NetUtil.newURI("http://mozilla.org/link/"));
+  yield PlacesTestUtils.addVisits(NetUtil.newURI("http://mozilla.org/link/"));
+  yield setFaviconForHref("http://mozilla.org/link/", FAVICON_HREF);
   yield check_autocomplete({
     search: "mozilla.org/li",
     autofilled: "mozilla.org/link/",
-    completed: "http://mozilla.org/link/"
+    completed: "http://mozilla.org/link/",
+    icon: "moz-anno:favicon:" + FAVICON_HREF
   });
   yield cleanup();
 });
@@ -32,8 +38,8 @@ add_task(function* test_url() {
 // Now do searches with typed behavior forced to true.
 
 add_task(function* test_untyped_domain() {
-  do_log_info("Searching for non-typed domain should not autoFill it");
-  yield promiseAddVisits(NetUtil.newURI("http://mozilla.org/link/"));
+  do_print("Searching for non-typed domain should not autoFill it");
+  yield PlacesTestUtils.addVisits(NetUtil.newURI("http://mozilla.org/link/"));
   yield check_autocomplete({
     search: "moz",
     autofilled: "moz",
@@ -43,8 +49,8 @@ add_task(function* test_untyped_domain() {
 });
 
 add_task(function* test_typed_domain() {
-  do_log_info("Searching for typed domain should autoFill it");
-  yield promiseAddVisits({ uri: NetUtil.newURI("http://mozilla.org/typed/"),
+  do_print("Searching for typed domain should autoFill it");
+  yield PlacesTestUtils.addVisits({ uri: NetUtil.newURI("http://mozilla.org/typed/"),
                            transition: TRANSITION_TYPED });
   yield check_autocomplete({
     search: "moz",
@@ -55,8 +61,8 @@ add_task(function* test_typed_domain() {
 });
 
 add_task(function* test_untyped_url() {
-  do_log_info("Searching for non-typed url should not autoFill it");
-  yield promiseAddVisits(NetUtil.newURI("http://mozilla.org/link/"));
+  do_print("Searching for non-typed url should not autoFill it");
+  yield PlacesTestUtils.addVisits(NetUtil.newURI("http://mozilla.org/link/"));
   yield check_autocomplete({
     search: "mozilla.org/li",
     autofilled: "mozilla.org/li",
@@ -66,8 +72,8 @@ add_task(function* test_untyped_url() {
 });
 
 add_task(function* test_typed_url() {
-  do_log_info("Searching for typed url should autoFill it");
-  yield promiseAddVisits({ uri: NetUtil.newURI("http://mozilla.org/link/"),
+  do_print("Searching for typed url should autoFill it");
+  yield PlacesTestUtils.addVisits({ uri: NetUtil.newURI("http://mozilla.org/link/"),
                            transition: TRANSITION_TYPED });
   yield check_autocomplete({
     search: "mozilla.org/li",

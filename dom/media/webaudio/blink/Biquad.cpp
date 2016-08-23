@@ -26,16 +26,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// For M_PI from cmath
-#ifdef _MSC_VER
-#  define _USE_MATH_DEFINES
-#endif
-
 #include "Biquad.h"
 
-#include <cmath>
 #include <float.h>
 #include <algorithm>
+#include <math.h>
 
 namespace WebCore {
 

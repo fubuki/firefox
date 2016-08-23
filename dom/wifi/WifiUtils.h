@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,8 +13,8 @@
 #define WifiUtils_h
 
 #include "nsString.h"
-#include "nsAutoPtr.h"
 #include "mozilla/dom/WifiOptionsBinding.h"
+#include "mozilla/UniquePtr.h"
 #include "WifiHotspotUtils.h"
 
 // Needed to add a copy constructor to WifiCommandOptions.
@@ -49,7 +51,7 @@ public:
 class WpaSupplicantImpl
 {
 public:
-  // Suppress warning from nsAutoPtr
+  // Suppress warning from |UniquePtr|
   virtual ~WpaSupplicantImpl() {}
 
   virtual int32_t
@@ -78,7 +80,7 @@ public:
 };
 
 // Concrete class to use to access the wpa supplicant.
-class WpaSupplicant MOZ_FINAL
+class WpaSupplicant final
 {
 public:
   WpaSupplicant();
@@ -92,8 +94,8 @@ public:
                       const nsCString& aInterface);
 
 private:
-  nsAutoPtr<WpaSupplicantImpl> mImpl;
-  nsAutoPtr<WifiHotspotUtils> mWifiHotspotUtils;
+  UniquePtr<WpaSupplicantImpl> mImpl;
+  UniquePtr<WifiHotspotUtils> mWifiHotspotUtils;
 
   uint32_t mSdkVersion;
 

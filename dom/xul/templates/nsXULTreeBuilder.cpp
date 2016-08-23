@@ -55,7 +55,7 @@ public:
     // nsITreeView
     NS_DECL_NSITREEVIEW
     // nsINativeTreeView: Untrusted code can use us
-    NS_IMETHOD EnsureNative() MOZ_OVERRIDE { return NS_OK; }
+    NS_IMETHOD EnsureNative() override { return NS_OK; }
 
     // nsIMutationObserver
     NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
@@ -72,7 +72,7 @@ protected:
     /**
      * Uninitialize the template builder
      */
-    virtual void Uninit(bool aIsFinal) MOZ_OVERRIDE;
+    virtual void Uninit(bool aIsFinal) override;
 
     /**
      * Get sort variables from the active <treecol>
@@ -81,7 +81,7 @@ protected:
     EnsureSortVariables();
 
     virtual nsresult
-    RebuildAll() MOZ_OVERRIDE;
+    RebuildAll() override;
 
     /**
      * Given a row, use the row's match to figure out the appropriate
@@ -169,7 +169,7 @@ protected:
     NS_IMETHOD
     HasGeneratedContent(nsIRDFResource* aResource,
                         nsIAtom* aTag,
-                        bool* aGenerated) MOZ_OVERRIDE;
+                        bool* aGenerated) override;
 
     // GetInsertionLocations, ReplaceMatch and SynchronizeResult are inherited
     // from nsXULTemplateBuilder
@@ -180,7 +180,7 @@ protected:
      */
     bool
     GetInsertionLocations(nsIXULTemplateResult* aResult,
-                          nsCOMArray<nsIContent>** aLocations) MOZ_OVERRIDE;
+                          nsCOMArray<nsIContent>** aLocations) override;
 
     /**
      * Implement result replacement
@@ -189,13 +189,13 @@ protected:
     ReplaceMatch(nsIXULTemplateResult* aOldResult,
                  nsTemplateMatch* aNewMatch,
                  nsTemplateRule* aNewMatchRule,
-                 void* aContext) MOZ_OVERRIDE;
+                 void* aContext) override;
 
     /**
      * Implement match synchronization
      */
     virtual nsresult
-    SynchronizeResult(nsIXULTemplateResult* aResult) MOZ_OVERRIDE;
+    SynchronizeResult(nsIXULTemplateResult* aResult) override;
 
     /**
      * The tree's box object, used to communicate with the front-end.
@@ -262,9 +262,6 @@ NS_NewXULTreeBuilder(nsISupports* aOuter, REFNSIID aIID, void** aResult)
 
     nsresult rv;
     nsXULTreeBuilder* result = new nsXULTreeBuilder();
-    if (! result)
-        return NS_ERROR_OUT_OF_MEMORY;
-
     NS_ADDREF(result); // stabilize
 
     rv = result->InitGlobals();
@@ -376,7 +373,7 @@ nsXULTreeBuilder::Sort(nsIDOMElement* aElement)
         return NS_OK;
 
     // Grab the new sort variable
-    mSortVariable = do_GetAtom(sort);
+    mSortVariable = NS_Atomize(sort);
 
     nsAutoString hints;
     header->GetAttr(kNameSpaceID_None, nsGkAtoms::sorthints, hints);
@@ -1230,7 +1227,7 @@ nsXULTreeBuilder::SynchronizeResult(nsIXULTemplateResult* aResult)
         if (row >= 0)
             mBoxObject->InvalidateRow(row);
 
-        PR_LOG(gXULTemplateLog, PR_LOG_DEBUG,
+        MOZ_LOG(gXULTemplateLog, LogLevel::Debug,
                ("xultemplate[%p]   => row %d", this, row));
     }
 
@@ -1264,7 +1261,7 @@ nsXULTreeBuilder::EnsureSortVariables()
                 nsAutoString sort;
                 child->GetAttr(kNameSpaceID_None, nsGkAtoms::sort, sort);
                 if (! sort.IsEmpty()) {
-                    mSortVariable = do_GetAtom(sort);
+                    mSortVariable = NS_Atomize(sort);
 
                     static nsIContent::AttrValuesArray strings[] =
                       {&nsGkAtoms::ascending, &nsGkAtoms::descending, nullptr};
@@ -1466,7 +1463,7 @@ nsXULTreeBuilder::OpenSubtreeOf(nsTreeRows::Subtree* aSubtree,
                                 nsIXULTemplateResult *aResult,
                                 int32_t* aDelta)
 {
-    nsAutoTArray<int32_t, 8> open;
+    AutoTArray<int32_t, 8> open;
     int32_t count = 0;
 
     int32_t rulecount = mQuerySets.Length();
@@ -1840,7 +1837,6 @@ nsXULTreeBuilder::SortSubtree(nsTreeRows::Subtree* aSubtree)
 }
 
 
-/* boolean canDrop (in long index, in long orientation); */
 NS_IMETHODIMP
 nsXULTreeBuilder::CanDrop(int32_t index, int32_t orientation,
                           nsIDOMDataTransfer* dataTransfer, bool *_retval)

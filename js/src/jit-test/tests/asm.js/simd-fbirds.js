@@ -44,22 +44,21 @@ function getActualBirds() {
 var code = `
     "use asm";
     var toF = global.Math.fround;
+    var u8 = new global.Uint8Array(buffer);
     var f32 = new global.Float32Array(buffer);
     const maxBirds = 100000;
     const maxBirdsx4 = 400000;
-    const maxBirdsx4Plus4 = 400004;
-    const maxBirdsx4Plus8 = 400008;
-    const maxBirdsx4Plus12 = 400012;
     const maxBirdsx8 = 800000;
     const accelMask = 0x3c;
-    const mk2 = 0x000ffffc;
+    const mk4 = 0x000ffff0;
 
     const getMaxPos = 1000.0;
     const getAccelDataSteps = imp.accelDataSteps | 0;
     var getActualBirds = imp.getActualBirds;
 
-    var i4 = global.SIMD.int32x4;
-    var f4 = global.SIMD.float32x4;
+    var i4 = global.SIMD.Int32x4;
+    var f4 = global.SIMD.Float32x4;
+    var b4 = global.SIMD.Bool32x4;
     var i4add = i4.add;
     var i4and = i4.and;
     var f4select = f4.select;
@@ -68,6 +67,9 @@ var code = `
     var f4mul = f4.mul;
     var f4greaterThan = f4.greaterThan;
     var f4splat = f4.splat;
+    var f4load = f4.load;
+    var f4store = f4.store;
+    var b4any = b4.anyTrue;
 
     const zerox4 = f4(0.0,0.0,0.0,0.0);
 
@@ -95,7 +97,7 @@ var code = `
         var accelx4 = f4(0.0,0.0,0.0,0.0);
         var a = 0;
         var posDeltax4 = f4(0.0,0.0,0.0,0.0);
-        var cmpx4 = i4(0,0,0,0);
+        var cmpx4 = b4(0,0,0,0);
         var newVelTruex4 = f4(0.0,0.0,0.0,0.0);
 
         steps = getAccelDataSteps | 0;
@@ -110,15 +112,8 @@ var code = `
 
         for (i = 0; (i | 0) < (len | 0); i = (i + 16) | 0) {
             accelIndex = 0;
-            // Work around unimplemented Float32x4Array
-            newPosx4 = f4(toF(f32[(i & mk2) >> 2]),
-                    toF(f32[(i & mk2) + 4 >> 2]),
-                    toF(f32[(i & mk2) + 8 >> 2]),
-                    toF(f32[(i & mk2) + 12 >> 2]));
-            newVelx4 = f4(toF(f32[(i & mk2) + maxBirdsx4 >> 2]),
-                    toF(f32[(i & mk2) + maxBirdsx4Plus4 >> 2]),
-                    toF(f32[(i & mk2) + maxBirdsx4Plus8 >> 2]),
-                    toF(f32[(i & mk2) + maxBirdsx4Plus12 >> 2]));
+            newPosx4 = f4load(u8, i & mk4);
+            newVelx4 = f4load(u8, (i & mk4) + maxBirdsx4);
             for (a = 0; (a | 0) < (steps | 0); a = (a + 1) | 0) {
                 accel = toF(f32[(accelIndex & accelMask) + maxBirdsx8 >> 2]);
                 accelx4 = f4splat(accel);
@@ -129,21 +124,14 @@ var code = `
                 newVelx4 = f4add(newVelx4, f4mul(accelx4, subTimeDeltax4));
                 cmpx4 = f4greaterThan(newPosx4, maxPosx4);
 
-                if (cmpx4.signMask) {
+                if (b4any(cmpx4)) {
                     // Work around unimplemented 'neg' operation, using 0 - x.
                     newVelTruex4 = f4sub(zerox4, newVelx4);
                     newVelx4 = f4select(cmpx4, newVelTruex4, newVelx4);
                 }
             }
-            // Work around unimplemented Float32x4Array
-            f32[(i & mk2) >> 2] = newPosx4.x;
-            f32[(i & mk2) + 4 >> 2] = newPosx4.y;
-            f32[(i & mk2) + 8 >> 2] = newPosx4.z;
-            f32[(i & mk2) + 12 >> 2] = newPosx4.w;
-            f32[(i & mk2) + maxBirdsx4 >> 2] = newVelx4.x;
-            f32[(i & mk2) + maxBirdsx4Plus4 >> 2] = newVelx4.y;
-            f32[(i & mk2) + maxBirdsx4Plus8 >> 2] = newVelx4.z;
-            f32[(i & mk2) + maxBirdsx4Plus12 >> 2] = newVelx4.w;
+            f4store(u8, i & mk4, newPosx4);
+            f4store(u8, (i & mk4) + maxBirdsx4, newVelx4);
         }
     }
 

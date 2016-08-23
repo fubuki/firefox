@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,16 +12,27 @@
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_ISUPPORTS(TimeRanges, nsIDOMTimeRanges)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(TimeRanges, mParent)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(TimeRanges)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(TimeRanges)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(TimeRanges)
+  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_INTERFACE_MAP_ENTRY(nsIDOMTimeRanges)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
 
 TimeRanges::TimeRanges()
+  : mParent(nullptr)
 {
-  MOZ_COUNT_CTOR(TimeRanges);
+}
+
+TimeRanges::TimeRanges(nsISupports* aParent)
+  : mParent(aParent)
+{
 }
 
 TimeRanges::~TimeRanges()
 {
-  MOZ_COUNT_DTOR(TimeRanges);
 }
 
 NS_IMETHODIMP
@@ -47,7 +58,7 @@ TimeRanges::Start(uint32_t aIndex, double* aTime)
 {
   ErrorResult rv;
   *aTime = Start(aIndex, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 double
@@ -66,7 +77,7 @@ TimeRanges::End(uint32_t aIndex, double* aTime)
 {
   ErrorResult rv;
   *aTime = End(aIndex, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -101,7 +112,7 @@ void
 TimeRanges::Normalize(double aTolerance)
 {
   if (mRanges.Length() >= 2) {
-    nsAutoTArray<TimeRange,4> normalized;
+    AutoTArray<TimeRange,4> normalized;
 
     mRanges.Sort(CompareTimeRanges());
 
@@ -136,7 +147,7 @@ TimeRanges::Union(const TimeRanges* aOtherRanges, double aTolerance)
 void
 TimeRanges::Intersection(const TimeRanges* aOtherRanges)
 {
-  nsAutoTArray<TimeRange,4> intersection;
+  AutoTArray<TimeRange,4> intersection;
 
   const nsTArray<TimeRange>& otherRanges = aOtherRanges->mRanges;
   for (index_type i = 0, j = 0; i < mRanges.Length() && j < otherRanges.Length();) {
@@ -167,9 +178,15 @@ TimeRanges::Find(double aTime, double aTolerance /* = 0 */)
 }
 
 JSObject*
-TimeRanges::WrapObject(JSContext* aCx)
+TimeRanges::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return TimeRangesBinding::Wrap(aCx, this);
+  return TimeRangesBinding::Wrap(aCx, this, aGivenProto);
+}
+
+nsISupports*
+TimeRanges::GetParentObject() const
+{
+  return mParent;
 }
 
 void

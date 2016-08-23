@@ -52,6 +52,7 @@ enum AccType {
   eHTMLOptGroupType,
   eImageMapType,
   eMenuPopupType,
+  eProxyType,
   eProgressType,
   eRootType,
   eXULLabelType,
@@ -67,21 +68,24 @@ enum AccType {
  * type, the same accessible class can have several types.
  */
 enum AccGenericType {
-  eAutoComplete = 1 << 0,
-  eAutoCompletePopup = 1 << 1,
-  eButton = 1 << 2,
-  eCombobox = 1 << 3,
-  eDocument = 1 << 4,
-  eHyperText = 1 << 5,
-  eList = 1 << 6,
-  eListControl = 1 << 7,
-  eMenuButton = 1 << 8,
-  eSelect = 1 << 9,
-  eTable = 1 << 10,
-  eTableCell = 1 << 11,
-  eTableRow = 1 << 12,
+  eAlert = 1 << 0,
+  eAutoComplete = 1 << 1,
+  eAutoCompletePopup = 1 << 2,
+  eButton = 1 << 3,
+  eCombobox = 1 << 4,
+  eDocument = 1 << 5,
+  eHyperText = 1 << 6,
+  eLandmark = 1 << 7,
+  eList = 1 << 8,
+  eListControl = 1 << 9,
+  eMenuButton = 1 << 10,
+  eSelect = 1 << 11,
+  eTable = 1 << 12,
+  eTableCell = 1 << 13,
+  eTableRow = 1 << 14,
+  eText = 1 << 15,
 
-  eLastAccGenericType = eTableRow
+  eLastAccGenericType = eText
 };
 
 } // namespace a11y

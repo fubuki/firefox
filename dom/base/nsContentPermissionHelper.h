@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,13 +11,17 @@
 #include "nsTArray.h"
 #include "nsIMutableArray.h"
 #include "mozilla/dom/PContentPermissionRequestChild.h"
+#include "mozilla/dom/ipc/IdType.h"
+#include "nsIDOMEventListener.h"
+
 // Microsoft's API Name hackery sucks
 // XXXbz Doing this in a header is a gigantic footgun. See
 // https://bugzilla.mozilla.org/show_bug.cgi?id=932421#c3 for why.
 #undef LoadImage
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 class nsContentPermissionRequestProxy;
+class VisibilityChangeListener;
 
 // Forward declare IPC::Principal here which is defined in
 // PermissionMessageUtils.h. Include this file will transitively includes
@@ -25,7 +31,7 @@ class nsContentPermissionRequestProxy;
 // That will mess up windows build.
 namespace IPC {
 class Principal;
-}
+} // namespace IPC
 
 namespace mozilla {
 namespace dom {
@@ -73,51 +79,108 @@ public:
   static PContentPermissionRequestParent*
   CreateContentPermissionRequestParent(const nsTArray<PermissionRequest>& aRequests,
                                        Element* element,
-                                       const IPC::Principal& principal);
+                                       const IPC::Principal& principal,
+                                       const TabId& aTabId);
 
   static nsresult
-  AskPermission(nsIContentPermissionRequest* aRequest, nsPIDOMWindow* aWindow);
+  AskPermission(nsIContentPermissionRequest* aRequest, 
+                nsPIDOMWindowInner* aWindow);
+
+  static nsTArray<PContentPermissionRequestParent*>
+  GetContentPermissionRequestParentById(const TabId& aTabId);
+
+  static void
+  NotifyRemoveContentPermissionRequestParent(PContentPermissionRequestParent* aParent);
+
+  static nsTArray<PContentPermissionRequestChild*>
+  GetContentPermissionRequestChildById(const TabId& aTabId);
+
+  static void
+  NotifyRemoveContentPermissionRequestChild(PContentPermissionRequestChild* aChild);
+};
+
+class nsContentPermissionRequester final : public nsIContentPermissionRequester
+{
+public:
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSICONTENTPERMISSIONREQUESTER
+
+  explicit nsContentPermissionRequester(nsPIDOMWindowInner* aWindow);
+
+private:
+  virtual ~nsContentPermissionRequester();
+
+  nsWeakPtr mWindow;
+  RefPtr<VisibilityChangeListener> mListener;
 };
 
 } // namespace dom
 } // namespace mozilla
 
+using mozilla::dom::ContentPermissionRequestParent;
+
 class nsContentPermissionRequestProxy : public nsIContentPermissionRequest
 {
- public:
+public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSICONTENTPERMISSIONREQUEST
 
   nsContentPermissionRequestProxy();
 
   nsresult Init(const nsTArray<mozilla::dom::PermissionRequest>& requests,
-                mozilla::dom::ContentPermissionRequestParent* parent);
+                ContentPermissionRequestParent* parent);
 
   void OnParentDestroyed();
 
- private:
+  void NotifyVisibility(const bool& aIsVisible);
+
+private:
+  class nsContentPermissionRequesterProxy final : public nsIContentPermissionRequester {
+  public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSICONTENTPERMISSIONREQUESTER
+
+    explicit nsContentPermissionRequesterProxy(ContentPermissionRequestParent* aParent)
+      : mParent(aParent)
+      , mWaitGettingResult(false) {}
+
+    void NotifyVisibilityResult(const bool& aIsVisible);
+
+  private:
+    virtual ~nsContentPermissionRequesterProxy() {}
+
+    ContentPermissionRequestParent* mParent;
+    bool mWaitGettingResult;
+    nsCOMPtr<nsIContentPermissionRequestCallback> mGetCallback;
+    nsCOMPtr<nsIContentPermissionRequestCallback> mOnChangeCallback;
+  };
+
   virtual ~nsContentPermissionRequestProxy();
 
   // Non-owning pointer to the ContentPermissionRequestParent object which owns this proxy.
-  mozilla::dom::ContentPermissionRequestParent* mParent;
+  ContentPermissionRequestParent* mParent;
   nsTArray<mozilla::dom::PermissionRequest> mPermissionRequests;
+  RefPtr<nsContentPermissionRequesterProxy> mRequester;
 };
 
 /**
  * RemotePermissionRequest will send a prompt ipdl request to b2g process.
  */
-class RemotePermissionRequest MOZ_FINAL : public nsISupports
-                                        , public mozilla::dom::PContentPermissionRequestChild
+class RemotePermissionRequest final : public nsIContentPermissionRequestCallback
+                                    , public mozilla::dom::PContentPermissionRequestChild
 {
 public:
   NS_DECL_ISUPPORTS
+  NS_DECL_NSICONTENTPERMISSIONREQUESTCALLBACK
 
   RemotePermissionRequest(nsIContentPermissionRequest* aRequest,
-                          nsPIDOMWindow* aWindow);
+                          nsPIDOMWindowInner* aWindow);
 
   // It will be called when prompt dismissed.
-  virtual bool Recv__delete__(const bool &aAllow,
-                              const nsTArray<PermissionChoice>& aChoices) MOZ_OVERRIDE;
+  virtual bool RecvNotifyResult(const bool &aAllow,
+                                InfallibleTArray<PermissionChoice>&& aChoices) override;
+
+  virtual bool RecvGetVisibility() override;
 
   void IPDLAddRef()
   {
@@ -131,18 +194,22 @@ public:
     Release();
   }
 
+  void Destroy();
+
+  bool IPCOpen() const { return mIPCOpen && !mDestroyed; }
+
 private:
-  virtual ~RemotePermissionRequest()
-  {
-    MOZ_ASSERT(!mIPCOpen, "Protocol must not be open when RemotePermissionRequest is destroyed.");
-  }
+  virtual ~RemotePermissionRequest();
 
   void DoAllow(JS::HandleValue aChoices);
   void DoCancel();
 
   nsCOMPtr<nsIContentPermissionRequest> mRequest;
-  nsCOMPtr<nsPIDOMWindow>               mWindow;
+  nsCOMPtr<nsPIDOMWindowInner>          mWindow;
   bool                                  mIPCOpen;
+  bool                                  mDestroyed;
+  RefPtr<VisibilityChangeListener>    mListener;
 };
 
 #endif // nsContentPermissionHelper_h
+

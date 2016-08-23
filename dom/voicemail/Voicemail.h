@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,15 +15,15 @@
 class JSObject;
 struct JSContext;
 
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 namespace dom {
 
 class VoicemailStatus;
 
-class Voicemail MOZ_FINAL : public DOMEventTargetHelper,
-                            private nsIVoicemailListener
+class Voicemail final : public DOMEventTargetHelper,
+                        private nsIVoicemailListener
 {
   /**
    * Class Voicemail doesn't actually expose nsIVoicemailListener. Instead, it
@@ -42,20 +42,20 @@ public:
                                            DOMEventTargetHelper)
 
   static already_AddRefed<Voicemail>
-  Create(nsPIDOMWindow* aOwner,
+  Create(nsPIDOMWindowInner* aOwner,
          ErrorResult& aRv);
 
   void
   Shutdown();
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const
   {
     return GetOwner();
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   already_AddRefed<VoicemailStatus>
   GetStatus(const Optional<uint32_t>& aServiceId,
@@ -74,20 +74,20 @@ public:
   IMPL_EVENT_HANDLER(statuschanged)
 
 private:
-  Voicemail(nsPIDOMWindow* aWindow,
+  Voicemail(nsPIDOMWindowInner* aWindow,
             nsIVoicemailService* aService);
 
-  // MOZ_FINAL suppresses -Werror,-Wdelete-non-virtual-dtor
+  // final suppresses -Werror,-Wdelete-non-virtual-dtor
   ~Voicemail();
 
 private:
   nsCOMPtr<nsIVoicemailService> mService;
-  nsRefPtr<Listener> mListener;
+  RefPtr<Listener> mListener;
 
   // |mStatuses| keeps all instantiated VoicemailStatus objects as well as the
   // empty slots for not interested ones. The length of |mStatuses| is decided
   // in the constructor and is never changed ever since.
-  nsAutoTArray<nsRefPtr<VoicemailStatus>, 1> mStatuses;
+  AutoTArray<RefPtr<VoicemailStatus>, 1> mStatuses;
 
   // Return a nsIVoicemailProvider instance based on the requests from external
   // components. Return nullptr if aOptionalServiceId contains an invalid

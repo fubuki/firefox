@@ -6,6 +6,8 @@
 
 #include <stdint.h>
 
+class nsString;
+
 namespace mozilla {
 namespace a11y {
 
@@ -55,7 +57,7 @@ void PlatformShutdown();
  * called when a new ProxyAccessible is created, so the platform may setup a
  * wrapper for it, or take other action.
  */
-void ProxyCreated(ProxyAccessible*);
+void ProxyCreated(ProxyAccessible* aProxy, uint32_t aInterfaces);
 
 /**
  * Called just before a ProxyAccessible is destroyed so its wrapper can be
@@ -67,6 +69,14 @@ void ProxyDestroyed(ProxyAccessible*);
  * Callied when an event is fired on a proxied accessible.
  */
 void ProxyEvent(ProxyAccessible* aTarget, uint32_t aEventType);
+void ProxyStateChangeEvent(ProxyAccessible* aTarget, uint64_t aState,
+                           bool aEnabled);
+void ProxyCaretMoveEvent(ProxyAccessible* aTarget, int32_t aOffset);
+void ProxyTextChangeEvent(ProxyAccessible* aTarget, const nsString& aStr,
+                          int32_t aStart, uint32_t aLen, bool aIsInsert,
+                          bool aFromUser);
+void ProxyShowHideEvent(ProxyAccessible* aTarget, ProxyAccessible* aParent,
+                        bool aInsert, bool aFromUser);
 } // namespace a11y
 } // namespace mozilla
 

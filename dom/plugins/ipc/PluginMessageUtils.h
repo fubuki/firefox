@@ -12,6 +12,7 @@
 
 #include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/ipc/CrossProcessMutex.h"
+#include "mozilla/UniquePtr.h"
 #include "gfxipc/ShadowLayerUtils.h"
 
 #include "npapi.h"
@@ -20,7 +21,7 @@
 #include "nsAutoPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsHashKeys.h"
 #ifdef MOZ_CRASHREPORTER
 #  include "nsExceptionHandler.h"
@@ -44,15 +45,15 @@ enum ScriptableObjectType
 };
 
 mozilla::ipc::RacyInterruptPolicy
-MediateRace(const mozilla::ipc::MessageChannel::Message& parent,
-            const mozilla::ipc::MessageChannel::Message& child);
+MediateRace(const mozilla::ipc::MessageChannel::MessageInfo& parent,
+            const mozilla::ipc::MessageChannel::MessageInfo& child);
 
 std::string
 MungePluginDsoPath(const std::string& path);
 std::string
 UnmungePluginDsoPath(const std::string& munged);
 
-extern PRLogModuleInfo* GetPluginLog();
+extern mozilla::LogModule* GetPluginLog();
 
 #if defined(_MSC_VER)
 #define FULLFUNCTION __FUNCSIG__
@@ -62,9 +63,9 @@ extern PRLogModuleInfo* GetPluginLog();
 #define FULLFUNCTION __FUNCTION__
 #endif
 
-#define PLUGIN_LOG_DEBUG(args) PR_LOG(GetPluginLog(), PR_LOG_DEBUG, args)
-#define PLUGIN_LOG_DEBUG_FUNCTION PR_LOG(GetPluginLog(), PR_LOG_DEBUG, ("%s", FULLFUNCTION))
-#define PLUGIN_LOG_DEBUG_METHOD PR_LOG(GetPluginLog(), PR_LOG_DEBUG, ("%s [%p]", FULLFUNCTION, (void*) this))
+#define PLUGIN_LOG_DEBUG(args) MOZ_LOG(GetPluginLog(), mozilla::LogLevel::Debug, args)
+#define PLUGIN_LOG_DEBUG_FUNCTION MOZ_LOG(GetPluginLog(), mozilla::LogLevel::Debug, ("%s", FULLFUNCTION))
+#define PLUGIN_LOG_DEBUG_METHOD MOZ_LOG(GetPluginLog(), mozilla::LogLevel::Debug, ("%s [%p]", FULLFUNCTION, (void*) this))
 
 /**
  * This is NPByteRange without the linked list.
@@ -93,9 +94,6 @@ struct NPRemoteWindow
   VisualID visualID;
   Colormap colormap;
 #endif /* XP_UNIX */
-#if defined(XP_WIN)
-  base::SharedMemoryHandle surfaceHandle;
-#endif
 #if defined(XP_MACOSX)
   double contentsScaleFactor;
 #endif
@@ -105,7 +103,7 @@ struct NPRemoteWindow
 typedef HWND NativeWindowHandle;
 #elif defined(MOZ_X11)
 typedef XID NativeWindowHandle;
-#elif defined(XP_MACOSX) || defined(ANDROID) || defined(MOZ_WIDGET_QT)
+#elif defined(XP_DARWIN) || defined(ANDROID) || defined(MOZ_WIDGET_QT)
 typedef intptr_t NativeWindowHandle; // never actually used, will always be 0
 #else
 #error Need NativeWindowHandle for this platform
@@ -122,7 +120,7 @@ typedef mozilla::null_t DXGISharedSurfaceHandle;
 // XXX maybe not the best place for these. better one?
 
 #define VARSTR(v_)  case v_: return #v_
-inline const char* const
+inline const char*
 NPPVariableToString(NPPVariable aVar)
 {
     switch (aVar) {
@@ -200,7 +198,7 @@ inline bool IsPluginThread()
 
 inline void AssertPluginThread()
 {
-  NS_ASSERTION(IsPluginThread(), "Should be on the plugin's main thread!");
+  MOZ_RELEASE_ASSERT(IsPluginThread(), "Should be on the plugin's main thread!");
 }
 
 #define ENSURE_PLUGIN_THREAD(retval) \
@@ -221,6 +219,15 @@ inline void AssertPluginThread()
 
 void DeferNPObjectLastRelease(const NPNetscapeFuncs* f, NPObject* o);
 void DeferNPVariantLastRelease(const NPNetscapeFuncs* f, NPVariant* v);
+
+inline bool IsDrawingModelDirect(int16_t aModel)
+{
+    return aModel == NPDrawingModelAsyncBitmapSurface
+#if defined(XP_WIN)
+           || aModel == NPDrawingModelAsyncWindowsDXGISurface
+#endif
+           ;
+}
 
 // in NPAPI, char* == nullptr is sometimes meaningful.  the following is
 // helper code for dealing with nullable nsCString's
@@ -253,11 +260,6 @@ struct DeletingObjectEntry : public nsPtrHashKey<NPObject>
 
   bool mDeleted;
 };
-
-#ifdef XP_WIN
-// The private event used for double-pass widgetless plugin rendering.
-UINT DoublePassRenderingEvent();
-#endif
 
 } /* namespace plugins */
 
@@ -345,9 +347,6 @@ struct ParamTraits<mozilla::plugins::NPRemoteWindow>
     aMsg->WriteULong(aParam.visualID);
     aMsg->WriteULong(aParam.colormap);
 #endif
-#if defined(XP_WIN)
-    WriteParam(aMsg, aParam.surfaceHandle);
-#endif
 #if defined(XP_MACOSX)
     aMsg->WriteDouble(aParam.contentsScaleFactor);
 #endif
@@ -377,12 +376,6 @@ struct ParamTraits<mozilla::plugins::NPRemoteWindow>
       return false;
 #endif
 
-#if defined(XP_WIN)
-    base::SharedMemoryHandle surfaceHandle;
-    if (!ReadParam(aMsg, aIter, &surfaceHandle))
-      return false;
-#endif
-
 #if defined(XP_MACOSX)
     double contentsScaleFactor;
     if (!aMsg->ReadDouble(aIter, &contentsScaleFactor))
@@ -400,9 +393,6 @@ struct ParamTraits<mozilla::plugins::NPRemoteWindow>
     aResult->visualID = visualID;
     aResult->colormap = colormap;
 #endif
-#if defined(XP_WIN)
-    aResult->surfaceHandle = surfaceHandle;
-#endif
 #if defined(XP_MACOSX)
     aResult->contentsScaleFactor = contentsScaleFactor;
 #endif
@@ -415,44 +405,6 @@ struct ParamTraits<mozilla::plugins::NPRemoteWindow>
                               (unsigned long)aParam.window,
                               aParam.x, aParam.y, aParam.width,
                               aParam.height, (long)aParam.type));
-  }
-};
-
-template <>
-struct ParamTraits<NPString>
-{
-  typedef NPString paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    WriteParam(aMsg, aParam.UTF8Length);
-    aMsg->WriteBytes(aParam.UTF8Characters,
-                     aParam.UTF8Length * sizeof(NPUTF8));
-  }
-
-  static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
-  {
-    if (ReadParam(aMsg, aIter, &aResult->UTF8Length)) {
-      int byteCount = aResult->UTF8Length * sizeof(NPUTF8);
-      if (!byteCount) {
-        aResult->UTF8Characters = "\0";
-        return true;
-      }
-
-      const char* messageBuffer = nullptr;
-      nsAutoArrayPtr<char> newBuffer(new char[byteCount]);
-      if (newBuffer && aMsg->ReadBytes(aIter, &messageBuffer, byteCount )) {
-        memcpy((void*)messageBuffer, newBuffer.get(), byteCount);
-        aResult->UTF8Characters = newBuffer.forget();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  static void Log(const paramType& aParam, std::wstring* aLog)
-  {
-    aLog->append(StringPrintf(L"%s", aParam.UTF8Characters));
   }
 };
 
@@ -620,142 +572,6 @@ struct ParamTraits<NSCursorInfo>
   }
 };
 #endif // #ifdef XP_MACOSX
-
-template <>
-struct ParamTraits<NPVariant>
-{
-  typedef NPVariant paramType;
-
-  static void Write(Message* aMsg, const paramType& aParam)
-  {
-    if (NPVARIANT_IS_VOID(aParam)) {
-      aMsg->WriteInt(0);
-      return;
-    }
-
-    if (NPVARIANT_IS_NULL(aParam)) {
-      aMsg->WriteInt(1);
-      return;
-    }
-
-    if (NPVARIANT_IS_BOOLEAN(aParam)) {
-      aMsg->WriteInt(2);
-      WriteParam(aMsg, NPVARIANT_TO_BOOLEAN(aParam));
-      return;
-    }
-
-    if (NPVARIANT_IS_INT32(aParam)) {
-      aMsg->WriteInt(3);
-      WriteParam(aMsg, NPVARIANT_TO_INT32(aParam));
-      return;
-    }
-
-    if (NPVARIANT_IS_DOUBLE(aParam)) {
-      aMsg->WriteInt(4);
-      WriteParam(aMsg, NPVARIANT_TO_DOUBLE(aParam));
-      return;
-    }
-
-    if (NPVARIANT_IS_STRING(aParam)) {
-      aMsg->WriteInt(5);
-      WriteParam(aMsg, NPVARIANT_TO_STRING(aParam));
-      return;
-    }
-
-    NS_ERROR("Unsupported type!");
-  }
-
-  static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
-  {
-    int type;
-    if (!aMsg->ReadInt(aIter, &type)) {
-      return false;
-    }
-
-    switch (type) {
-      case 0:
-        VOID_TO_NPVARIANT(*aResult);
-        return true;
-
-      case 1:
-        NULL_TO_NPVARIANT(*aResult);
-        return true;
-
-      case 2: {
-        bool value;
-        if (ReadParam(aMsg, aIter, &value)) {
-          BOOLEAN_TO_NPVARIANT(value, *aResult);
-          return true;
-        }
-      } break;
-
-      case 3: {
-        int32_t value;
-        if (ReadParam(aMsg, aIter, &value)) {
-          INT32_TO_NPVARIANT(value, *aResult);
-          return true;
-        }
-      } break;
-
-      case 4: {
-        double value;
-        if (ReadParam(aMsg, aIter, &value)) {
-          DOUBLE_TO_NPVARIANT(value, *aResult);
-          return true;
-        }
-      } break;
-
-      case 5: {
-        NPString value;
-        if (ReadParam(aMsg, aIter, &value)) {
-          STRINGN_TO_NPVARIANT(value.UTF8Characters, value.UTF8Length,
-                               *aResult);
-          return true;
-        }
-      } break;
-
-      default:
-        NS_ERROR("Unsupported type!");
-    }
-
-    return false;
-  }
-
-  static void Log(const paramType& aParam, std::wstring* aLog)
-  {
-    if (NPVARIANT_IS_VOID(aParam)) {
-      aLog->append(L"[void]");
-      return;
-    }
-
-    if (NPVARIANT_IS_NULL(aParam)) {
-      aLog->append(L"[null]");
-      return;
-    }
-
-    if (NPVARIANT_IS_BOOLEAN(aParam)) {
-      LogParam(NPVARIANT_TO_BOOLEAN(aParam), aLog);
-      return;
-    }
-
-    if (NPVARIANT_IS_INT32(aParam)) {
-      LogParam(NPVARIANT_TO_INT32(aParam), aLog);
-      return;
-    }
-
-    if (NPVARIANT_IS_DOUBLE(aParam)) {
-      LogParam(NPVARIANT_TO_DOUBLE(aParam), aLog);
-      return;
-    }
-
-    if (NPVARIANT_IS_STRING(aParam)) {
-      LogParam(NPVARIANT_TO_STRING(aParam), aLog);
-      return;
-    }
-
-    NS_ERROR("Unsupported type!");
-  }
-};
 
 template <>
 struct ParamTraits<mozilla::plugins::IPCByteRange>

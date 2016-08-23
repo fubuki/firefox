@@ -116,10 +116,10 @@ class ScopedXPCOM : public nsIDirectoryServiceProvider2
           do_GetService(NS_OBSERVERSERVICE_CONTRACTID);
         MOZ_ASSERT(os);
         if (os) {
-          MOZ_ALWAYS_TRUE(NS_SUCCEEDED(os->NotifyObservers(nullptr, "profile-change-net-teardown", nullptr)));
-          MOZ_ALWAYS_TRUE(NS_SUCCEEDED(os->NotifyObservers(nullptr, "profile-change-teardown", nullptr)));
-          MOZ_ALWAYS_TRUE(NS_SUCCEEDED(os->NotifyObservers(nullptr, "profile-before-change", nullptr)));
-          MOZ_ALWAYS_TRUE(NS_SUCCEEDED(os->NotifyObservers(nullptr, "profile-before-change2", nullptr)));
+          MOZ_ALWAYS_SUCCEEDS(os->NotifyObservers(nullptr, "profile-change-net-teardown", nullptr));
+          MOZ_ALWAYS_SUCCEEDS(os->NotifyObservers(nullptr, "profile-change-teardown", nullptr));
+          MOZ_ALWAYS_SUCCEEDS(os->NotifyObservers(nullptr, "profile-before-change", nullptr));
+          MOZ_ALWAYS_SUCCEEDS(os->NotifyObservers(nullptr, "profile-before-change2", nullptr));
         }
 
         if (NS_FAILED(mProfD->Remove(true))) {
@@ -220,7 +220,7 @@ class ScopedXPCOM : public nsIDirectoryServiceProvider2
     //// nsIDirectoryServiceProvider
 
     NS_IMETHODIMP GetFile(const char *aProperty, bool *_persistent,
-                          nsIFile **_result) MOZ_OVERRIDE
+                          nsIFile **_result) override
     {
       // If we were supplied a directory service provider, ask it first.
       if (mDirSvcProvider &&
@@ -265,7 +265,7 @@ class ScopedXPCOM : public nsIDirectoryServiceProvider2
     ////////////////////////////////////////////////////////////////////////////
     //// nsIDirectoryServiceProvider2
 
-    NS_IMETHODIMP GetFiles(const char *aProperty, nsISimpleEnumerator **_enum) MOZ_OVERRIDE
+    NS_IMETHODIMP GetFiles(const char *aProperty, nsISimpleEnumerator **_enum) override
     {
       // If we were supplied a directory service provider, ask it first.
       nsCOMPtr<nsIDirectoryServiceProvider2> provider =

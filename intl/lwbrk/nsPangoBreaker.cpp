@@ -18,7 +18,7 @@ NS_GetComplexLineBreaks(const char16_t* aText, uint32_t aLength,
 
   memset(aBreakBefore, false, aLength * sizeof(uint8_t));
 
-  nsAutoTArray<PangoLogAttr, 2000> attrBuffer;
+  AutoTArray<PangoLogAttr, 2000> attrBuffer;
   if (!attrBuffer.AppendElements(aLength + 1))
     return;
 
@@ -50,7 +50,7 @@ NS_GetComplexLineBreaks(const char16_t* aText, uint32_t aLength,
         // pango_break (pango 1.16.2) only analyses text before the
         // first NUL (but sets one extra attr). Workaround loop to call
         // pango_break again to analyse after the NUL is done somewhere else
-        // (gfx/thebes/gfxPangoFonts.cpp: SetupClusterBoundaries()).
+        // (gfx/thebes/gfxFontconfigFonts.cpp: SetupClusterBoundaries()).
         // So, we do the same here for pango_get_log_attrs.
         break;
       }

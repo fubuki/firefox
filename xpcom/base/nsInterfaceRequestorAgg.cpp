@@ -11,7 +11,7 @@
 #include "nsThreadUtils.h"
 #include "nsProxyRelease.h"
 
-class nsInterfaceRequestorAgg MOZ_FINAL : public nsIInterfaceRequestor
+class nsInterfaceRequestorAgg final : public nsIInterfaceRequestor
 {
 public:
   // XXX This needs to support threadsafe refcounting until we fix bug 243591.
@@ -54,16 +54,8 @@ nsInterfaceRequestorAgg::GetInterface(const nsIID& aIID, void** aResult)
 
 nsInterfaceRequestorAgg::~nsInterfaceRequestorAgg()
 {
-  nsIInterfaceRequestor* iir = nullptr;
-  mFirst.swap(iir);
-  if (iir) {
-    NS_ProxyRelease(mConsumerTarget, iir);
-  }
-  iir = nullptr;
-  mSecond.swap(iir);
-  if (iir) {
-    NS_ProxyRelease(mConsumerTarget, iir);
-  }
+  NS_ProxyRelease(mConsumerTarget, mFirst.forget());
+  NS_ProxyRelease(mConsumerTarget, mSecond.forget());
 }
 
 nsresult

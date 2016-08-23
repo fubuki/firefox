@@ -19,7 +19,7 @@ struct MutexData {
   mozilla::Atomic<int32_t> mCount;
 };
 
-}
+} // namespace
 
 namespace mozilla {
 
@@ -82,11 +82,15 @@ CrossProcessMutex::CrossProcessMutex(CrossProcessMutexHandle aHandle)
     : mMutex(nullptr)
     , mCount(nullptr)
 {
-  if (!ipc::SharedMemoryBasic::IsHandleValid(aHandle)) {
+  mSharedBuffer = new ipc::SharedMemoryBasic;
+
+  if (!mSharedBuffer->IsHandleValid(aHandle)) {
     MOZ_CRASH();
   }
 
-  mSharedBuffer = new ipc::SharedMemoryBasic(aHandle);
+  if (!mSharedBuffer->SetHandle(aHandle)) {
+    MOZ_CRASH();
+  }
 
   if (!mSharedBuffer->Map(sizeof(MutexData))) {
     MOZ_CRASH();
@@ -117,7 +121,7 @@ CrossProcessMutex::~CrossProcessMutex()
 
   if (count == 0) {
     // Nothing can be done if the destroy fails so ignore return code.
-    unused << pthread_mutex_destroy(mMutex);
+    Unused << pthread_mutex_destroy(mMutex);
   }
 
   MOZ_COUNT_DTOR(CrossProcessMutex);
@@ -138,15 +142,15 @@ CrossProcessMutex::Unlock()
 }
 
 CrossProcessMutexHandle
-CrossProcessMutex::ShareToProcess(base::ProcessHandle aHandle)
+CrossProcessMutex::ShareToProcess(base::ProcessId aTargetPid)
 {
   CrossProcessMutexHandle result = ipc::SharedMemoryBasic::NULLHandle();
 
-  if (mSharedBuffer && !mSharedBuffer->ShareToProcess(aHandle, &result)) {
+  if (mSharedBuffer && !mSharedBuffer->ShareToProcess(aTargetPid, &result)) {
     MOZ_CRASH();
   }
 
   return result;
 }
 
-}
+} // namespace mozilla

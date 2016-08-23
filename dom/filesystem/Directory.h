@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +13,6 @@
 #include "mozilla/dom/File.h"
 #include "nsAutoPtr.h"
 #include "nsCycleCollectionParticipant.h"
-#include "nsPIDOMWindow.h"
 #include "nsWrapperCache.h"
 
 // Resolve the name collision of Microsoft's API name with macros defined in
@@ -36,30 +35,44 @@ class FileSystemBase;
 class Promise;
 class StringOrFileOrDirectory;
 
-class Directory MOZ_FINAL
+class Directory final
   : public nsISupports
   , public nsWrapperCache
 {
 public:
+  struct FileOrDirectoryPath
+  {
+    nsString mPath;
+
+    enum {
+      eFilePath,
+      eDirectoryPath
+    } mType;
+  };
+
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Directory)
 
-public:
+  static bool
+  DeviceStorageEnabled(JSContext* aCx, JSObject* aObj);
+
   static already_AddRefed<Promise>
   GetRoot(FileSystemBase* aFileSystem, ErrorResult& aRv);
 
-  Directory(FileSystemBase* aFileSystem, const nsAString& aPath);
+  static already_AddRefed<Directory>
+  Create(nsISupports* aParent, nsIFile* aDirectory,
+         FileSystemBase* aFileSystem = 0);
 
   // ========= Begin WebIDL bindings. ===========
 
-  nsPIDOMWindow*
+  nsISupports*
   GetParentObject() const;
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   void
-  GetName(nsString& aRetval) const;
+  GetName(nsAString& aRetval, ErrorResult& aRv);
 
   already_AddRefed<Promise>
   CreateFile(const nsAString& aPath, const CreateFileOptions& aOptions,
@@ -77,28 +90,74 @@ public:
   already_AddRefed<Promise>
   RemoveDeep(const StringOrFileOrDirectory& aPath, ErrorResult& aRv);
 
+  // From https://microsoftedge.github.io/directory-upload/proposal.html#directory-interface :
+
+  void
+  GetPath(nsAString& aRetval, ErrorResult& aRv);
+
+  nsresult
+  GetFullRealPath(nsAString& aPath);
+
+  already_AddRefed<Promise>
+  GetFilesAndDirectories(ErrorResult& aRv);
+
+  already_AddRefed<Promise>
+  GetFiles(bool aRecursiveFlag, ErrorResult& aRv);
+
   // =========== End WebIDL bindings.============
 
-  FileSystemBase*
-  GetFileSystem() const;
-private:
-  ~Directory();
+  /**
+   * Sets a semi-colon separated list of filters to filter-in or filter-out
+   * certain types of files when the contents of this directory are requested
+   * via a GetFilesAndDirectories() call.
+   *
+   * Currently supported keywords:
+   *
+   *   * filter-out-sensitive
+   *       This keyword filters out files or directories that we don't wish to
+   *       make available to Web content because we are concerned that there is
+   *       a risk that users may unwittingly give Web content access to them
+   *       and suffer undesirable consequences.  The details of what is
+   *       filtered out can be found in GetDirectoryListingTask::Work.
+   *
+   * In future, we will likely support filtering based on filename extensions
+   * (for example, aFilters could be "*.jpg; *.jpeg; *.gif"), but that isn't
+   * supported yet.  Once supported, files that don't match a specified
+   * extension (if any are specified) would be filtered out.  This
+   * functionality would allow us to apply the 'accept' attribute from
+   * <input type=file directory accept="..."> to the results of a directory
+   * picker operation.
+   */
+  void
+  SetContentFilters(const nsAString& aFilters);
 
-  static bool
-  IsValidRelativePath(const nsString& aPath);
+  FileSystemBase*
+  GetFileSystem(ErrorResult& aRv);
+
+  bool
+  ClonableToDifferentThreadOrProcess() const;
+
+private:
+  Directory(nsISupports* aParent,
+            nsIFile* aFile,
+            FileSystemBase* aFileSystem = nullptr);
+  ~Directory();
 
   /*
    * Convert relative DOM path to the absolute real path.
-   * @return true if succeed. false if the DOM path is invalid.
    */
-  bool
-  DOMPathToRealPath(const nsAString& aPath, nsAString& aRealPath) const;
+  nsresult
+  DOMPathToRealPath(const nsAString& aPath, nsIFile** aFile) const;
 
   already_AddRefed<Promise>
   RemoveInternal(const StringOrFileOrDirectory& aPath, bool aRecursive,
                  ErrorResult& aRv);
 
-  nsRefPtr<FileSystemBase> mFileSystem;
+  nsCOMPtr<nsISupports> mParent;
+  RefPtr<FileSystemBase> mFileSystem;
+  nsCOMPtr<nsIFile> mFile;
+
+  nsString mFilters;
   nsString mPath;
 };
 

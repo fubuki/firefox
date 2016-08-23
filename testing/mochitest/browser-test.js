@@ -3,24 +3,10 @@
 var gTimeoutSeconds = 45;
 var gConfig;
 
-if (Cc === undefined) {
-  var Cc = Components.classes;
-}
-if (Ci === undefined) {
-  var Ci = Components.interfaces;
-}
-if (Cu === undefined) {
-  var Cu = Components.utils;
-}
-
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-  "resource://gre/modules/Services.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "CustomizationTabPreloader",
-  "resource:///modules/CustomizationTabPreloader.jsm");
+Cu.import("resource://gre/modules/AppConstants.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "ContentSearch",
   "resource:///modules/ContentSearch.jsm");
@@ -29,15 +15,20 @@ XPCOMUtils.defineLazyModuleGetter(this, "SelfSupportBackend",
   "resource:///modules/SelfSupportBackend.jsm");
 
 const SIMPLETEST_OVERRIDES =
-  ["ok", "is", "isnot", "ise", "todo", "todo_is", "todo_isnot", "info", "expectAssertions", "requestCompleteLog"];
+  ["ok", "is", "isnot", "todo", "todo_is", "todo_isnot", "info", "expectAssertions", "requestCompleteLog"];
 
-window.addEventListener("load", function testOnLoad() {
-  window.removeEventListener("load", testOnLoad);
-  window.addEventListener("MozAfterPaint", function testOnMozAfterPaint() {
-    window.removeEventListener("MozAfterPaint", testOnMozAfterPaint);
-    setTimeout(testInit, 0);
+// non-android is bootstrapped by marionette
+if (Services.appinfo.OS == 'Android') {
+  window.addEventListener("load", function testOnLoad() {
+    window.removeEventListener("load", testOnLoad);
+    window.addEventListener("MozAfterPaint", function testOnMozAfterPaint() {
+      window.removeEventListener("MozAfterPaint", testOnMozAfterPaint);
+      setTimeout(testInit, 0);
+    });
   });
-});
+} else {
+  setTimeout(testInit, 0);
+}
 
 function b2gStart() {
   let homescreen = document.getElementById('systemapp');
@@ -48,11 +39,45 @@ function b2gStart() {
   webNav.loadURI(url, null, null, null, null);
 }
 
+var TabDestroyObserver = {
+  outstanding: new Set(),
+  promiseResolver: null,
+
+  init: function() {
+    Services.obs.addObserver(this, "message-manager-close", false);
+    Services.obs.addObserver(this, "message-manager-disconnect", false);
+  },
+
+  destroy: function() {
+    Services.obs.removeObserver(this, "message-manager-close");
+    Services.obs.removeObserver(this, "message-manager-disconnect");
+  },
+
+  observe: function(subject, topic, data) {
+    if (topic == "message-manager-close") {
+      this.outstanding.add(subject);
+    } else if (topic == "message-manager-disconnect") {
+      this.outstanding.delete(subject);
+      if (!this.outstanding.size && this.promiseResolver) {
+        this.promiseResolver();
+      }
+    }
+  },
+
+  wait: function() {
+    if (!this.outstanding.size) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      this.promiseResolver = resolve;
+    });
+  },
+};
+
 function testInit() {
   gConfig = readConfig();
-  if (gConfig.testRoot == "browser" ||
-      gConfig.testRoot == "metro" ||
-      gConfig.testRoot == "webapprtChrome") {
+  if (gConfig.testRoot == "browser") {
     // Make sure to launch the test harness for the first opened window only
     var prefs = Services.prefs;
     if (prefs.prefHasUserValue("testing.browserTestHarness.running"))
@@ -88,17 +113,27 @@ function testInit() {
   }
   if (gConfig.e10s) {
     e10s_init();
+    let globalMM = Cc["@mozilla.org/globalmessagemanager;1"]
+                     .getService(Ci.nsIMessageListenerManager);
+    globalMM.loadFrameScript("chrome://mochikit/content/shutdown-leaks-collector.js", true);
+  } else {
+    // In non-e10s, only run the ShutdownLeaksCollector in the parent process.
+    Components.utils.import("chrome://mochikit/content/ShutdownLeaksCollector.jsm");
   }
+
+  let gmm = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
+  gmm.loadFrameScript("chrome://mochikit/content/tests/SimpleTest/AsyncUtilsContent.js", true);
 }
 
-function Tester(aTests, aDumper, aCallback) {
-  this.dumper = aDumper;
+function Tester(aTests, structuredLogger, aCallback) {
+  this.structuredLogger = structuredLogger;
   this.tests = aTests;
   this.callback = aCallback;
   this.openedWindows = {};
   this.openedURLs = {};
 
   this._scriptLoader = Services.scriptloader;
+  this.EventUtils = {};
   this._scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/EventUtils.js", this.EventUtils);
   var simpleTestScope = {};
   this._scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/specialpowersAPI.js", simpleTestScope);
@@ -109,10 +144,22 @@ function Tester(aTests, aDumper, aCallback) {
   this._scriptLoader.loadSubScript("chrome://mochikit/content/chrome-harness.js", simpleTestScope);
   this.SimpleTest = simpleTestScope.SimpleTest;
 
+  var extensionUtilsScope = {
+    registerCleanupFunction: (fn) => {
+      this.currentTest.scope.registerCleanupFunction(fn);
+    },
+  };
+  extensionUtilsScope.SimpleTest = this.SimpleTest;
+  this._scriptLoader.loadSubScript("chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js", extensionUtilsScope);
+  this.ExtensionTestUtils = extensionUtilsScope.ExtensionTestUtils;
+
   this.SimpleTest.harnessParameters = gConfig;
 
   this.MemoryStats = simpleTestScope.MemoryStats;
   this.Task = Task;
+  this.ContentTask = Components.utils.import("resource://testing-common/ContentTask.jsm", null).ContentTask;
+  this.BrowserTestUtils = Components.utils.import("resource://testing-common/BrowserTestUtils.jsm", null).BrowserTestUtils;
+  this.TestUtils = Components.utils.import("resource://testing-common/TestUtils.jsm", null).TestUtils;
   this.Task.Debugging.maintainStack = true;
   this.Promise = Components.utils.import("resource://gre/modules/Promise.jsm", null).Promise;
   this.Assert = Components.utils.import("resource://testing-common/Assert.jsm", null).Assert;
@@ -121,6 +168,8 @@ function Tester(aTests, aDumper, aCallback) {
   SIMPLETEST_OVERRIDES.forEach(m => {
     this.SimpleTestOriginal[m] = this.SimpleTest[m];
   });
+
+  this._coverageCollector = null;
 
   this._toleratedUncaughtRejections = null;
   this._uncaughtErrorObserver = function({message, date, fileName, stack, lineNumber}) {
@@ -157,6 +206,8 @@ Tester.prototype = {
   EventUtils: {},
   SimpleTest: {},
   Task: null,
+  ContentTask: null,
+  ExtensionTestUtils: null,
   Assert: null,
 
   repeat: 0,
@@ -166,6 +217,7 @@ Tester.prototype = {
   lastStartTime: null,
   openedWindows: null,
   lastAssertionCount: 0,
+  failuresFromInitialWindowState: 0,
 
   get currentTest() {
     return this.tests[this.currentTestIndex];
@@ -175,6 +227,8 @@ Tester.prototype = {
   },
 
   start: function Tester_start() {
+    TabDestroyObserver.init();
+
     //if testOnLoad was not called, then gConfig is not defined
     if (!gConfig)
       gConfig = readConfig();
@@ -185,7 +239,14 @@ Tester.prototype = {
     if (gConfig.repeat)
       this.repeat = gConfig.repeat;
 
-    this.dumper.structuredLogger.info("*** Start BrowserChrome Test Results ***");
+    if (gConfig.jscovDirPrefix) {
+      let coveragePath = gConfig.jscovDirPrefix;
+      let {CoverageCollector} = Cu.import("resource://testing-common/CoverageUtils.jsm",
+                                          {});
+      this._coverageCollector = new CoverageCollector(coveragePath);
+    }
+
+    this.structuredLogger.info("*** Start BrowserChrome Test Results ***");
     Services.console.registerListener(this);
     Services.obs.addObserver(this, "chrome-document-global-created", false);
     Services.obs.addObserver(this, "content-document-global-created", false);
@@ -201,13 +262,28 @@ Tester.prototype = {
     this.Promise.Debugging.addUncaughtErrorObserver(this._uncaughtErrorObserver);
 
     if (this.tests.length)
-      this.nextTest();
+      this.waitForGraphicsTestWindowToBeGone(this.nextTest.bind(this));
     else
       this.finish();
   },
 
+  waitForGraphicsTestWindowToBeGone(aCallback) {
+    let windowsEnum = Services.wm.getEnumerator(null);
+    while (windowsEnum.hasMoreElements()) {
+      let win = windowsEnum.getNext();
+      if (win != window && !win.closed &&
+          win.document.documentURI == "chrome://gfxsanity/content/sanityparent.html") {
+        this.BrowserTestUtils.domWindowClosed(win).then(aCallback);
+        return;
+      }
+    }
+    // graphics test window is already gone, just call callback immediately
+    aCallback();
+  },
+
   waitForWindowsState: function Tester_waitForWindowsState(aCallback) {
     let timedOut = this.currentTest && this.currentTest.timedOut;
+    let startTime = Date.now();
     let baseMsg = timedOut ? "Found a {elt} after previous test timed out"
                            : this.currentTest ? "Found an unexpected {elt} at the end of test run"
                                               : "Found an unexpected {elt}";
@@ -226,13 +302,14 @@ Tester.prototype = {
     // Replace the last tab with a fresh one
     if (window.gBrowser) {
       gBrowser.addTab("about:blank", { skipAnimation: true });
-      gBrowser.removeCurrentTab();
+      gBrowser.removeTab(gBrowser.selectedTab, { skipPermitUnload: true });
       gBrowser.stop();
     }
 
     // Remove stale windows
-    this.dumper.structuredLogger.info("checking window state");
+    this.structuredLogger.info("checking window state");
     let windowsEnum = Services.wm.getEnumerator(null);
+    let createdFakeTestForLogging = false;
     while (windowsEnum.hasMoreElements()) {
       let win = windowsEnum.getNext();
       if (win != window && !win.closed &&
@@ -243,20 +320,32 @@ Tester.prototype = {
           type = "browser window";
           break;
         case null:
-          type = "unknown window";
+          type = "unknown window with document URI: " + win.document.documentURI +
+                 " and title: " + win.document.title;
           break;
         }
         let msg = baseMsg.replace("{elt}", type);
-        if (this.currentTest)
+        if (this.currentTest) {
           this.currentTest.addResult(new testResult(false, msg, "", false));
-        else
-          this.dumper.structuredLogger.testEnd("browser-test.js",
-                                               "FAIL",
-                                               "PASS",
-                                               msg);
+        } else {
+          if (!createdFakeTestForLogging) {
+            createdFakeTestForLogging = true;
+            this.structuredLogger.testStart("browser-test.js");
+          }
+          this.failuresFromInitialWindowState++;
+          this.structuredLogger.testStatus("browser-test.js",
+                                           msg, "FAIL", false, "");
+        }
 
         win.close();
       }
+    }
+    if (createdFakeTestForLogging) {
+      let time = Date.now() - startTime;
+      this.structuredLogger.testEnd("browser-test.js",
+                                    "OK",
+                                    undefined,
+                                    "finished window state check in " + time + "ms");
     }
 
     // Make sure the window is raised before each test.
@@ -266,9 +355,12 @@ Tester.prototype = {
   finish: function Tester_finish(aSkipSummary) {
     this.Promise.Debugging.flushUncaughtErrors();
 
-    var passCount = this.tests.reduce(function(a, f) a + f.passCount, 0);
-    var failCount = this.tests.reduce(function(a, f) a + f.failCount, 0);
-    var todoCount = this.tests.reduce(function(a, f) a + f.todoCount, 0);
+    var passCount = this.tests.reduce((a, f) => a + f.passCount, 0);
+    var failCount = this.tests.reduce((a, f) => a + f.failCount, 0);
+    var todoCount = this.tests.reduce((a, f) => a + f.todoCount, 0);
+
+    // Include failures from window state checking prior to running the first test
+    failCount += this.failuresFromInitialWindowState;
 
     if (this.repeat > 0) {
       --this.repeat;
@@ -276,27 +368,33 @@ Tester.prototype = {
       this.nextTest();
     }
     else{
+      TabDestroyObserver.destroy();
       Services.console.unregisterListener(this);
       Services.obs.removeObserver(this, "chrome-document-global-created");
       Services.obs.removeObserver(this, "content-document-global-created");
       this.Promise.Debugging.clearUncaughtErrorObservers();
       this._treatUncaughtRejectionsAsFailures = false;
-      this.dumper.structuredLogger.info("TEST-START | Shutdown");
+
+      // In the main process, we print the ShutdownLeaksCollector message here.
+      let pid = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).processID;
+      dump("Completed ShutdownLeaks collections in process " + pid + "\n");
+
+      this.structuredLogger.info("TEST-START | Shutdown");
 
       if (this.tests.length) {
-        this.dumper.structuredLogger.info("Browser Chrome Test Summary");
-        this.dumper.structuredLogger.info("Passed:  " + passCount);
-        this.dumper.structuredLogger.info("Failed:  " + failCount);
-        this.dumper.structuredLogger.info("Todo:    " + todoCount);
+        let e10sMode = gMultiProcessBrowser ? "e10s" : "non-e10s";
+        this.structuredLogger.info("Browser Chrome Test Summary");
+        this.structuredLogger.info("Passed:  " + passCount);
+        this.structuredLogger.info("Failed:  " + failCount);
+        this.structuredLogger.info("Todo:    " + todoCount);
+        this.structuredLogger.info("Mode:    " + e10sMode);
       } else {
-        this.dumper.structuredLogger.testEnd("browser-test.js",
-                                             "FAIL",
-                                             "PASS",
-                                             "No tests to run. Did you pass an invalid --test-path?");
+        this.structuredLogger.testEnd("browser-test.js",
+                                      "FAIL",
+                                      "PASS",
+                                      "No tests to run. Did you pass invalid test_paths?");
       }
-      this.dumper.structuredLogger.info("*** End BrowserChrome Test Results ***");
-
-      this.dumper.done();
+      this.structuredLogger.info("*** End BrowserChrome Test Results ***");
 
       // Tests complete, notify the callback and return
       this.callback(this.tests);
@@ -345,7 +443,7 @@ Tester.prototype = {
       if (this.currentTest)
         this.currentTest.addResult(new testMessage(msg));
       else
-        this.dumper.dump("TEST-INFO | (browser-test.js) | " + msg.replace(/\n$/, "") + "\n");
+        this.structuredLogger.info("TEST-INFO | (browser-test.js) | " + msg.replace(/\n$/, "") + "\n");
     } catch (ex) {
       // Swallow exception so we don't lead to another error being reported,
       // throwing us into an infinite loop
@@ -355,6 +453,9 @@ Tester.prototype = {
   nextTest: Task.async(function*() {
     if (this.currentTest) {
       this.Promise.Debugging.flushUncaughtErrors();
+      if (this._coverageCollector) {
+        this._coverageCollector.recordTestCoverage(this.currentTest.path);
+      }
 
       // Run cleanup functions for the current test before moving on to the
       // next one.
@@ -403,7 +504,7 @@ Tester.prototype = {
         if (this._globalProperties.indexOf(prop) == -1) {
           this._globalProperties.push(prop);
           if (this._globalPropertyWhitelist.indexOf(prop) == -1)
-            this.currentTest.addResult(new testResult(false, "leaked window property: " + prop, "", false));
+            this.currentTest.addResult(new testResult(false, "test left unexpected property on window: " + prop, "", false));
         }
       }, this);
 
@@ -411,6 +512,8 @@ Tester.prototype = {
       // for its own purposes, nulling it out it will go back to the default
       // behavior of returning the last opened popup.
       document.popupNode = null;
+
+      yield new Promise(resolve => SpecialPowers.flushPrefEnv(resolve));
 
       // Notify a long running test problem if it didn't end up in a timeout.
       if (this.currentTest.unexpectedTimeouts && !this.currentTest.timedOut) {
@@ -458,8 +561,7 @@ Tester.prototype = {
           .getService(Ci.nsIXULRuntime)
           .processType == Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT)
       {
-        this.MemoryStats.dump(this.dumper.structuredLogger,
-                              this.currentTestIndex,
+        this.MemoryStats.dump(this.currentTestIndex,
                               this.currentTest.path,
                               gConfig.dumpOutputDirectory,
                               gConfig.dumpAboutMemoryAfterTest,
@@ -468,7 +570,7 @@ Tester.prototype = {
 
       // Note the test run time
       let time = Date.now() - this.lastStartTime;
-      this.dumper.structuredLogger.testEnd(this.currentTest.path,
+      this.structuredLogger.testEnd(this.currentTest.path,
                                            "OK",
                                            undefined,
                                            "finished in " + time + "ms");
@@ -483,6 +585,7 @@ Tester.prototype = {
         this.SimpleTest[m] = this.SimpleTestOriginal[m];
       });
 
+      this.ContentTask.setTestScope(null);
       testScope.destroy();
       this.currentTest.scope = null;
     }
@@ -492,25 +595,35 @@ Tester.prototype = {
     // is invoked to start the tests.
     this.waitForWindowsState((function () {
       if (this.done) {
+        if (this._coverageCollector) {
+          this._coverageCollector.finalize();
+        }
 
         // Uninitialize a few things explicitly so that they can clean up
         // frames and browser intentionally kept alive until shutdown to
         // eliminate false positives.
         if (gConfig.testRoot == "browser") {
-          // Replace the document currently loaded in the browser's sidebar.
-          // This will prevent false positives for tests that were the last
-          // to touch the sidebar. They will thus not be blamed for leaking
-          // a document.
-          let sidebar = document.getElementById("sidebar");
-          sidebar.setAttribute("src", "data:text/html;charset=utf-8,");
-          sidebar.docShell.createAboutBlankContentViewer(null);
-          sidebar.setAttribute("src", "about:blank");
+          //Skip if SeaMonkey
+          if (AppConstants.MOZ_APP_NAME != "seamonkey") {
+            // Replace the document currently loaded in the browser's sidebar.
+            // This will prevent false positives for tests that were the last
+            // to touch the sidebar. They will thus not be blamed for leaking
+            // a document.
+            let sidebar = document.getElementById("sidebar");
+            sidebar.setAttribute("src", "data:text/html;charset=utf-8,");
+            sidebar.docShell.createAboutBlankContentViewer(null);
+            sidebar.setAttribute("src", "about:blank");
 
-          // Do the same for the social sidebar.
-          let socialSidebar = document.getElementById("social-sidebar-browser");
-          socialSidebar.setAttribute("src", "data:text/html;charset=utf-8,");
-          socialSidebar.docShell.createAboutBlankContentViewer(null);
-          socialSidebar.setAttribute("src", "about:blank");
+            // Do the same for the social sidebar.
+            let socialSidebar = document.getElementById("social-sidebar-browser");
+            socialSidebar.setAttribute("src", "data:text/html;charset=utf-8,");
+            socialSidebar.docShell.createAboutBlankContentViewer(null);
+            socialSidebar.setAttribute("src", "about:blank");
+
+            SelfSupportBackend.uninit();
+            SocialFlyout.unload();
+            SocialShare.uninit();
+          }
 
           // Destroy BackgroundPageThumbs resources.
           let {BackgroundPageThumbs} =
@@ -523,12 +636,6 @@ Tester.prototype = {
             gBrowser._preloadedBrowser = null;
             gBrowser.getNotificationBox(browser).remove();
           }
-
-          SelfSupportBackend.uninit();
-          CustomizationTabPreloader.uninit();
-          SocialFlyout.unload();
-          SocialShare.uninit();
-          TabView.uninit();
         }
 
         // Schedule GC and CC runs before finishing in order to detect
@@ -568,10 +675,17 @@ Tester.prototype = {
         Services.obs.notifyObservers({wrappedJSObject: barrier},
           "shutdown-leaks-before-check", null);
 
+        barrier.client.addBlocker("ShutdownLeaks: Wait for tabs to finish closing",
+                                  TabDestroyObserver.wait());
+
         barrier.wait().then(() => {
           // Simulate memory pressure so that we're forced to free more resources
           // and thus get rid of more false leaks like already terminated workers.
           Services.obs.notifyObservers(null, "memory-pressure", "heap-minimize");
+
+          let ppmm = Cc["@mozilla.org/parentprocessmessagemanager;1"]
+                       .getService(Ci.nsIMessageBroadcaster);
+          ppmm.broadcastAsyncMessage("browser-test:collect-request");
 
           checkForLeakedGlobalWindows(aResults => {
             if (aResults.length == 0) {
@@ -599,7 +713,7 @@ Tester.prototype = {
   }),
 
   execTest: function Tester_execTest() {
-    this.dumper.structuredLogger.testStart(this.currentTest.path);
+    this.structuredLogger.testStart(this.currentTest.path);
 
     this.SimpleTest.reset();
 
@@ -612,6 +726,10 @@ Tester.prototype = {
     this.currentTest.scope.SimpleTest = this.SimpleTest;
     this.currentTest.scope.gTestPath = this.currentTest.path;
     this.currentTest.scope.Task = this.Task;
+    this.currentTest.scope.ContentTask = this.ContentTask;
+    this.currentTest.scope.BrowserTestUtils = this.BrowserTestUtils;
+    this.currentTest.scope.TestUtils = this.TestUtils;
+    this.currentTest.scope.ExtensionTestUtils = this.ExtensionTestUtils;
     // Pass a custom report function for mochitest style reporting.
     this.currentTest.scope.Assert = new this.Assert(function(err, message, stack) {
       let res;
@@ -622,6 +740,8 @@ Tester.prototype = {
       }
       currentTest.addResult(res);
     });
+
+    this.ContentTask.setTestScope(currentScope);
 
     // Allow Assert.jsm methods to be tacked to the current scope.
     this.currentTest.scope.export_assertions = function() {
@@ -686,18 +806,10 @@ Tester.prototype = {
           }
           this.finish();
         }.bind(currentScope));
-      } else if ("generatorTest" in this.currentTest.scope) {
-        if ("test" in this.currentTest.scope) {
-          throw "Cannot run both a generator test and a normal test at the same time.";
-        }
-
-        // This test is a generator. It will not finish immediately.
-        this.currentTest.scope.waitForExplicitFinish();
-        var result = this.currentTest.scope.generatorTest();
-        this.currentTest.scope.__generator = result;
-        result.next();
-      } else {
+      } else if (typeof this.currentTest.scope.test == "function") {
         this.currentTest.scope.test();
+      } else {
+        throw "This test didn't call add_task, nor did it define a generatorTest() function, nor did it define a test() function, so we don't know how to run it.";
       }
     } catch (ex) {
       let isExpected = !!this.SimpleTest.isExpectingUncaughtException();
@@ -841,9 +953,9 @@ function testScope(aTester, aTest, expected) {
 
   var self = this;
   this.ok = function test_ok(condition, name, diag, stack) {
-    if (this.__expected == 'fail') {
+    if (self.__expected == 'fail') {
         if (!condition) {
-          this.__num_failed++;
+          self.__num_failed++;
           condition = true;
         }
     }
@@ -857,10 +969,6 @@ function testScope(aTester, aTest, expected) {
   };
   this.isnot = function test_isnot(a, b, name) {
     self.ok(a != b, name, "Didn't expect " + a + ", but got it", false,
-            Components.stack.caller);
-  };
-  this.ise = function test_ise(a, b, name) {
-    self.ok(a === b, name, "Got " + a + ", strictly expected " + b, false,
             Components.stack.caller);
   };
   this.todo = function test_todo(condition, name, diag, stack) {
@@ -885,35 +993,6 @@ function testScope(aTester, aTest, expected) {
         func();
       }
     }, Ci.nsIThread.DISPATCH_NORMAL);
-  };
-
-  this.nextStep = function test_nextStep(arg) {
-    if (self.__done) {
-      aTest.addResult(new testResult(false, "nextStep was called too many times", "", false));
-      return;
-    }
-
-    if (!self.__generator) {
-      aTest.addResult(new testResult(false, "nextStep called with no generator", "", false));
-      self.finish();
-      return;
-    }
-
-    try {
-      self.__generator.send(arg);
-    } catch (ex if ex instanceof StopIteration) {
-      // StopIteration means test is finished.
-      self.finish();
-    } catch (ex) {
-      var isExpected = !!self.SimpleTest.isExpectingUncaughtException();
-      if (!self.SimpleTest.isIgnoringAllUncaughtExceptions()) {
-        aTest.addResult(new testResult(isExpected, "Exception thrown", ex, false));
-        self.SimpleTest.expectUncaughtException(false);
-      } else {
-        aTest.addResult(new testMessage("Exception thrown: " + ex));
-      }
-      self.finish();
-    }
   };
 
   this.waitForExplicitFinish = function test_waitForExplicitFinish() {
@@ -987,15 +1066,14 @@ function testScope(aTester, aTest, expected) {
   };
 
   this.requestCompleteLog = function test_requestCompleteLog() {
-    self.__tester.dumper.structuredLogger.deactivateBuffering();
+    self.__tester.structuredLogger.deactivateBuffering();
     self.registerCleanupFunction(function() {
-      self.__tester.dumper.structuredLogger.activateBuffering();
+      self.__tester.structuredLogger.activateBuffering();
     })
   };
 }
 testScope.prototype = {
   __done: true,
-  __generator: null,
   __tasks: null,
   __waitTimer: null,
   __cleanupFunctions: [],
@@ -1007,6 +1085,10 @@ testScope.prototype = {
   EventUtils: {},
   SimpleTest: {},
   Task: null,
+  ContentTask: null,
+  BrowserTestUtils: null,
+  TestUtils: null,
+  ExtensionTestUtils: null,
   Assert: null,
 
   /**

@@ -24,8 +24,8 @@ function Deferred() {
   Object.freeze(this);
 }
 
-let _pendingEmulatorCmdCount = 0;
-let _pendingEmulatorShellCmdCount = 0;
+var _pendingEmulatorCmdCount = 0;
+var _pendingEmulatorShellCmdCount = 0;
 
 /**
  * Send emulator command with safe guard.
@@ -45,13 +45,14 @@ let _pendingEmulatorShellCmdCount = 0;
  * @return A deferred promise.
  */
 function runEmulatorCmdSafe(aCommand) {
+  log("Emulator command: " + aCommand);
   let deferred = Promise.defer();
 
   ++_pendingEmulatorCmdCount;
   runEmulatorCmd(aCommand, function(aResult) {
     --_pendingEmulatorCmdCount;
 
-    ok(true, "Emulator response: " + JSON.stringify(aResult));
+    log("Emulator response: " + JSON.stringify(aResult));
     if (Array.isArray(aResult) &&
         aResult[aResult.length - 1] === "OK") {
       deferred.resolve(aResult);
@@ -92,7 +93,7 @@ function runEmulatorShellCmdSafe(aCommands) {
   return deferred.promise;
 }
 
-let workingFrame;
+var workingFrame;
 
 /**
  * Get mozSettings value specified by @aKey.
@@ -221,7 +222,7 @@ function setDataApnSettings(aApnSettings, aAllowError) {
   return setSettings1(SETTINGS_KEY_DATA_APN_SETTINGS, aApnSettings, aAllowError);
 }
 
-let mobileConnection;
+var mobileConnection;
 
 /**
  * Push required permissions and test if
@@ -640,6 +641,37 @@ function selectNetworkAutomaticallyAndWait() {
 }
 
 /**
+ * Configures call waiting options.
+ *
+ * Fulfill params: (none)
+ * Reject params:
+ *   'RadioNotAvailable', 'RequestNotSupported', 'InvalidParameter' or
+ *   'GenericFailure'.
+ *
+ * @return A deferred promise.
+ */
+ function setCallWaitingOption(aEnabled) {
+  let request = mobileConnection.setCallWaitingOption(aEnabled);
+  return request.then(null, () => { throw request.error });
+}
+
+/**
+ * Queries current call waiting status.
+ *
+ * Fulfill params:
+ *   A boolean indicating the call waiting status.
+ * Reject params:
+ *   'RadioNotAvailable', 'RequestNotSupported', 'InvalidParameter' or
+ *   'GenericFailure'.
+ *
+ * @return A deferred promise.
+ */
+ function getCallWaitingOption() {
+  let request = mobileConnection.getCallWaitingOption();
+  return request.then(() => request.result, () => { throw request.error });
+}
+
+/**
  * Set data connection enabling state and wait for "datachange" event.
  *
  * Resolve if data connection state changed to the expected one.  Never reject.
@@ -718,15 +750,25 @@ function setRadioEnabled(aEnabled, aServiceId) {
  * @return A deferred promise.
  */
 function setRadioEnabledAndWait(aEnabled, aServiceId) {
-  let promises = [];
+  let mobileConn = getMozMobileConnectionByServiceId(aServiceId);
 
-  promises.push(waitForManagerEvent("radiostatechange", aServiceId, function() {
+  if (mobileConn.radioState === (aEnabled ? "enabled" : "disabled")) {
+    return Promise.resolve();
+  }
+
+  let expectedSequence = aEnabled ? ["enabling", "enabled"] :
+                                    ["disabling", "disabled"];
+
+  let p1 = waitForManagerEvent("radiostatechange", aServiceId, function() {
     let mobileConn = getMozMobileConnectionByServiceId(aServiceId);
-    return mobileConn.radioState === aEnabled ? "enabled" : "disabled";
-  }));
-  promises.push(setRadioEnabled(aEnabled, aServiceId));
+    let expectedRadioState = expectedSequence.shift();
+    is(mobileConn.radioState, expectedRadioState, "Check radio state");
+    return expectedSequence.length === 0;
+  });
 
-  return Promise.all(promises);
+  let p2 = setRadioEnabled(aEnabled, aServiceId);
+
+  return Promise.all([p1, p2]);
 }
 
 /**
@@ -1094,7 +1136,7 @@ function setEmulatorLteSignalStrengthAndWait(aRxlev, aRsrp, aRssnr,
   return Promise.all(promises);
 }
 
-let _networkManager;
+var _networkManager;
 
 /**
  * Get internal NetworkManager service.
@@ -1109,7 +1151,7 @@ function getNetworkManager() {
   return _networkManager;
 }
 
-let _numOfRadioInterfaces;
+var _numOfRadioInterfaces;
 
 /*
  * Get number of radio interfaces. Default is 1 if preference is not set.

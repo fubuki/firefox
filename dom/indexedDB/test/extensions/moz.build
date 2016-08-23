@@ -5,3 +5,12 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 XPI_NAME = 'indexedDB'
+
+FINAL_TARGET_FILES += [
+    'bootstrap.js',
+    'install.rdf',
+]
+
+TEST_HARNESS_FILES.testing.mochitest.extensions += [
+    'indexedDB-test@mozilla.org.xpi',
+]

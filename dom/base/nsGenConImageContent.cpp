@@ -1,4 +1,5 @@
-
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,8 +21,8 @@
 
 using namespace mozilla;
 
-class nsGenConImageContent MOZ_FINAL : public nsXMLElement,
-                                       public nsImageLoadingContent
+class nsGenConImageContent final : public nsXMLElement,
+                                   public nsImageLoadingContent
 {
 public:
   explicit nsGenConImageContent(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo)
@@ -41,15 +42,15 @@ public:
   // nsIContent overrides
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
-                              bool aCompileEventHandlers) MOZ_OVERRIDE;
-  virtual void UnbindFromTree(bool aDeep, bool aNullParent) MOZ_OVERRIDE;
-  virtual EventStates IntrinsicState() const MOZ_OVERRIDE;
+                              bool aCompileEventHandlers) override;
+  virtual void UnbindFromTree(bool aDeep, bool aNullParent) override;
+  virtual EventStates IntrinsicState() const override;
 
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE
+  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override
   {
     MOZ_ASSERT(IsInNativeAnonymousSubtree());
-    if (aVisitor.mEvent->message == NS_LOAD ||
-        aVisitor.mEvent->message == NS_LOAD_ERROR) {
+    if (aVisitor.mEvent->mMessage == eLoad ||
+        aVisitor.mEvent->mMessage == eLoadError) {
       // Don't propagate the events to the parent.
       return NS_OK;
     }
@@ -75,8 +76,6 @@ NS_NewGenConImageContent(nsIContent** aResult, already_AddRefed<mozilla::dom::No
 {
   NS_PRECONDITION(aImageRequest, "Must have request!");
   nsGenConImageContent *it = new nsGenConImageContent(aNodeInfo);
-  if (!it)
-    return NS_ERROR_OUT_OF_MEMORY;
   NS_ADDREF(*aResult = it);
   nsresult rv = it->Init(aImageRequest);
   if (NS_FAILED(rv))

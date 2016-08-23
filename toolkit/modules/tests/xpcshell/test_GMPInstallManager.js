@@ -1,16 +1,20 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu, manager: Cm} = Components;
+var {classes: Cc, interfaces: Ci, results: Cr, utils: Cu, manager: Cm} = Components;
 const URL_HOST = "http://localhost";
 
-Cu.import("resource://gre/modules/GMPInstallManager.jsm");
+var GMPScope = Cu.import("resource://gre/modules/GMPInstallManager.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://testing-common/httpd.js");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm")
+Cu.import("resource://gre/modules/UpdateUtils.jsm");
+
+var { computeHash } = Cu.import("resource://gre/modules/addons/ProductAddonChecker.jsm");
+var ProductAddonCheckerScope = Cu.import("resource://gre/modules/addons/ProductAddonChecker.jsm");
 
 do_get_profile();
 
@@ -26,26 +30,26 @@ function run_test() {Cu.import("resource://gre/modules/Preferences.jsm")
 add_task(function* test_prefs() {
   let addon1 = "addon1", addon2 = "addon2";
 
-  GMPPrefs.set(GMPPrefs.KEY_URL, "http://not-really-used");
-  GMPPrefs.set(GMPPrefs.KEY_URL_OVERRIDE, "http://not-really-used-2");
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_LAST_UPDATE, "1", addon1);
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_VERSION, "2", addon1);
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_LAST_UPDATE, "3", addon2);
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_VERSION, "4", addon2);
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_AUTOUPDATE, false, addon2);
-  GMPPrefs.set(GMPPrefs.KEY_CERT_CHECKATTRS, true);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_URL, "http://not-really-used");
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_URL_OVERRIDE, "http://not-really-used-2");
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "1", addon1);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "2", addon1);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "3", addon2);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "4", addon2);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, addon2);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_CERT_CHECKATTRS, true);
 
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_URL), "http://not-really-used");
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_URL_OVERRIDE),
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_URL), "http://not-really-used");
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_URL_OVERRIDE),
               "http://not-really-used-2");
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_ADDON_LAST_UPDATE, "", addon1), "1");
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_ADDON_VERSION, "", addon1), "2");
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_ADDON_LAST_UPDATE, "", addon2), "3");
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_ADDON_VERSION, "", addon2), "4");
-  do_check_eq(GMPPrefs.get(GMPPrefs.KEY_ADDON_AUTOUPDATE, undefined, addon2),
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", addon1), "1");
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "", addon1), "2");
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", addon2), "3");
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "", addon2), "4");
+  do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, undefined, addon2),
               false);
-  do_check_true(GMPPrefs.get(GMPPrefs.KEY_CERT_CHECKATTRS));
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_AUTOUPDATE, true, addon2);
+  do_check_true(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_CERT_CHECKATTRS));
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, addon2);
 });
 
 /**
@@ -184,10 +188,10 @@ add_test(function test_checkForAddons_bad_ssl() {
   // Add random stuff that cause CertUtil to require https.
   //
   let PREF_KEY_URL_OVERRIDE_BACKUP =
-    Preferences.get(GMPPrefs.KEY_URL_OVERRIDE, undefined);
-  Preferences.reset(GMPPrefs.KEY_URL_OVERRIDE);
+    Preferences.get(GMPScope.GMPPrefs.KEY_URL_OVERRIDE, undefined);
+  Preferences.reset(GMPScope.GMPPrefs.KEY_URL_OVERRIDE);
 
-  let CERTS_BRANCH_DOT_ONE = GMPPrefs.CERTS_BRANCH + ".1";
+  let CERTS_BRANCH_DOT_ONE = GMPScope.GMPPrefs.KEY_CERTS_BRANCH + ".1";
   let PREF_CERTS_BRANCH_DOT_ONE_BACKUP =
     Preferences.get(CERTS_BRANCH_DOT_ONE, undefined);
   Services.prefs.setCharPref(CERTS_BRANCH_DOT_ONE, "funky value");
@@ -199,11 +203,11 @@ add_test(function test_checkForAddons_bad_ssl() {
   promise.then(() => {
     do_throw("Defensive timeout should reject");
   }, err => {
-    do_check_true(err.message.contains("SSL is required and URI scheme is " +
+    do_check_true(err.message.includes("SSL is required and URI scheme is " +
                                        "not https."));
     installManager.uninit();
     if (PREF_KEY_URL_OVERRIDE_BACKUP) {
-      Preferences.set(GMPPrefs.KEY_URL_OVERRIDE,
+      Preferences.set(GMPScope.GMPPrefs.KEY_URL_OVERRIDE,
         PREF_KEY_URL_OVERRIDE_BACKUP);
     }
     if (PREF_CERTS_BRANCH_DOT_ONE_BACKUP) {
@@ -430,7 +434,7 @@ function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
   let data = "e~=0.5772156649";
   let zipFile = createNewZipFile(zipFileName, data);
   let hashFunc = "sha256";
-  let expectedDigest = yield GMPDownloader.computeHash(hashFunc, zipFile);
+  let expectedDigest = yield computeHash(hashFunc, zipFile.path);
   let fileSize = zipFile.fileSize;
   if (wantInstallReject) {
     fileSize = 1;
@@ -456,7 +460,6 @@ function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
   let gmpAddon = gmpAddons[0];
   do_check_false(gmpAddon.isInstalled);
 
-  GMPInstallManager.overrideLeaveDownloadedZip = true;
   try {
     let extractedPaths = yield installManager.installAddon(gmpAddon);
     if (wantInstallReject) {
@@ -474,19 +477,15 @@ function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
     let readData = readStringFromFile(extractedFile);
     do_check_eq(readData, data);
 
-    // Check that the downloaded zip matches the offered zip exactly
-    let downloadedGMPFile = FileUtils.getFile("TmpD",
-      [gmpAddon.id + ".zip"]);
-    do_check_true(downloadedGMPFile.exists());
-    let downloadedBytes = getBinaryFileData(downloadedGMPFile);
-    let sourceBytes = getBinaryFileData(zipFile);
-    do_check_true(compareBinaryData(downloadedBytes, sourceBytes));
-
     // Make sure the prefs are set correctly
-    do_check_true(!!GMPPrefs.get(GMPPrefs.KEY_ADDON_LAST_UPDATE, "",
-                                 gmpAddon.id));
-    do_check_eq(GMPPrefs.get(GMPPrefs.KEY_ADDON_VERSION, "", gmpAddon.id),
-                             "1.1");
+    do_check_true(!!GMPScope.GMPPrefs.get(
+      GMPScope.GMPPrefs.KEY_PLUGIN_LAST_UPDATE, "", gmpAddon.id));
+    do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_VERSION, "",
+                                      gmpAddon.id),
+                "1.1");
+    do_check_eq(GMPScope.GMPPrefs.get(GMPScope.GMPPrefs.KEY_PLUGIN_ABI, "",
+                                      gmpAddon.id),
+                UpdateUtils.ABI);
     // Make sure it reports as being installed
     do_check_true(gmpAddon.isInstalled);
 
@@ -494,18 +493,11 @@ function* test_checkForAddons_installAddon(id, includeSize, wantInstallReject) {
     extractedFile.parent.remove(true);
     zipFile.remove(false);
     httpServer.stop(function() {});
-    do_print("Removing downloaded GMP file: " + downloadedGMPFile.path);
-    downloadedGMPFile.remove(false);
     installManager.uninit();
   } catch(ex) {
     zipFile.remove(false);
-    let downloadedGMPFile = FileUtils.getFile("TmpD",
-      [gmpAddon.id + ".zip"]);
-    do_print("Removing downloaded GMP file from exception handler: " +
-             downloadedGMPFile.path);
-    downloadedGMPFile.remove(false);
     if (!wantInstallReject) {
-      do_throw("install update should not reject");
+      do_throw("install update should not reject " + ex.message);
     }
   }
 }
@@ -518,7 +510,7 @@ add_task(test_checkForAddons_installAddon.bind(null, "3", true, true));
  * Tests simpleCheckAndInstall when autoupdate is disabled for a GMP
  */
 add_task(function* test_simpleCheckAndInstall_autoUpdateDisabled() {
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_AUTOUPDATE, false, OPEN_H264_ID);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, false, GMPScope.OPEN_H264_ID);
   let responseXML =
     "<?xml version=\"1.0\"?>" +
     "<updates>" +
@@ -536,8 +528,8 @@ add_task(function* test_simpleCheckAndInstall_autoUpdateDisabled() {
   let installManager = new GMPInstallManager();
   let result = yield installManager.simpleCheckAndInstall();
   do_check_eq(result.status, "nothing-new-to-install");
-  Preferences.reset(GMPPrefs.KEY_UPDATE_LAST_CHECK);
-  GMPPrefs.set(GMPPrefs.KEY_ADDON_AUTOUPDATE, true, OPEN_H264_ID);
+  Preferences.reset(GMPScope.GMPPrefs.KEY_UPDATE_LAST_CHECK);
+  GMPScope.GMPPrefs.set(GMPScope.GMPPrefs.KEY_PLUGIN_AUTOUPDATE, true, GMPScope.OPEN_H264_ID);
 });
 
 /**
@@ -752,8 +744,7 @@ xhr.prototype = {
     eval("this._on" + aEvent + " = aValue");
   },
   flags: Ci.nsIClassInfo.SINGLETON,
-  implementationLanguage: Ci.nsIProgrammingLanguage.JAVASCRIPT,
-  getHelperForLanguage: function(aLanguage) null,
+  getScriptableHelper: () => null,
   getInterfaces: function(aCount) {
     let interfaces = [Ci.nsISupports];
     aCount.value = interfaces.length;
@@ -783,55 +774,11 @@ xhr.prototype = {
  * @param response The response you want to get back when an XHR request is made
  */
 function overrideXHR(status, response, options) {
-  let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-  if (overrideXHR.myxhr) {
-    registrar.unregisterFactory(overrideXHR.myxhr.classID, overrideXHR.myxhr);
-  }
   overrideXHR.myxhr = new xhr(status, response, options);
-  registrar.registerFactory(overrideXHR.myxhr.classID,
-                            overrideXHR.myxhr.classDescription,
-                            overrideXHR.myxhr.contractID,
-                            overrideXHR.myxhr);
+  ProductAddonCheckerScope.CreateXHR = function() {
+    return overrideXHR.myxhr;
+  };
   return overrideXHR.myxhr;
-}
-
-/**
- * Compares binary data of 2 arrays and returns true if they are the same
- *
- * @param arr1 The first array to compare
- * @param arr2 The second array to compare
-*/
-function compareBinaryData(arr1, arr2) {
-  do_check_eq(arr1.length, arr2.length);
-  for (let i = 0; i < arr1.length; i++) {
-    if (arr1[i] != arr2[i]) {
-      do_print("Data differs at index " + i +
-               ", arr1: " + arr1[i] + ", arr2: " + arr2[i]);
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Reads a file's data and returns it
- *
- * @param file The file to read the data from
- * @return array of bytes for the data in the file.
-*/
-function getBinaryFileData(file) {
-  let fileStream = Cc["@mozilla.org/network/file-input-stream;1"].
-                   createInstance(Ci.nsIFileInputStream);
-  // Open as RD_ONLY with default permissions.
-  fileStream.init(file, FileUtils.MODE_RDONLY, FileUtils.PERMS_FILE, 0);
-
-  // Check the returned size versus the expected size.
-  let stream = Cc["@mozilla.org/binaryinputstream;1"].
-               createInstance(Ci.nsIBinaryInputStream);
-  stream.setInputStream(fileStream);
-  let bytes = stream.readByteArray(stream.available());
-  fileStream.close();
-  return bytes;
 }
 
 /**

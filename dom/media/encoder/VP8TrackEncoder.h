@@ -32,14 +32,14 @@ public:
   VP8TrackEncoder();
   virtual ~VP8TrackEncoder();
 
-  already_AddRefed<TrackMetadataBase> GetMetadata() MOZ_FINAL MOZ_OVERRIDE;
+  already_AddRefed<TrackMetadataBase> GetMetadata() final override;
 
-  nsresult GetEncodedTrack(EncodedFrameContainer& aData) MOZ_FINAL MOZ_OVERRIDE;
+  nsresult GetEncodedTrack(EncodedFrameContainer& aData) final override;
 
 protected:
   nsresult Init(int32_t aWidth, int32_t aHeight,
                 int32_t aDisplayWidth, int32_t aDisplayHeight,
-                TrackRate aTrackRate) MOZ_FINAL MOZ_OVERRIDE;
+                TrackRate aTrackRate) final override;
 
 private:
   // Calculate the target frame's encoded duration.
@@ -54,7 +54,9 @@ private:
                                          StreamTime aProcessedDuration);
 
   // Get the encoded data from encoder to aData.
-  nsresult GetEncodedPartitions(EncodedFrameContainer& aData);
+  // Return value: false if the vpx_codec_get_cx_data returns null
+  //               for EOS detection.
+  bool GetEncodedPartitions(EncodedFrameContainer& aData);
 
   // Prepare the input data to the mVPXImageWrapper for encoding.
   nsresult PrepareRawFrame(VideoChunk &aChunk);
@@ -69,9 +71,9 @@ private:
   StreamTime mRemainingTicks;
 
   // Muted frame, we only create it once.
-  nsRefPtr<layers::Image> mMuteFrame;
+  RefPtr<layers::Image> mMuteFrame;
 
-  // I420 frame, convert the 4:4:4, 4:2:2 to I420.
+  // I420 frame, for converting to I420.
   nsTArray<uint8_t> mI420Frame;
 
   /**

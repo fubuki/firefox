@@ -7,6 +7,7 @@
 
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
 #include "nsString.h"
@@ -191,7 +192,7 @@ MakeContext ()
     RefPtr<DrawTarget> drawTarget = gfxPlatform::GetPlatform()->
         CreateOffscreenContentDrawTarget(IntSize(size, size),
                                          SurfaceFormat::B8G8R8X8);
-    nsRefPtr<gfxContext> ctx = new gfxContext(drawTarget);
+    RefPtr<gfxContext> ctx = gfxContext::ForDrawTarget(drawTarget);
 
     return ctx.forget();
 }
@@ -247,11 +248,11 @@ void SetupTests(nsTArray<TestEntry>& testList);
 
 static bool
 RunTest (TestEntry *test, gfxContext *ctx) {
-    nsRefPtr<gfxFontGroup> fontGroup;
+    RefPtr<gfxFontGroup> fontGroup;
 
-    fontGroup = gfxPlatform::GetPlatform()->CreateFontGroup(NS_ConvertUTF8toUTF16(test->utf8FamilyString), &test->fontStyle, nullptr);
+    fontGroup = gfxPlatform::GetPlatform()->CreateFontGroup(NS_ConvertUTF8toUTF16(test->utf8FamilyString), &test->fontStyle, nullptr, nullptr, 1.0);
 
-    nsAutoPtr<gfxTextRun> textRun;
+    UniquePtr<gfxTextRun> textRun;
     gfxTextRunFactory::Parameters params = {
       ctx, nullptr, nullptr, nullptr, 0, 60
     };
@@ -263,7 +264,8 @@ RunTest (TestEntry *test, gfxContext *ctx) {
     if (test->stringType == S_ASCII) {
         flags |= gfxTextRunFactory::TEXT_IS_ASCII | gfxTextRunFactory::TEXT_IS_8BIT;
         length = strlen(test->string);
-        textRun = fontGroup->MakeTextRun(reinterpret_cast<const uint8_t*>(test->string), length, &params, flags);
+        textRun = fontGroup->MakeTextRun(
+            reinterpret_cast<const uint8_t*>(test->string), length, &params, flags);
     } else {
         NS_ConvertUTF8toUTF16 str(nsDependentCString(test->string));
         length = str.Length();
@@ -295,7 +297,7 @@ TEST(Gfx, FontSelection) {
     nsTArray<TestEntry> testList;
     SetupTests(testList);
 
-    nsRefPtr<gfxContext> context = MakeContext();
+    RefPtr<gfxContext> context = MakeContext();
 
     for (uint32_t test = 0;
          test < testList.Length();

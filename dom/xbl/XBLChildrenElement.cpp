@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -50,15 +50,15 @@ XBLChildrenElement::ParseAttribute(int32_t aNamespaceID,
     nsCharSeparatedTokenizer tok(aValue, '|',
                                  nsCharSeparatedTokenizer::SEPARATOR_OPTIONAL);
     while (tok.hasMoreTokens()) {
-      mIncludes.AppendElement(do_GetAtom(tok.nextToken()));
+      mIncludes.AppendElement(NS_Atomize(tok.nextToken()));
     }
   }
 
   return false;
 }
 
-} // namespace mozilla
 } // namespace dom
+} // namespace mozilla
 
 using namespace mozilla::dom;
 
@@ -199,7 +199,7 @@ nsAnonymousContentList::IndexOf(nsIContent* aContent)
 }
 
 JSObject*
-nsAnonymousContentList::WrapObject(JSContext *cx)
+nsAnonymousContentList::WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto)
 {
-  return mozilla::dom::NodeListBinding::Wrap(cx, this);
+  return mozilla::dom::NodeListBinding::Wrap(cx, this, aGivenProto);
 }

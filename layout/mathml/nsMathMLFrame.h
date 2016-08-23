@@ -21,85 +21,84 @@ class nsDisplayListSet;
 // Concrete base class with default methods that derived MathML frames can override
 class nsMathMLFrame : public nsIMathMLFrame {
 public:
-
   // nsIMathMLFrame ---
 
   virtual bool
-  IsSpaceLike() MOZ_OVERRIDE {
+  IsSpaceLike() override {
     return NS_MATHML_IS_SPACE_LIKE(mPresentationData.flags);
   }
 
   NS_IMETHOD
-  GetBoundingMetrics(nsBoundingMetrics& aBoundingMetrics) MOZ_OVERRIDE {
+  GetBoundingMetrics(nsBoundingMetrics& aBoundingMetrics) override {
     aBoundingMetrics = mBoundingMetrics;
     return NS_OK;
   }
 
   NS_IMETHOD
-  SetBoundingMetrics(const nsBoundingMetrics& aBoundingMetrics) MOZ_OVERRIDE {
+  SetBoundingMetrics(const nsBoundingMetrics& aBoundingMetrics) override {
     mBoundingMetrics = aBoundingMetrics;
     return NS_OK;
   }
 
   NS_IMETHOD
-  SetReference(const nsPoint& aReference) MOZ_OVERRIDE {
+  SetReference(const nsPoint& aReference) override {
     mReference = aReference;
     return NS_OK;
   }
 
-  virtual eMathMLFrameType GetMathMLFrameType() MOZ_OVERRIDE;
+  virtual eMathMLFrameType GetMathMLFrameType() override;
 
   NS_IMETHOD
-  Stretch(nsRenderingContext& aRenderingContext,
+  Stretch(mozilla::gfx::DrawTarget* aDrawTarget,
           nsStretchDirection   aStretchDirection,
           nsBoundingMetrics&   aContainerSize,
-          nsHTMLReflowMetrics& aDesiredStretchSize) MOZ_OVERRIDE
+          nsHTMLReflowMetrics& aDesiredStretchSize) override
   {
     return NS_OK;
   }
 
   NS_IMETHOD
-  GetEmbellishData(nsEmbellishData& aEmbellishData) MOZ_OVERRIDE {
+  GetEmbellishData(nsEmbellishData& aEmbellishData) override {
     aEmbellishData = mEmbellishData;
     return NS_OK;
   }
 
   NS_IMETHOD
-  GetPresentationData(nsPresentationData& aPresentationData) MOZ_OVERRIDE {
+  GetPresentationData(nsPresentationData& aPresentationData) override {
     aPresentationData = mPresentationData;
     return NS_OK;
   }
 
   NS_IMETHOD
-  InheritAutomaticData(nsIFrame* aParent) MOZ_OVERRIDE;
+  InheritAutomaticData(nsIFrame* aParent) override;
 
   NS_IMETHOD
-  TransmitAutomaticData() MOZ_OVERRIDE
+  TransmitAutomaticData() override
   {
     return NS_OK;
   }
 
   NS_IMETHOD
   UpdatePresentationData(uint32_t        aFlagsValues,
-                         uint32_t        aFlagsToUpdate) MOZ_OVERRIDE;
+                         uint32_t        aFlagsToUpdate) override;
 
   NS_IMETHOD
   UpdatePresentationDataFromChildAt(int32_t         aFirstIndex,
                                     int32_t         aLastIndex,
                                     uint32_t        aFlagsValues,
-                                    uint32_t        aFlagsToUpdate) MOZ_OVERRIDE
+                                    uint32_t        aFlagsToUpdate) override
   {
     return NS_OK;
   }
 
   uint8_t
-  ScriptIncrement(nsIFrame* aFrame) MOZ_OVERRIDE
+  ScriptIncrement(nsIFrame* aFrame) override
   {
     return 0;
   }
 
   bool
-  IsMrowLike() MOZ_OVERRIDE
+  IsMrowLike() override
   {
     return false;
   }
@@ -199,9 +198,8 @@ public:
                       nscoord&        aSubDrop,
                       float           aFontSizeInflation) 
   {
-    nsRefPtr<nsFontMetrics> fm;
-    nsLayoutUtils::GetFontMetricsForFrame(aChild, getter_AddRefs(fm),
-                                          aFontSizeInflation);
+    RefPtr<nsFontMetrics> fm =
+      nsLayoutUtils::GetFontMetricsForFrame(aChild, aFontSizeInflation);
     GetSubDrop(fm, aSubDrop);
   }
 
@@ -210,9 +208,8 @@ public:
                       nscoord&        aSupDrop,
                       float           aFontSizeInflation) 
   {
-    nsRefPtr<nsFontMetrics> fm;
-    nsLayoutUtils::GetFontMetricsForFrame(aChild, getter_AddRefs(fm),
-                                          aFontSizeInflation);
+    RefPtr<nsFontMetrics> fm =
+      nsLayoutUtils::GetFontMetricsForFrame(aChild, aFontSizeInflation);
     GetSupDrop(fm, aSupDrop);
   }
 
@@ -336,14 +333,14 @@ public:
   // Here are some slower variants to obtain the desired metrics
   // by actually measuring some characters
   static void
-  GetRuleThickness(nsRenderingContext& aRenderingContext, 
-                   nsFontMetrics*      aFontMetrics,
-                   nscoord&             aRuleThickness);
+  GetRuleThickness(mozilla::gfx::DrawTarget* aDrawTarget,
+                   nsFontMetrics* aFontMetrics,
+                   nscoord& aRuleThickness);
 
   static void
-  GetAxisHeight(nsRenderingContext& aRenderingContext, 
-                nsFontMetrics*      aFontMetrics,
-                nscoord&             aAxisHeight);
+  GetAxisHeight(mozilla::gfx::DrawTarget* aDrawTarget,
+                nsFontMetrics* aFontMetrics,
+                nscoord& aAxisHeight);
 
   static void
   GetRadicalParameters(nsFontMetrics* aFontMetrics,
@@ -354,10 +351,10 @@ public:
 
 protected:
 #if defined(DEBUG) && defined(SHOW_BOUNDING_BOX)
-  nsresult DisplayBoundingMetrics(nsDisplayListBuilder* aBuilder,
-                                  nsIFrame* aFrame, const nsPoint& aPt,
-                                  const nsBoundingMetrics& aMetrics,
-                                  const nsDisplayListSet& aLists);
+  void DisplayBoundingMetrics(nsDisplayListBuilder* aBuilder,
+                              nsIFrame* aFrame, const nsPoint& aPt,
+                              const nsBoundingMetrics& aMetrics,
+                              const nsDisplayListSet& aLists);
 #endif
 
   /**

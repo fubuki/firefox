@@ -9,20 +9,21 @@
 
 #include "AudioNode.h"
 #include "FFTBlock.h"
+#include "AlignedTArray.h"
 
 namespace mozilla {
 namespace dom {
 
 class AudioContext;
 
-class AnalyserNode : public AudioNode
+class AnalyserNode final : public AudioNode
 {
 public:
   explicit AnalyserNode(AudioContext* aContext);
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   void GetFloatFrequencyData(const Float32Array& aArray);
   void GetByteFrequencyData(const Uint8Array& aArray);
@@ -53,13 +54,13 @@ public:
   }
   void SetSmoothingTimeConstant(double aValue, ErrorResult& aRv);
 
-  virtual const char* NodeType() const MOZ_OVERRIDE
+  virtual const char* NodeType() const override
   {
     return "AnalyserNode";
   }
 
-  virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
-  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override;
+  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override;
 
 protected:
   ~AnalyserNode() {}
@@ -70,19 +71,20 @@ private:
   bool AllocateBuffer();
   bool FFTAnalysis();
   void ApplyBlackmanWindow(float* aBuffer, uint32_t aSize);
+  void GetTimeDomainData(float* aData, size_t aLength);
 
 private:
   FFTBlock mAnalysisBlock;
+  nsTArray<AudioChunk> mChunks;
   double mMinDecibels;
   double mMaxDecibels;
   double mSmoothingTimeConstant;
-  uint32_t mWriteIndex;
-  FallibleTArray<float> mBuffer;
-  FallibleTArray<float> mOutputBuffer;
+  size_t mCurrentChunk = 0;
+  AlignedTArray<float> mOutputBuffer;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

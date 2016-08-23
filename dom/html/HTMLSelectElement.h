@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -99,7 +100,7 @@ private:
   static void* operator new(size_t) CPP_THROW_NEW { return 0; }
   static void operator delete(void*, size_t) {}
   /** The select element which option list is being mutated. */
-  nsRefPtr<HTMLSelectElement> mSelect;
+  RefPtr<HTMLSelectElement> mSelect;
   /** true if the current mutation is the first one in the stack. */
   bool                       mTopLevelMutation;
   /** true if it is known that the option list must be recreated. */
@@ -112,9 +113,9 @@ private:
 /**
  * Implementation of &lt;select&gt;
  */
-class HTMLSelectElement MOZ_FINAL : public nsGenericHTMLFormElementWithState,
-                                    public nsIDOMHTMLSelectElement,
-                                    public nsIConstraintValidation
+class HTMLSelectElement final : public nsGenericHTMLFormElementWithState,
+                                public nsIDOMHTMLSelectElement,
+                                public nsIConstraintValidation
 {
 public:
   /**
@@ -145,7 +146,13 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual int32_t TabIndexDefault() MOZ_OVERRIDE;
+  virtual int32_t TabIndexDefault() override;
+
+  // Element
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override
+  {
+    return true;
+  }
 
   // nsIDOMHTMLSelectElement
   NS_DECL_NSIDOMHTMLSELECTELEMENT
@@ -266,29 +273,29 @@ public:
 
 
   // nsINode
-  virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // nsIContent
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
-                     EventChainPostVisitor& aVisitor) MOZ_OVERRIDE;
+                     EventChainPostVisitor& aVisitor) override;
 
-  virtual bool IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable, int32_t* aTabIndex) MOZ_OVERRIDE;
+  virtual bool IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable, int32_t* aTabIndex) override;
   virtual nsresult InsertChildAt(nsIContent* aKid, uint32_t aIndex,
-                                 bool aNotify) MOZ_OVERRIDE;
-  virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) MOZ_OVERRIDE;
+                                 bool aNotify) override;
+  virtual void RemoveChildAt(uint32_t aIndex, bool aNotify) override;
 
   // Overriden nsIFormControl methods
-  NS_IMETHOD_(uint32_t) GetType() const MOZ_OVERRIDE { return NS_FORM_SELECT; }
-  NS_IMETHOD Reset() MOZ_OVERRIDE;
-  NS_IMETHOD SubmitNamesValues(nsFormSubmission* aFormSubmission) MOZ_OVERRIDE;
-  NS_IMETHOD SaveState() MOZ_OVERRIDE;
-  virtual bool RestoreState(nsPresState* aState) MOZ_OVERRIDE;
-  virtual bool IsDisabledForEvents(uint32_t aMessage) MOZ_OVERRIDE;
+  NS_IMETHOD_(uint32_t) GetType() const override { return NS_FORM_SELECT; }
+  NS_IMETHOD Reset() override;
+  NS_IMETHOD SubmitNamesValues(nsFormSubmission* aFormSubmission) override;
+  NS_IMETHOD SaveState() override;
+  virtual bool RestoreState(nsPresState* aState) override;
+  virtual bool IsDisabledForEvents(EventMessage aMessage) override;
 
-  virtual void FieldSetDisabledChanged(bool aNotify) MOZ_OVERRIDE;
+  virtual void FieldSetDisabledChanged(bool aNotify) override;
 
-  EventStates IntrinsicState() const MOZ_OVERRIDE;
+  EventStates IntrinsicState() const override;
 
   /**
    * To be called when stuff is added under a child of the select--but *before*
@@ -362,31 +369,31 @@ public:
    */
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                                nsIContent* aBindingParent,
-                               bool aCompileEventHandlers) MOZ_OVERRIDE;
-  virtual void UnbindFromTree(bool aDeep, bool aNullParent) MOZ_OVERRIDE;
+                               bool aCompileEventHandlers) override;
+  virtual void UnbindFromTree(bool aDeep, bool aNullParent) override;
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
-                                 bool aNotify) MOZ_OVERRIDE;
+                                 nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) MOZ_OVERRIDE;
+                                const nsAttrValue* aValue, bool aNotify) override;
   virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) MOZ_OVERRIDE;
+                             bool aNotify) override;
   
-  virtual void DoneAddingChildren(bool aHaveNotified) MOZ_OVERRIDE;
-  virtual bool IsDoneAddingChildren() MOZ_OVERRIDE {
+  virtual void DoneAddingChildren(bool aHaveNotified) override;
+  virtual bool IsDoneAddingChildren() override {
     return mIsDoneAddingChildren;
   }
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsIAtom* aAttribute,
                                 const nsAString& aValue,
-                                nsAttrValue& aResult) MOZ_OVERRIDE;
-  virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const MOZ_OVERRIDE;
+                                nsAttrValue& aResult) override;
+  virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
   virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
-                                              int32_t aModType) const MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const MOZ_OVERRIDE;
+                                              int32_t aModType) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo* aNodeInfo, nsINode** aResult) const override;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLSelectElement,
                                            nsGenericHTMLFormElementWithState)
@@ -398,7 +405,7 @@ public:
 
   // nsIConstraintValidation
   nsresult GetValidationMessage(nsAString& aValidationMessage,
-                                ValidityStateType aType) MOZ_OVERRIDE;
+                                ValidityStateType aType) override;
 
   void UpdateValueMissingValidityState();
   /**
@@ -422,6 +429,9 @@ public:
   {
     return !Multiple() && Size() <= 1;
   }
+
+  bool OpenInParentProcess();
+  void SetOpenInParentProcess(bool aVal);
 
 protected:
   virtual ~HTMLSelectElement();
@@ -495,37 +505,11 @@ protected:
                                  int32_t aListIndex,
                                  int32_t aDepth,
                                  bool aNotify);
-  /**
-   * Insert option(s) into the options[] array (called by InsertOptionsIntoList)
-   * @param aOptions the option or optgroup being added
-   * @param aInsertIndex the index to start adding options into the list at
-   * @param aDepth the depth of aOptions (1=direct child of select ...)
-   */
-  void InsertOptionsIntoListRecurse(nsIContent* aOptions,
-                                    int32_t* aInsertIndex,
-                                    int32_t aDepth);
-  /**
-   * Remove option(s) from the options[] array (called by RemoveOptionsFromList)
-   * @param aOptions the option or optgroup being added
-   * @param aListIndex the index to start removing options from the list at
-   * @param aNumRemoved the number removed so far [OUT]
-   * @param aDepth the depth of aOptions (1=direct child of select ...)
-   */
-  nsresult RemoveOptionsFromListRecurse(nsIContent* aOptions,
-                                        int32_t aRemoveIndex,
-                                        int32_t* aNumRemoved,
-                                        int32_t aDepth);
 
   // nsIConstraintValidation
   void UpdateBarredFromConstraintValidation();
   bool IsValueMissing();
 
-  /**
-   * Find out how deep this content is from the select (1=direct child)
-   * @param aContent the content to check
-   * @return the depth
-   */
-  int32_t GetContentDepth(nsIContent* aContent);
   /**
    * Get the index of the first option at, under or following the content in
    * the select, or length of options[] if none are found
@@ -611,7 +595,7 @@ protected:
   }
 
   /** The options[] array */
-  nsRefPtr<HTMLOptionsCollection> mOptions;
+  RefPtr<HTMLOptionsCollection> mOptions;
   nsContentUtils::AutocompleteAttrState mAutocompleteAttrState;
   /** false if the parser is in the middle of adding children. */
   bool            mIsDoneAddingChildren;
@@ -660,7 +644,7 @@ protected:
   /**
    * The live list of selected options.
   */
-  nsRefPtr<nsContentList> mSelectedOptions;
+  RefPtr<nsContentList> mSelectedOptions;
 
 private:
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,

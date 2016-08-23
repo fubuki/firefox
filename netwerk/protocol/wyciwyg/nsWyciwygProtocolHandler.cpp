@@ -10,9 +10,9 @@
 #include "nsNetCID.h"
 #include "nsServiceManagerUtils.h"
 #include "plstr.h"
-#include "nsNetUtil.h"
 #include "nsIObserverService.h"
 #include "mozIApplicationClearPrivateDataParams.h"
+#include "nsIURI.h"
 
 #include "mozilla/net/NeckoChild.h"
 
@@ -23,11 +23,6 @@ using namespace mozilla::net;
 
 nsWyciwygProtocolHandler::nsWyciwygProtocolHandler() 
 {
-#if defined(PR_LOGGING)
-  if (!gWyciwygLog)
-    gWyciwygLog = PR_NewLogModule("nsWyciwygChannel");
-#endif
-
   LOG(("Creating nsWyciwygProtocolHandler [this=%p].\n", this));
 }
 
@@ -78,8 +73,7 @@ nsWyciwygProtocolHandler::NewURI(const nsACString &aSpec,
   rv = url->SetSpec(aSpec);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  *result = url;
-  NS_ADDREF(*result);
+  url.forget(result);
 
   return rv;
 }

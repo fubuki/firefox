@@ -50,6 +50,10 @@ public:
                          nsIAtom *aAttrName,
                          const nsAString& aAttrValue);
 
+  static void SetAccAttr(nsIPersistentProperties *aAttributes,
+                         nsIAtom* aAttrName,
+                         nsIAtom* aAttrValue);
+
   /**
    * Set group attributes ('level', 'setsize', 'posinset').
    */
@@ -81,8 +85,8 @@ public:
    * @param aTopContent    node to end at
    */
   static void SetLiveContainerAttributes(nsIPersistentProperties *aAttributes,
-                                         nsIContent *aStartContent,
-                                         nsIContent *aTopContent);
+                                         nsIContent* aStartContent,
+                                         mozilla::dom::Element* aTopEl);
 
   /**
    * Any ARIA property of type boolean or NMTOKEN is undefined if the ARIA
@@ -129,6 +133,8 @@ public:
    * Return a text container accessible for the given node.
    */
   static HyperTextAccessible* GetTextContainer(nsINode* aNode);
+
+  static Accessible* TableFor(Accessible* aRow);
 
   /**
    * Return true if the DOM node of given accessible has aria-selected="true"
@@ -196,17 +202,6 @@ public:
    * Return text length of the given accessible, return 0 on failure.
    */
   static uint32_t TextLength(Accessible* aAccessible);
-
-  /**
-   * Return true if the given accessible is embedded object.
-   */
-  static bool IsEmbeddedObject(Accessible* aAcc)
-  {
-    uint32_t role = aAcc->Role();
-    return role != roles::TEXT_LEAF &&
-           role != roles::WHITESPACE &&
-           role != roles::STATICTEXT;
-  }
 
   /**
    * Transform nsIAccessibleStates constants to internal state constant.

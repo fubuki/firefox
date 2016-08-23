@@ -4,11 +4,22 @@
 
 // Test ThirdPartyUtil methods. See mozIThirdPartyUtil.
 
-Components.utils.import("resource://gre/modules/NetUtil.jsm");
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let NS_ERROR_INVALID_ARG = Components.results.NS_ERROR_INVALID_ARG;
+Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+
+var prefs = Cc["@mozilla.org/preferences-service;1"].
+              getService(Ci.nsIPrefBranch);
+
+// Since this test creates a TYPE_DOCUMENT channel via javascript, it will
+// end up using the wrong LoadInfo constructor. Setting this pref will disable
+// the ContentPolicyType assertion in the constructor.
+prefs.setBoolPref("network.loadinfo.skip_type_assertion", true);
+
+var NS_ERROR_INVALID_ARG = Components.results.NS_ERROR_INVALID_ARG;
 
 function do_check_throws(f, result, stack)
 {
@@ -38,16 +49,17 @@ function run_test() {
   let spec2 = "http://bar.com/bar.html";
   let uri1 = NetUtil.newURI(spec1);
   let uri2 = NetUtil.newURI(spec2);
-  let channel1 = NetUtil.newChannel(uri1);
-  let channel2 = NetUtil.newChannel(uri2);
+  const contentPolicyType = Ci.nsIContentPolicy.TYPE_DOCUMENT;
+  let channel1 = NetUtil.newChannel({uri: uri1, loadUsingSystemPrincipal: true, contentPolicyType});
+  let channel2 = NetUtil.newChannel({uri: uri2, loadUsingSystemPrincipal: true, contentPolicyType});
 
   // Create some file:// URIs.
   let filespec1 = "file://foo.txt";
   let filespec2 = "file://bar.txt";
   let fileuri1 = NetUtil.newURI(filespec1);
   let fileuri2 = NetUtil.newURI(filespec2);
-  let filechannel1 = NetUtil.newChannel(fileuri1);
-  let filechannel2 = NetUtil.newChannel(fileuri2);
+  let filechannel1 = NetUtil.newChannel({uri: fileuri1, loadUsingSystemPrincipal: true});
+  let filechannel2 = NetUtil.newChannel({uri: fileuri2, loadUsingSystemPrincipal: true});
 
   // Test isThirdPartyURI.
   do_check_false(util.isThirdPartyURI(uri1, uri1));
@@ -64,17 +76,17 @@ function run_test() {
     NS_ERROR_INVALID_ARG);
 
   // We can't test isThirdPartyWindow since we can't really set up a window
-  // heirarchy. We leave that to mochitests.
+  // hierarchy. We leave that to mochitests.
 
   // Test isThirdPartyChannel. As above, we can't test the bits that require
-  // a load context or window heirarchy.
+  // a load context or window heirarchy. Because of bug 1259873, we assume
+  // that these are not third-party.
   do_check_throws(function() { util.isThirdPartyChannel(null); },
     NS_ERROR_INVALID_ARG);
-  do_check_throws(function() { util.isThirdPartyChannel(channel1); },
-    NS_ERROR_INVALID_ARG);
-  do_check_throws(function() { util.isThirdPartyChannel(channel1, uri1); },
-    NS_ERROR_INVALID_ARG);
+  do_check_false(util.isThirdPartyChannel(channel1));
+  do_check_false(util.isThirdPartyChannel(channel1, uri1));
   do_check_true(util.isThirdPartyChannel(channel1, uri2));
+
   let httpchannel1 = channel1.QueryInterface(Ci.nsIHttpChannelInternal);
   httpchannel1.forceAllowThirdPartyCookie = true;
   do_check_false(util.isThirdPartyChannel(channel1));

@@ -7,6 +7,8 @@
 #include "nsSVGEffects.h"
 
 // Keep others in (case-insensitive) order:
+#include "mozilla/RestyleManagerHandle.h"
+#include "mozilla/RestyleManagerHandleInlines.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsISupportsImpl.h"
 #include "nsSVGClipPathFrame.h"
@@ -15,14 +17,10 @@
 #include "nsSVGFilterFrame.h"
 #include "nsSVGMaskFrame.h"
 #include "nsIReflowCallback.h"
-#include "RestyleManager.h"
 #include "nsCycleCollectionParticipant.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
-
-// nsSVGRenderingObserver impl
-NS_IMPL_ISUPPORTS(nsSVGRenderingObserver, nsIMutationObserver)
 
 void
 nsSVGRenderingObserver::StartListening()
@@ -115,7 +113,8 @@ nsSVGRenderingObserver::AttributeChanged(nsIDocument* aDocument,
                                          dom::Element* aElement,
                                          int32_t aNameSpaceID,
                                          nsIAtom* aAttribute,
-                                         int32_t aModType)
+                                         int32_t aModType,
+                                         const nsAttrValue* aOldValue)
 {
   // An attribute belonging to the element that we are observing *or one of its
   // descendants* has changed.
@@ -219,6 +218,8 @@ nsSVGFrameReferenceFromProperty::Get()
   return mFrame;
 }
 
+NS_IMPL_ISUPPORTS(nsSVGRenderingObserverProperty, nsIMutationObserver)
+
 void
 nsSVGRenderingObserverProperty::DoUpdate()
 {
@@ -237,7 +238,16 @@ nsSVGRenderingObserverProperty::DoUpdate()
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsSVGFilterReference)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsSVGFilterReference)
 
-NS_IMPL_CYCLE_COLLECTION(nsSVGFilterReference, mElement)
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsSVGFilterReference)
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsSVGFilterReference)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsSVGFilterReference)
+  tmp->StopListening();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mElement);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsSVGFilterReference)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsSVGIDRenderingObserver)
@@ -265,11 +275,20 @@ nsSVGFilterReference::DoUpdate()
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsSVGFilterChainObserver)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsSVGFilterChainObserver)
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsSVGFilterChainObserver)
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsSVGFilterChainObserver)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mReferences)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsSVGFilterChainObserver)
+  tmp->DetachReferences();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mReferences);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsSVGFilterChainObserver)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
-
-NS_IMPL_CYCLE_COLLECTION(nsSVGFilterChainObserver, mReferences)
 
 nsSVGFilterChainObserver::nsSVGFilterChainObserver(const nsTArray<nsStyleFilter>& aFilters,
                                                    nsIContent* aFilteredElement)
@@ -278,7 +297,7 @@ nsSVGFilterChainObserver::nsSVGFilterChainObserver(const nsTArray<nsStyleFilter>
     if (aFilters[i].GetType() != NS_STYLE_FILTER_URL)
       continue;
 
-    nsRefPtr<nsSVGFilterReference> reference =
+    RefPtr<nsSVGFilterReference> reference =
       new nsSVGFilterReference(aFilters[i].GetURL(), aFilteredElement, this);
     mReferences.AppendElement(reference);
   }
@@ -286,9 +305,7 @@ nsSVGFilterChainObserver::nsSVGFilterChainObserver(const nsTArray<nsStyleFilter>
 
 nsSVGFilterChainObserver::~nsSVGFilterChainObserver()
 {
-  for (uint32_t i = 0; i < mReferences.Length(); i++) {
-    mReferences[i]->DetachFromChainObserver();
-  }
+  DetachReferences();
 }
 
 bool
@@ -367,7 +384,7 @@ bool
 nsSVGTextPathProperty::TargetIsValid()
 {
   Element* target = GetTarget();
-  return target && target->IsSVG(nsGkAtoms::path);
+  return target && target->IsSVGElement(nsGkAtoms::path);
 }
 
 void
@@ -448,7 +465,7 @@ CreatePaintingProperty(nsIURI *aURI, nsIFrame *aFrame, bool aReferenceImage)
 
 static nsSVGRenderingObserver *
 GetEffectProperty(nsIURI *aURI, nsIFrame *aFrame,
-                  const FramePropertyDescriptor *aProperty,
+                  nsSVGEffects::ObserverPropertyDescriptor aProperty,
                   nsSVGRenderingObserver * (* aCreate)(nsIURI *, nsIFrame *, bool))
 {
   if (!aURI)
@@ -470,37 +487,36 @@ GetEffectProperty(nsIURI *aURI, nsIFrame *aFrame,
 static nsSVGFilterProperty*
 GetOrCreateFilterProperty(nsIFrame *aFrame)
 {
-  const nsStyleSVGReset* style = aFrame->StyleSVGReset();
-  if (!style->HasFilters())
+  const nsStyleEffects* effects = aFrame->StyleEffects();
+  if (!effects->HasFilters())
     return nullptr;
 
   FrameProperties props = aFrame->Properties();
-  nsSVGFilterProperty *prop =
-    static_cast<nsSVGFilterProperty*>(props.Get(nsSVGEffects::FilterProperty()));
+  nsSVGFilterProperty *prop = props.Get(nsSVGEffects::FilterProperty());
   if (prop)
     return prop;
-  prop = new nsSVGFilterProperty(style->mFilters, aFrame);
+  prop = new nsSVGFilterProperty(effects->mFilters, aFrame);
   if (!prop)
     return nullptr;
   NS_ADDREF(prop);
-  props.Set(nsSVGEffects::FilterProperty(), static_cast<nsISupports*>(prop));
+  props.Set(nsSVGEffects::FilterProperty(), prop);
   return prop;
 }
 
 nsSVGMarkerProperty *
 nsSVGEffects::GetMarkerProperty(nsIURI *aURI, nsIFrame *aFrame,
-                                const FramePropertyDescriptor *aProp)
+                                ObserverPropertyDescriptor aProp)
 {
-  NS_ABORT_IF_FALSE(aFrame->GetType() == nsGkAtoms::svgPathGeometryFrame &&
-                      static_cast<nsSVGPathGeometryElement*>(aFrame->GetContent())->IsMarkable(),
-                    "Bad frame");
+  MOZ_ASSERT(aFrame->GetType() == nsGkAtoms::svgPathGeometryFrame &&
+               static_cast<nsSVGPathGeometryElement*>(aFrame->GetContent())->IsMarkable(),
+             "Bad frame");
   return static_cast<nsSVGMarkerProperty*>(
           GetEffectProperty(aURI, aFrame, aProp, CreateMarkerProperty));
 }
 
 nsSVGTextPathProperty *
 nsSVGEffects::GetTextPathProperty(nsIURI *aURI, nsIFrame *aFrame,
-                                  const FramePropertyDescriptor *aProp)
+                                  ObserverPropertyDescriptor aProp)
 {
   return static_cast<nsSVGTextPathProperty*>(
           GetEffectProperty(aURI, aFrame, aProp, CreateTextPathProperty));
@@ -508,7 +524,7 @@ nsSVGEffects::GetTextPathProperty(nsIURI *aURI, nsIFrame *aFrame,
 
 nsSVGPaintingProperty *
 nsSVGEffects::GetPaintingProperty(nsIURI *aURI, nsIFrame *aFrame,
-                                  const FramePropertyDescriptor *aProp)
+                                  ObserverPropertyDescriptor aProp)
 {
   return static_cast<nsSVGPaintingProperty*>(
           GetEffectProperty(aURI, aFrame, aProp, CreatePaintingProperty));
@@ -516,15 +532,14 @@ nsSVGEffects::GetPaintingProperty(nsIURI *aURI, nsIFrame *aFrame,
 
 static nsSVGRenderingObserver *
 GetEffectPropertyForURI(nsIURI *aURI, nsIFrame *aFrame,
-                        const FramePropertyDescriptor *aProperty,
+                        nsSVGEffects::URIObserverHashtablePropertyDescriptor aProperty,
                         nsSVGRenderingObserver * (* aCreate)(nsIURI *, nsIFrame *, bool))
 {
   if (!aURI)
     return nullptr;
 
   FrameProperties props = aFrame->Properties();
-  nsSVGEffects::URIObserverHashtable *hashtable =
-    static_cast<nsSVGEffects::URIObserverHashtable*>(props.Get(aProperty));
+  nsSVGEffects::URIObserverHashtable *hashtable = props.Get(aProperty);
   if (!hashtable) {
     hashtable = new nsSVGEffects::URIObserverHashtable();
     props.Set(aProperty, hashtable);
@@ -541,7 +556,7 @@ GetEffectPropertyForURI(nsIURI *aURI, nsIFrame *aFrame,
 
 nsSVGPaintingProperty *
 nsSVGEffects::GetPaintingPropertyForURI(nsIURI *aURI, nsIFrame *aFrame,
-                                        const FramePropertyDescriptor *aProp)
+                                        URIObserverHashtablePropertyDescriptor aProp)
 {
   return static_cast<nsSVGPaintingProperty*>(
           GetEffectPropertyForURI(aURI, aFrame, aProp, CreatePaintingProperty));
@@ -561,20 +576,36 @@ nsSVGEffects::GetEffectProperties(nsIFrame *aFrame)
   } else {
     result.mClipPath = nullptr;
   }
-  result.mMask =
-    GetPaintingProperty(style->mMask, aFrame, MaskProperty());
+
+  // FIXME: Bug 1228280.
+  // Before fixing bug 1228280, we support only single svg mask as before.
+  MOZ_ASSERT(style->mMask.mImageCount > 0);
+  nsCOMPtr<nsIURI> uri = style->mMask.mLayers[0].mSourceURI;
+  result.mMask = uri ? GetPaintingProperty(uri, aFrame, MaskProperty()) :
+                         nullptr;
+
   return result;
 }
 
 nsSVGPaintServerFrame *
 nsSVGEffects::GetPaintServer(nsIFrame *aTargetFrame, const nsStyleSVGPaint *aPaint,
-                             const FramePropertyDescriptor *aType)
+                             ObserverPropertyDescriptor aType)
 {
   if (aPaint->mType != eStyleSVGPaintType_Server)
     return nullptr;
 
-  nsIFrame *frame = aTargetFrame->GetContent()->IsNodeOfType(nsINode::eTEXT) ?
-                      aTargetFrame->GetParent() : aTargetFrame;
+  // If we're looking at a frame within SVG text, then we need to look up
+  // to find the right frame to get the painting property off.  We should at
+  // least look up past a text frame, and if the text frame's parent is the
+  // anonymous block frame, then we look up to its parent (the SVGTextFrame).
+  nsIFrame* frame = aTargetFrame;
+  if (frame->GetContent()->IsNodeOfType(nsINode::eTEXT)) {
+    frame = frame->GetParent();
+    nsIFrame* grandparent = frame->GetParent();
+    if (grandparent && grandparent->GetType() == nsGkAtoms::svgTextFrame) {
+      frame = grandparent;
+    }
+  }
   nsSVGPaintingProperty *property =
     nsSVGEffects::GetPaintingProperty(aPaint->mPaint.mPaintServer, frame, aType);
   if (!property)
@@ -653,35 +684,11 @@ nsSVGEffects::GetFilterProperty(nsIFrame *aFrame)
 {
   NS_ASSERTION(!aFrame->GetPrevContinuation(), "aFrame should be first continuation");
 
-  if (!aFrame->StyleSVGReset()->HasFilters())
+  if (!aFrame->StyleEffects()->HasFilters())
     return nullptr;
 
   return static_cast<nsSVGFilterProperty *>
     (aFrame->Properties().Get(FilterProperty()));
-}
-
-static PLDHashOperator
-GatherEnumerator(nsPtrHashKey<nsSVGRenderingObserver>* aEntry, void* aArg)
-{
-  nsTArray<nsSVGRenderingObserver*>* array =
-    static_cast<nsTArray<nsSVGRenderingObserver*>*>(aArg);
-  array->AppendElement(aEntry->GetKey());
-
-  return PL_DHASH_REMOVE;
-}
-
-static PLDHashOperator
-GatherEnumeratorForReflow(nsPtrHashKey<nsSVGRenderingObserver>* aEntry, void* aArg)
-{
-  if (!aEntry->GetKey()->ObservesReflow()) {
-    return PL_DHASH_NEXT;
-  }
-
-  nsTArray<nsSVGRenderingObserver*>* array =
-    static_cast<nsTArray<nsSVGRenderingObserver*>*>(aArg);
-  array->AppendElement(aEntry->GetKey());
-
-  return PL_DHASH_REMOVE;
 }
 
 void
@@ -690,10 +697,12 @@ nsSVGRenderingObserverList::InvalidateAll()
   if (mObservers.Count() == 0)
     return;
 
-  nsAutoTArray<nsSVGRenderingObserver*,10> observers;
+  AutoTArray<nsSVGRenderingObserver*,10> observers;
 
-  // The PL_DHASH_REMOVE in GatherEnumerator drops all our observers here:
-  mObservers.EnumerateEntries(GatherEnumerator, &observers);
+  for (auto it = mObservers.Iter(); !it.Done(); it.Next()) {
+    observers.AppendElement(it.Get()->GetKey());
+  }
+  mObservers.Clear();
 
   for (uint32_t i = 0; i < observers.Length(); ++i) {
     observers[i]->InvalidateViaReferencedElement();
@@ -706,10 +715,15 @@ nsSVGRenderingObserverList::InvalidateAllForReflow()
   if (mObservers.Count() == 0)
     return;
 
-  nsAutoTArray<nsSVGRenderingObserver*,10> observers;
+  AutoTArray<nsSVGRenderingObserver*,10> observers;
 
-  // The PL_DHASH_REMOVE in GatherEnumerator drops all our observers here:
-  mObservers.EnumerateEntries(GatherEnumeratorForReflow, &observers);
+  for (auto it = mObservers.Iter(); !it.Done(); it.Next()) {
+    nsSVGRenderingObserver* obs = it.Get()->GetKey();
+    if (obs->ObservesReflow()) {
+      observers.AppendElement(obs);
+      it.Remove();
+    }
+  }
 
   for (uint32_t i = 0; i < observers.Length(); ++i) {
     observers[i]->InvalidateViaReferencedElement();
@@ -719,10 +733,12 @@ nsSVGRenderingObserverList::InvalidateAllForReflow()
 void
 nsSVGRenderingObserverList::RemoveAll()
 {
-  nsAutoTArray<nsSVGRenderingObserver*,10> observers;
+  AutoTArray<nsSVGRenderingObserver*,10> observers;
 
-  // The PL_DHASH_REMOVE in GatherEnumerator drops all our observers here:
-  mObservers.EnumerateEntries(GatherEnumerator, &observers);
+  for (auto it = mObservers.Iter(); !it.Done(); it.Next()) {
+    observers.AppendElement(it.Get()->GetKey());
+  }
+  mObservers.Clear();
 
   // Our list is now cleared.  We need to notify the observers we've removed,
   // so they can update their state & remove themselves as mutation-observers.
@@ -775,11 +791,15 @@ nsSVGEffects::InvalidateRenderingObservers(nsIFrame *aFrame)
 {
   NS_ASSERTION(!aFrame->GetPrevContinuation(), "aFrame must be first continuation");
 
-  if (!aFrame->GetContent()->IsElement())
+  nsIContent* content = aFrame->GetContent();
+  if (!content || !content->IsElement())
     return;
 
+  // If the rendering has changed, the bounds may well have changed too:
+  aFrame->Properties().Delete(nsSVGUtils::ObjectBoundingBoxProperty());
+
   nsSVGRenderingObserverList *observerList =
-    GetObserverList(aFrame->GetContent()->AsElement());
+    GetObserverList(content->AsElement());
   if (observerList) {
     observerList->InvalidateAll();
     return;
@@ -802,6 +822,12 @@ nsSVGEffects::InvalidateRenderingObservers(nsIFrame *aFrame)
 void
 nsSVGEffects::InvalidateDirectRenderingObservers(Element *aElement, uint32_t aFlags /* = 0 */)
 {
+  nsIFrame* frame = aElement->GetPrimaryFrame();
+  if (frame) {
+    // If the rendering has changed, the bounds may well have changed too:
+    frame->Properties().Delete(nsSVGUtils::ObjectBoundingBoxProperty());
+  }
+
   if (aElement->HasRenderingObservers()) {
     nsSVGRenderingObserverList *observerList = GetObserverList(aElement);
     if (observerList) {
@@ -817,7 +843,8 @@ nsSVGEffects::InvalidateDirectRenderingObservers(Element *aElement, uint32_t aFl
 void
 nsSVGEffects::InvalidateDirectRenderingObservers(nsIFrame *aFrame, uint32_t aFlags /* = 0 */)
 {
-  if (aFrame->GetContent() && aFrame->GetContent()->IsElement()) {
-    InvalidateDirectRenderingObservers(aFrame->GetContent()->AsElement(), aFlags);
+  nsIContent* content = aFrame->GetContent();
+  if (content && content->IsElement()) {
+    InvalidateDirectRenderingObservers(content->AsElement(), aFlags);
   }
 }

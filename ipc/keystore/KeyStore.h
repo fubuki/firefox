@@ -11,8 +11,10 @@
 #include <sys/un.h>
 #include "cert.h"
 #include "mozilla/ipc/ListenSocket.h"
+#include "mozilla/ipc/ListenSocketConsumer.h"
 #include "mozilla/ipc/StreamSocket.h"
-#include "mozilla/ipc/UnixSocketConnector.h"
+#include "mozilla/ipc/StreamSocketConsumer.h"
+#include "nsNSSShutDown.h"
 
 namespace mozilla {
 namespace ipc {
@@ -36,10 +38,16 @@ enum ResponseCode {
 
 void FormatCaData(const uint8_t *aCaData, int aCaDataLength,
                   const char *aName, const uint8_t **aFormatData,
-                  int *aFormatDataLength);
+                  size_t *aFormatDataLength);
 
 ResponseCode getCertificate(const char *aCertName, const uint8_t **aCertData,
-                            int *aCertDataLength);
+                            size_t *aCertDataLength);
+ResponseCode getPrivateKey(const char *aKeyName, const uint8_t **aKeyData,
+                           size_t *aKeyDataLength);
+ResponseCode getPublicKey(const char *aKeyName, const uint8_t **aKeyData,
+                          size_t *aKeyDataLength);
+ResponseCode signData(const char *aKeyName, const uint8_t *data, size_t length,
+                      uint8_t **out, size_t *outLength);
 
 bool checkPermission(uid_t uid);
 
@@ -72,27 +80,10 @@ typedef enum {
   STATE_PROCESSING
 } ProtocolHandlerState;
 
-class KeyStoreConnector : public mozilla::ipc::UnixSocketConnector
-{
-public:
-  KeyStoreConnector()
-  {}
-
-  virtual ~KeyStoreConnector()
-  {}
-
-  virtual int Create();
-  virtual bool CreateAddr(bool aIsServer,
-                          socklen_t& aAddrSize,
-                          sockaddr_any& aAddr,
-                          const char* aAddress);
-  virtual bool SetUp(int aFd);
-  virtual bool SetUpListenSocket(int aFd);
-  virtual void GetSocketAddr(const sockaddr_any& aAddr,
-                             nsAString& aAddrStr);
-};
-
-class KeyStore MOZ_FINAL
+class KeyStore final
+  : public StreamSocketConsumer
+  , public ListenSocketConsumer
+  , public nsNSSShutDownObject
 {
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(KeyStore)
@@ -101,60 +92,16 @@ public:
 
   void Shutdown();
 
+protected:
+  virtual void virtualDestroyNSSReference() {}
+
 private:
   enum SocketType {
     LISTEN_SOCKET,
     STREAM_SOCKET
   };
 
-  class ListenSocket MOZ_FINAL : public mozilla::ipc::ListenSocket
-  {
-  public:
-    ListenSocket(KeyStore* aKeyStore);
-    ListenSocket();
-
-    // SocketBase
-    //
-
-    void OnConnectSuccess() MOZ_OVERRIDE;
-    void OnConnectError() MOZ_OVERRIDE;
-    void OnDisconnect() MOZ_OVERRIDE;
-
-  private:
-    KeyStore* mKeyStore;
-  };
-
-  class StreamSocket MOZ_FINAL : public mozilla::ipc::StreamSocket
-  {
-  public:
-    StreamSocket(KeyStore* aKeyStore);
-    ~StreamSocket();
-
-    // SocketConsumerBase
-    //
-
-    void OnConnectSuccess() MOZ_OVERRIDE;
-    void OnConnectError() MOZ_OVERRIDE;
-    void OnDisconnect() MOZ_OVERRIDE;
-
-    void ReceiveSocketData(nsAutoPtr<UnixSocketRawData>& aMessage) MOZ_OVERRIDE;
-
-    // ConnectionOrientedSocket
-    //
-
-    ConnectionOrientedSocketIO* GetIO() MOZ_OVERRIDE;
-
-  private:
-    KeyStore* mKeyStore;
-  };
-
   ~KeyStore();
-
-  void ReceiveSocketData(nsAutoPtr<UnixSocketRawData>& aMessage);
-
-  void OnConnectSuccess(enum SocketType aSocketType);
-  void OnConnectError(enum SocketType aSocketType);
-  void OnDisconnect(enum SocketType aSocketType);
 
   struct {
     ProtocolHandlerState          state;
@@ -166,17 +113,26 @@ private:
   void ResetHandlerInfo();
   void Listen();
 
-  bool CheckSize(UnixSocketRawData *aMessage, size_t aExpectSize);
-  ResponseCode ReadCommand(UnixSocketRawData *aMessage);
-  ResponseCode ReadLength(UnixSocketRawData *aMessage);
-  ResponseCode ReadData(UnixSocketRawData *aMessage);
+  bool CheckSize(UnixSocketBuffer *aMessage, size_t aExpectSize);
+  ResponseCode ReadCommand(UnixSocketBuffer *aMessage);
+  ResponseCode ReadLength(UnixSocketBuffer *aMessage);
+  ResponseCode ReadData(UnixSocketBuffer *aMessage);
   void SendResponse(ResponseCode response);
   void SendData(const uint8_t *data, int length);
 
+  // Methods for |StreamSocketConsumer|
+  //
+
+  void ReceiveSocketData(int aIndex,
+                         UniquePtr<UnixSocketBuffer>& aMessage) override;
+  void OnConnectSuccess(int aIndex) override;
+  void OnConnectError(int aIndex) override;
+  void OnDisconnect(int aIndex) override;
+
   bool mShutdown;
 
-  nsRefPtr<ListenSocket> mListenSocket;
-  nsRefPtr<StreamSocket> mStreamSocket;
+  RefPtr<ListenSocket> mListenSocket;
+  RefPtr<StreamSocket> mStreamSocket;
 };
 
 } // namespace ipc

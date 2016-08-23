@@ -12,7 +12,7 @@ outputDir.initWithFile(workingDir);
 outputDir.append(outputName);
 
 if (!outputDir.exists()) {
-  outputDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0777);
+  outputDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o777);
 } else if (!outputDir.isDirectory()) {
   do_throw(outputName + " is not a directory?")
 }
@@ -41,15 +41,15 @@ function testStringEncode()
 function testToJSON() {
   var obj1 = {a:1};
   var obj2 = {foo:"bar"};
-  do_check_eq(nativeJSON.encode({toJSON: function() obj1}), '{"a":1}');
-  do_check_eq(nativeJSON.encode({toJSON: function() obj2}), '{"foo":"bar"}');
+  do_check_eq(nativeJSON.encode({toJSON: () => obj1}), '{"a":1}');
+  do_check_eq(nativeJSON.encode({toJSON: () => obj2}), '{"foo":"bar"}');
   
-  do_check_eq(nativeJSON.encode({toJSON: function() null}), null);
-  do_check_eq(nativeJSON.encode({toJSON: function() ""}), null);
-  do_check_eq(nativeJSON.encode({toJSON: function() undefined }), null);
-  do_check_eq(nativeJSON.encode({toJSON: function() 5}), null);
-  do_check_eq(nativeJSON.encode({toJSON: function() function(){}}), null);
-  do_check_eq(nativeJSON.encode({toJSON: function() dump}), null);
+  do_check_eq(nativeJSON.encode({toJSON: () => null}), null);
+  do_check_eq(nativeJSON.encode({toJSON: () => ""}), null);
+  do_check_eq(nativeJSON.encode({toJSON: () => undefined }), null);
+  do_check_eq(nativeJSON.encode({toJSON: () => 5}), null);
+  do_check_eq(nativeJSON.encode({toJSON: () => function(){}}), null);
+  do_check_eq(nativeJSON.encode({toJSON: () => dump}), null);
 }
 
 function testThrowingToJSON() {
@@ -83,10 +83,10 @@ function testOutputStreams() {
     var jsonFile = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
     jsonFile.initWithFile(outputDir);
     jsonFile.append("test.json");
-    jsonFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0600);
+    jsonFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0o600);
     var stream = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(Ci.nsIFileOutputStream);
     try {
-      stream.init(jsonFile, 0x04 | 0x08 | 0x20, 0600, 0); // write, create, truncate
+      stream.init(jsonFile, 0x04 | 0x08 | 0x20, 0o600, 0); // write, create, truncate
       nativeJSON.encodeToStream(stream, charset, writeBOM, obj);
     } finally {
       stream.close();

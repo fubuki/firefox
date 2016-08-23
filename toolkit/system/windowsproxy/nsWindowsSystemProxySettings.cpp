@@ -13,11 +13,12 @@
 #include "nsIServiceManager.h"
 #include "mozilla/ModuleUtils.h"
 #include "nsPrintfCString.h"
-#include "nsNetUtil.h"
+#include "nsNetCID.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIURI.h"
+#include "GeckoProfiler.h"
 
-class nsWindowsSystemProxySettings MOZ_FINAL : public nsISystemProxySettings
+class nsWindowsSystemProxySettings final : public nsISystemProxySettings
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
@@ -203,6 +204,7 @@ nsWindowsSystemProxySettings::PatternMatch(const nsACString& aHost,
 nsresult
 nsWindowsSystemProxySettings::GetPACURI(nsACString& aResult)
 {
+    PROFILER_LABEL_FUNC(js::ProfileEntry::Category::STORAGE);
     nsresult rv;
     uint32_t flags = 0;
     nsAutoString buf;

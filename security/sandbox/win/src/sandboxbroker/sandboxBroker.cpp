@@ -5,6 +5,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "sandboxBroker.h"
+
+#include "base/win/windows_version.h"
 #include "sandbox/win/src/sandbox.h"
 #include "sandbox/win/src/sandbox_factory.h"
 #include "sandbox/win/src/security_level.h"
@@ -15,21 +17,30 @@ namespace mozilla
 
 sandbox::BrokerServices *SandboxBroker::sBrokerService = nullptr;
 
-SandboxBroker::SandboxBroker()
+/* static */
+bool
+SandboxBroker::Initialize()
 {
-  // XXX: This is not thread-safe! Two threads could simultaneously try
-  // to set `sBrokerService`
+  sBrokerService = sandbox::SandboxFactory::GetBrokerServices();
   if (!sBrokerService) {
-    sBrokerService = sandbox::SandboxFactory::GetBrokerServices();
-    if (sBrokerService) {
-      sandbox::ResultCode result = sBrokerService->Init();
-      if (result != sandbox::SBOX_ALL_OK) {
-        sBrokerService = nullptr;
-      }
-    }
+    return false;
   }
 
-  mPolicy = sBrokerService->CreatePolicy();
+  if (sBrokerService->Init() != sandbox::SBOX_ALL_OK) {
+    sBrokerService = nullptr;
+    return false;
+  }
+
+  return true;
+}
+
+SandboxBroker::SandboxBroker()
+{
+  if (sBrokerService) {
+    mPolicy = sBrokerService->CreatePolicy();
+  } else {
+    mPolicy = nullptr;
+  }
 }
 
 bool
@@ -51,10 +62,28 @@ SandboxBroker::LaunchApp(const wchar_t *aPath,
     mozilla::sandboxing::ApplyLoggingPolicy(*mPolicy);
   }
 
+#if defined(DEBUG)
+  // Allow write access to TEMP directory in debug builds for logging purposes.
+  // The path from GetTempPathW can have a length up to MAX_PATH + 1, including
+  // the null, so we need MAX_PATH + 2, so we can add an * to the end.
+  wchar_t tempPath[MAX_PATH + 2];
+  uint32_t pathLen = ::GetTempPathW(MAX_PATH + 1, tempPath);
+  if (pathLen > 0) {
+    // GetTempPath path ends with \ and returns the length without the null.
+    tempPath[pathLen] = L'*';
+    tempPath[pathLen + 1] = L'\0';
+    mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                     sandbox::TargetPolicy::FILES_ALLOW_ANY, tempPath);
+  }
+#endif
+
   // Ceate the sandboxed process
-  PROCESS_INFORMATION targetInfo;
+  PROCESS_INFORMATION targetInfo = {0};
   sandbox::ResultCode result;
   result = sBrokerService->SpawnTarget(aPath, aArguments, mPolicy, &targetInfo);
+  if (sandbox::SBOX_ALL_OK != result) {
+    return false;
+  }
 
   // The sandboxed process is started in a suspended state, resume it now that
   // we've set things up.
@@ -69,38 +98,81 @@ SandboxBroker::LaunchApp(const wchar_t *aPath,
 
 #if defined(MOZ_CONTENT_SANDBOX)
 bool
-SandboxBroker::SetSecurityLevelForContentProcess(bool aMoreStrict)
+SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel)
 {
   if (!mPolicy) {
     return false;
   }
 
-  sandbox::ResultCode result;
-  bool ret;
-  if (aMoreStrict) {
-    result = mPolicy->SetJobLevel(sandbox::JOB_INTERACTIVE, 0);
-    ret = (sandbox::SBOX_ALL_OK == result);
+  sandbox::JobLevel jobLevel;
+  sandbox::TokenLevel accessTokenLevel;
+  sandbox::IntegrityLevel initialIntegrityLevel;
+  sandbox::IntegrityLevel delayedIntegrityLevel;
 
-    result = mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
-                                    sandbox::USER_INTERACTIVE);
-    ret = ret && (sandbox::SBOX_ALL_OK == result);
+  // The setting of these levels is pretty arbitrary, but they are a useful (if
+  // crude) tool while we are tightening the policy. Gaps are left to try and
+  // avoid changing their meaning.
+  if (aSandboxLevel >= 20) {
+    jobLevel = sandbox::JOB_LOCKDOWN;
+    accessTokenLevel = sandbox::USER_LOCKDOWN;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_UNTRUSTED;
+  } else if (aSandboxLevel >= 10) {
+    jobLevel = sandbox::JOB_RESTRICTED;
+    accessTokenLevel = sandbox::USER_LIMITED;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+  } else if (aSandboxLevel == 2) {
+    jobLevel = sandbox::JOB_INTERACTIVE;
+    accessTokenLevel = sandbox::USER_INTERACTIVE;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+  } else if (aSandboxLevel == 1) {
+    jobLevel = sandbox::JOB_NONE;
+    accessTokenLevel = sandbox::USER_NON_ADMIN;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+  } else {
+    jobLevel = sandbox::JOB_NONE;
+    accessTokenLevel = sandbox::USER_NON_ADMIN;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_MEDIUM;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_MEDIUM;
+  }
 
-    // If the delayed integrity level is lowered then SetUpSandboxEnvironment and
-    // CleanUpSandboxEnvironment in ContentChild should be changed or removed.
-    result = mPolicy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_LOW);
-    ret = ret && (sandbox::SBOX_ALL_OK == result);
+  sandbox::ResultCode result = mPolicy->SetJobLevel(jobLevel,
+                                                    0 /* ui_exceptions */);
+  bool ret = (sandbox::SBOX_ALL_OK == result);
 
+  result = mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                                  accessTokenLevel);
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  result = mPolicy->SetIntegrityLevel(initialIntegrityLevel);
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+  result = mPolicy->SetDelayedIntegrityLevel(delayedIntegrityLevel);
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  if (aSandboxLevel > 2) {
     result = mPolicy->SetAlternateDesktop(true);
     ret = ret && (sandbox::SBOX_ALL_OK == result);
-  } else {
-    result = mPolicy->SetJobLevel(sandbox::JOB_NONE, 0);
-    ret = (sandbox::SBOX_ALL_OK == result);
+  }
 
-    result = mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
-                                    sandbox::USER_NON_ADMIN);
+  if (aSandboxLevel >= 1) {
+    sandbox::MitigationFlags mitigations =
+      sandbox::MITIGATION_BOTTOM_UP_ASLR |
+      sandbox::MITIGATION_HEAP_TERMINATE |
+      sandbox::MITIGATION_SEHOP |
+      sandbox::MITIGATION_DEP_NO_ATL_THUNK |
+      sandbox::MITIGATION_DEP;
+
+    result = mPolicy->SetProcessMitigations(mitigations);
     ret = ret && (sandbox::SBOX_ALL_OK == result);
 
-    result = mPolicy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_MEDIUM);
+    mitigations =
+      sandbox::MITIGATION_STRICT_HANDLE_CHECKS |
+      sandbox::MITIGATION_DLL_SEARCH_ORDER;
+
+    result = mPolicy->SetDelayedProcessMitigations(mitigations);
     ret = ret && (sandbox::SBOX_ALL_OK == result);
   }
 
@@ -110,6 +182,26 @@ SandboxBroker::SetSecurityLevelForContentProcess(bool aMoreStrict)
   result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                             sandbox::TargetPolicy::FILES_ALLOW_ANY,
                             L"\\??\\pipe\\chrome.*");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // Add the policy for the client side of the crash server pipe.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                            sandbox::TargetPolicy::FILES_ALLOW_ANY,
+                            L"\\??\\pipe\\gecko-crash-server-pipe.*");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // The content process needs to be able to duplicate named pipes back to the
+  // broker process, which are File type handles.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_HANDLES,
+                            sandbox::TargetPolicy::HANDLES_DUP_BROKER,
+                            L"File");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // The content process needs to be able to duplicate shared memory to the
+  // broker process, which are Section type handles.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_HANDLES,
+                            sandbox::TargetPolicy::HANDLES_DUP_BROKER,
+                            L"Section");
   ret = ret && (sandbox::SBOX_ALL_OK == result);
 
   return ret;
@@ -117,21 +209,55 @@ SandboxBroker::SetSecurityLevelForContentProcess(bool aMoreStrict)
 #endif
 
 bool
-SandboxBroker::SetSecurityLevelForPluginProcess()
+SandboxBroker::SetSecurityLevelForPluginProcess(int32_t aSandboxLevel)
 {
   if (!mPolicy) {
     return false;
   }
 
-  auto result = mPolicy->SetJobLevel(sandbox::JOB_NONE,
-                                     0 /* ui_exceptions */);
+  sandbox::JobLevel jobLevel;
+  sandbox::TokenLevel accessTokenLevel;
+  sandbox::IntegrityLevel initialIntegrityLevel;
+  sandbox::IntegrityLevel delayedIntegrityLevel;
+
+  if (aSandboxLevel > 2) {
+    jobLevel = sandbox::JOB_UNPROTECTED;
+    accessTokenLevel = sandbox::USER_LIMITED;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+  } else if (aSandboxLevel == 2) {
+    jobLevel = sandbox::JOB_UNPROTECTED;
+    accessTokenLevel = sandbox::USER_INTERACTIVE;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+  } else {
+    jobLevel = sandbox::JOB_NONE;
+    accessTokenLevel = sandbox::USER_NON_ADMIN;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_MEDIUM;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_MEDIUM;
+  }
+
+  sandbox::ResultCode result = mPolicy->SetJobLevel(jobLevel,
+                                                    0 /* ui_exceptions */);
   bool ret = (sandbox::SBOX_ALL_OK == result);
 
   result = mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
-                                  sandbox::USER_NON_ADMIN);
+                                  accessTokenLevel);
   ret = ret && (sandbox::SBOX_ALL_OK == result);
 
-  result = mPolicy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_MEDIUM);
+  result = mPolicy->SetIntegrityLevel(initialIntegrityLevel);
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+  result = mPolicy->SetDelayedIntegrityLevel(delayedIntegrityLevel);
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  sandbox::MitigationFlags mitigations =
+    sandbox::MITIGATION_BOTTOM_UP_ASLR |
+    sandbox::MITIGATION_HEAP_TERMINATE |
+    sandbox::MITIGATION_SEHOP |
+    sandbox::MITIGATION_DEP_NO_ATL_THUNK |
+    sandbox::MITIGATION_DEP;
+
+  result = mPolicy->SetProcessMitigations(mitigations);
   ret = ret && (sandbox::SBOX_ALL_OK == result);
 
   // Add the policy for the client side of a pipe. It is just a file
@@ -140,6 +266,31 @@ SandboxBroker::SetSecurityLevelForPluginProcess()
   result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                             sandbox::TargetPolicy::FILES_ALLOW_ANY,
                             L"\\??\\pipe\\chrome.*");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // Add the policy for the client side of the crash server pipe.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                            sandbox::TargetPolicy::FILES_ALLOW_ANY,
+                            L"\\??\\pipe\\gecko-crash-server-pipe.*");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // The NPAPI process needs to be able to duplicate shared memory to the
+  // content process and broker process, which are Section type handles.
+  // Content and broker are for e10s and non-e10s cases.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_HANDLES,
+                            sandbox::TargetPolicy::HANDLES_DUP_ANY,
+                            L"Section");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_HANDLES,
+                            sandbox::TargetPolicy::HANDLES_DUP_BROKER,
+                            L"Section");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // The following is required for the Java plugin.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                            sandbox::TargetPolicy::FILES_ALLOW_ANY,
+                            L"\\??\\pipe\\jpi2_pid*_pipe*");
   ret = ret && (sandbox::SBOX_ALL_OK == result);
 
   return ret;
@@ -162,7 +313,7 @@ SandboxBroker::SetSecurityLevelForIPDLUnitTestProcess()
 }
 
 bool
-SandboxBroker::SetSecurityLevelForGMPlugin()
+SandboxBroker::SetSecurityLevelForGMPlugin(SandboxLevel aLevel)
 {
   if (!mPolicy) {
     return false;
@@ -170,9 +321,10 @@ SandboxBroker::SetSecurityLevelForGMPlugin()
 
   auto result = mPolicy->SetJobLevel(sandbox::JOB_LOCKDOWN, 0);
   bool ret = (sandbox::SBOX_ALL_OK == result);
-  result =
-    mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
-                           sandbox::USER_LOCKDOWN);
+
+  auto level = (aLevel == Restricted) ?
+    sandbox::USER_RESTRICTED : sandbox::USER_LOCKDOWN;
+  result = mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS, level);
   ret = ret && (sandbox::SBOX_ALL_OK == result);
 
   result = mPolicy->SetAlternateDesktop(true);
@@ -208,6 +360,12 @@ SandboxBroker::SetSecurityLevelForGMPlugin()
   result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                             sandbox::TargetPolicy::FILES_ALLOW_ANY,
                             L"\\??\\pipe\\chrome.*");
+  ret = ret && (sandbox::SBOX_ALL_OK == result);
+
+  // Add the policy for the client side of the crash server pipe.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                            sandbox::TargetPolicy::FILES_ALLOW_ANY,
+                            L"\\??\\pipe\\gecko-crash-server-pipe.*");
   ret = ret && (sandbox::SBOX_ALL_OK == result);
 
 #ifdef DEBUG
@@ -277,6 +435,10 @@ SandboxBroker::SetSecurityLevelForGMPlugin()
 bool
 SandboxBroker::AllowReadFile(wchar_t const *file)
 {
+  if (!mPolicy) {
+    return false;
+  }
+
   auto result =
     mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                      sandbox::TargetPolicy::FILES_ALLOW_READONLY,
@@ -287,6 +449,10 @@ SandboxBroker::AllowReadFile(wchar_t const *file)
 bool
 SandboxBroker::AllowReadWriteFile(wchar_t const *file)
 {
+  if (!mPolicy) {
+    return false;
+  }
+
   auto result =
     mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                      sandbox::TargetPolicy::FILES_ALLOW_ANY,
@@ -297,10 +463,25 @@ SandboxBroker::AllowReadWriteFile(wchar_t const *file)
 bool
 SandboxBroker::AllowDirectory(wchar_t const *dir)
 {
+  if (!mPolicy) {
+    return false;
+  }
+
   auto result =
     mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                      sandbox::TargetPolicy::FILES_ALLOW_DIR_ANY,
                      dir);
+  return (sandbox::SBOX_ALL_OK == result);
+}
+
+bool
+SandboxBroker::AddTargetPeer(HANDLE aPeerProcess)
+{
+  if (!sBrokerService) {
+    return false;
+  }
+
+  sandbox::ResultCode result = sBrokerService->AddTargetPeer(aPeerProcess);
   return (sandbox::SBOX_ALL_OK == result);
 }
 

@@ -18,14 +18,18 @@ namespace mozilla {
  * input --- handling any number of audio tracks and handling blocking of
  * the input MediaStream.
  */
-class AudioNodeExternalInputStream : public AudioNodeStream {
+class AudioNodeExternalInputStream final : public AudioNodeStream
+{
 public:
-  AudioNodeExternalInputStream(AudioNodeEngine* aEngine, TrackRate aSampleRate);
+  static already_AddRefed<AudioNodeExternalInputStream>
+  Create(MediaStreamGraph* aGraph, AudioNodeEngine* aEngine);
+
 protected:
+  AudioNodeExternalInputStream(AudioNodeEngine* aEngine, TrackRate aSampleRate);
   ~AudioNodeExternalInputStream();
 
 public:
-  virtual void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) MOZ_OVERRIDE;
+  void ProcessInput(GraphTime aFrom, GraphTime aTo, uint32_t aFlags) override;
 
 private:
   /**
@@ -36,6 +40,6 @@ private:
   bool IsEnabled();
 };
 
-}
+} // namespace mozilla
 
 #endif /* MOZILLA_AUDIONODESTREAM_H_ */

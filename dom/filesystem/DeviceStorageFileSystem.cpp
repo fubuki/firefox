@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,28 +16,28 @@
 #include "nsDeviceStorage.h"
 #include "nsIFile.h"
 #include "nsPIDOMWindow.h"
+#include "nsGlobalWindow.h"
 
 namespace mozilla {
 namespace dom {
 
-DeviceStorageFileSystem::DeviceStorageFileSystem(
-  const nsAString& aStorageType,
-  const nsAString& aStorageName)
-  : mDeviceStorage(nullptr)
+DeviceStorageFileSystem::DeviceStorageFileSystem(const nsAString& aStorageType,
+                                                 const nsAString& aStorageName)
+  : mStorageType(aStorageType)
+  , mStorageName(aStorageName)
+  , mWindowId(0)
 {
-  MOZ_ASSERT(NS_IsMainThread(), "Only call on main thread!");
+  mPermissionCheckType = ePermissionCheckByTestingPref;
 
-  mStorageType = aStorageType;
-  mStorageName = aStorageName;
-
-  // Generate the string representation of the file system.
-  mString.AppendLiteral("devicestorage-");
-  mString.Append(mStorageType);
-  mString.Append('-');
-  mString.Append(mStorageName);
-
-  mIsTesting =
-    mozilla::Preferences::GetBool("device.storage.prompt.testing", false);
+  if (NS_IsMainThread()) {
+    if (mozilla::Preferences::GetBool("device.storage.prompt.testing", false)) {
+      mPermissionCheckType = ePermissionCheckNotRequired;
+    } else {
+      mPermissionCheckType = ePermissionCheckRequired;
+    }
+  } else {
+    AssertIsOnBackgroundThread();
+  }
 
   // Get the permission name required to access the file system.
   nsresult rv =
@@ -45,112 +45,120 @@ DeviceStorageFileSystem::DeviceStorageFileSystem(
   NS_WARN_IF(NS_FAILED(rv));
 
   // Get the local path of the file system root.
-  // Since the child process is not allowed to access the file system, we only
-  // do this from the parent process.
-  if (!FileSystemUtils::IsParentProcess()) {
-    return;
-  }
   nsCOMPtr<nsIFile> rootFile;
   DeviceStorageFile::GetRootDirectoryForType(aStorageType,
                                              aStorageName,
                                              getter_AddRefs(rootFile));
 
-  NS_WARN_IF(!rootFile || NS_FAILED(rootFile->GetPath(mLocalRootPath)));
-  FileSystemUtils::LocalPathToNormalizedPath(mLocalRootPath,
-    mNormalizedLocalRootPath);
+  NS_WARN_IF(!rootFile || NS_FAILED(rootFile->GetPath(mLocalOrDeviceStorageRootPath)));
+
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
 
   // DeviceStorageTypeChecker is a singleton object and must be initialized on
   // the main thread. We initialize it here so that we can use it on the worker
   // thread.
-  DebugOnly<DeviceStorageTypeChecker*> typeChecker
-    = DeviceStorageTypeChecker::CreateOrGet();
-  MOZ_ASSERT(typeChecker);
+  if (NS_IsMainThread()) {
+    DebugOnly<DeviceStorageTypeChecker*> typeChecker =
+      DeviceStorageTypeChecker::CreateOrGet();
+    MOZ_ASSERT(typeChecker);
+  }
 }
 
 DeviceStorageFileSystem::~DeviceStorageFileSystem()
 {
+  AssertIsOnOwningThread();
+}
+
+already_AddRefed<FileSystemBase>
+DeviceStorageFileSystem::Clone()
+{
+  AssertIsOnOwningThread();
+
+  RefPtr<DeviceStorageFileSystem> fs =
+    new DeviceStorageFileSystem(mStorageType, mStorageName);
+
+  fs->mWindowId = mWindowId;
+
+  return fs.forget();
 }
 
 void
 DeviceStorageFileSystem::Init(nsDOMDeviceStorage* aDeviceStorage)
 {
   MOZ_ASSERT(NS_IsMainThread(), "Only call on main thread!");
+  AssertIsOnOwningThread();
   MOZ_ASSERT(aDeviceStorage);
-  mDeviceStorage = aDeviceStorage;
+
+  nsCOMPtr<nsPIDOMWindowInner> window = aDeviceStorage->GetOwner();
+  MOZ_ASSERT(window->IsInnerWindow());
+  mWindowId = window->WindowID();
 }
 
 void
 DeviceStorageFileSystem::Shutdown()
 {
-  MOZ_ASSERT(NS_IsMainThread(), "Only call on main thread!");
-  mDeviceStorage = nullptr;
+  AssertIsOnOwningThread();
   mShutdown = true;
 }
 
-nsPIDOMWindow*
-DeviceStorageFileSystem::GetWindow() const
+nsISupports*
+DeviceStorageFileSystem::GetParentObject() const
 {
   MOZ_ASSERT(NS_IsMainThread(), "Only call on main thread!");
-  if (!mDeviceStorage) {
-    return nullptr;
-  }
-  return mDeviceStorage->GetOwner();
+  AssertIsOnOwningThread();
+
+  nsGlobalWindow* window = nsGlobalWindow::GetInnerWindowWithId(mWindowId);
+  MOZ_ASSERT_IF(!mShutdown, window);
+  return window ? window->AsInner() : nullptr;
 }
 
-already_AddRefed<nsIFile>
-DeviceStorageFileSystem::GetLocalFile(const nsAString& aRealPath) const
+void
+DeviceStorageFileSystem::GetDirectoryName(nsIFile* aFile, nsAString& aRetval,
+                                          ErrorResult& aRv) const
 {
-  MOZ_ASSERT(FileSystemUtils::IsParentProcess(),
-             "Should be on parent process!");
-  nsAutoString localPath;
-  FileSystemUtils::NormalizedPathToLocalPath(aRealPath, localPath);
-  localPath = mLocalRootPath + localPath;
-  nsCOMPtr<nsIFile> file;
-  nsresult rv = NS_NewLocalFile(localPath, false, getter_AddRefs(file));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return nullptr;
-  }
-  return file.forget();
-}
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(aFile);
 
-bool
-DeviceStorageFileSystem::GetRealPath(FileImpl* aFile, nsAString& aRealPath) const
-{
-  MOZ_ASSERT(FileSystemUtils::IsParentProcess(),
-             "Should be on parent process!");
-  MOZ_ASSERT(aFile, "aFile Should not be null.");
-
-  aRealPath.Truncate();
-
-  nsAutoString filePath;
-  ErrorResult rv;
-  aFile->GetMozFullPathInternal(filePath, rv);
-  if (NS_WARN_IF(rv.Failed())) {
-    return false;
+  nsCOMPtr<nsIFile> rootPath;
+  aRv = NS_NewLocalFile(LocalOrDeviceStorageRootPath(), false,
+                        getter_AddRefs(rootPath));
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
   }
 
-  return LocalPathToRealPath(filePath, aRealPath);
-}
+  bool equal = false;
+  aRv = aFile->Equals(rootPath, &equal);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
 
-const nsAString&
-DeviceStorageFileSystem::GetRootName() const
-{
-  return mStorageName;
+  if (equal) {
+    aRetval = mStorageName;
+    return;
+  }
+
+  FileSystemBase::GetDirectoryName(aFile, aRetval, aRv);
+  NS_WARN_IF(aRv.Failed());
 }
 
 bool
 DeviceStorageFileSystem::IsSafeFile(nsIFile* aFile) const
 {
-  MOZ_ASSERT(FileSystemUtils::IsParentProcess(),
-             "Should be on parent process!");
+  MOZ_ASSERT(XRE_IsParentProcess(), "Should be on parent process!");
+  MOZ_ASSERT(!NS_IsMainThread());
   MOZ_ASSERT(aFile);
 
-  // Check if this file belongs to this storage.
-  nsAutoString path;
-  if (NS_FAILED(aFile->GetPath(path))) {
+  nsCOMPtr<nsIFile> rootPath;
+  nsresult rv = NS_NewLocalFile(LocalOrDeviceStorageRootPath(), false,
+                                getter_AddRefs(rootPath));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     return false;
   }
-  if (!LocalPathToRealPath(path, path)) {
+
+  // Check if this file belongs to this storage.
+  if (NS_WARN_IF(!FileSystemUtils::IsDescendantPath(rootPath, aFile))) {
     return false;
   }
 
@@ -164,26 +172,47 @@ DeviceStorageFileSystem::IsSafeFile(nsIFile* aFile) const
 bool
 DeviceStorageFileSystem::IsSafeDirectory(Directory* aDir) const
 {
-  MOZ_ASSERT(NS_IsMainThread(), "Only call on main thread!");
+  AssertIsOnOwningThread();
   MOZ_ASSERT(aDir);
-  nsRefPtr<FileSystemBase> fs = aDir->GetFileSystem();
-  MOZ_ASSERT(fs);
-  // Check if the given directory is from this storage.
-  return fs->ToString() == mString;
-}
 
-bool
-DeviceStorageFileSystem::LocalPathToRealPath(const nsAString& aLocalPath,
-                                             nsAString& aRealPath) const
-{
-  nsAutoString path;
-  FileSystemUtils::LocalPathToNormalizedPath(aLocalPath, path);
-  if (!FileSystemUtils::IsDescendantPath(mNormalizedLocalRootPath, path)) {
-    aRealPath.Truncate();
+  ErrorResult rv;
+  RefPtr<FileSystemBase> fs = aDir->GetFileSystem(rv);
+  if (NS_WARN_IF(rv.Failed())) {
+    rv.SuppressException();
     return false;
   }
-  aRealPath = Substring(path, mNormalizedLocalRootPath.Length());
-  return true;
+
+  nsAutoString fsSerialization;
+  fs->SerializeDOMPath(fsSerialization);
+
+  nsAutoString thisSerialization;
+  SerializeDOMPath(thisSerialization);
+
+  // Check if the given directory is from this storage.
+  return fsSerialization == thisSerialization;
+}
+
+void
+DeviceStorageFileSystem::SerializeDOMPath(nsAString& aString) const
+{
+  AssertIsOnOwningThread();
+
+  // Generate the string representation of the file system.
+  aString.AssignLiteral("devicestorage-");
+  aString.Append(mStorageType);
+  aString.Append('-');
+  aString.Append(mStorageName);
+}
+
+nsresult
+DeviceStorageFileSystem::MainThreadWork()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  DebugOnly<DeviceStorageTypeChecker*> typeChecker =
+    DeviceStorageTypeChecker::CreateOrGet();
+  MOZ_ASSERT(typeChecker);
+  return NS_OK;
 }
 
 } // namespace dom

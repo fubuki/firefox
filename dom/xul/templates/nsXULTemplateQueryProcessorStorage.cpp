@@ -9,11 +9,10 @@
 #include "nsUnicharUtils.h"
 
 #include "nsArrayUtils.h"
-#include "nsIVariant.h"
+#include "nsVariant.h"
 #include "nsAppDirectoryServiceDefs.h"
 
 #include "nsIURI.h"
-#include "nsIIOService.h"
 #include "nsIFileChannel.h"
 #include "nsIFile.h"
 #include "nsGkAtoms.h"
@@ -27,6 +26,7 @@
 #include "mozIStorageService.h"
 #include "nsIChannel.h"
 #include "nsIDocument.h"
+#include "nsNetUtil.h"
 
 //----------------------------------------------------------------------
 //
@@ -49,7 +49,7 @@ nsXULTemplateResultSetStorage::nsXULTemplateResultSetStorage(mozIStorageStatemen
         nsAutoCString name;
         rv = aStatement->GetColumnName(c, name);
         if (NS_SUCCEEDED(rv)) {
-            nsCOMPtr<nsIAtom> columnName = do_GetAtom(NS_LITERAL_CSTRING("?") + name);
+            nsCOMPtr<nsIAtom> columnName = NS_Atomize(NS_LITERAL_CSTRING("?") + name);
             mColumnNames.AppendObject(columnName);
         }
     }
@@ -79,10 +79,6 @@ nsXULTemplateResultSetStorage::GetNext(nsISupports **aResult)
 {
     nsXULTemplateResultStorage* result =
         new nsXULTemplateResultStorage(this);
-
-    if (!result)
-        return NS_ERROR_OUT_OF_MEMORY;
-
     *aResult = result;
     NS_ADDREF(result);
     return NS_OK;
@@ -110,7 +106,7 @@ nsXULTemplateResultSetStorage::FillColumnValues(nsCOMArray<nsIVariant>& aArray)
     int32_t count = mColumnNames.Count();
 
     for (int32_t c = 0; c < count; c++) {
-        nsCOMPtr<nsIWritableVariant> value = do_CreateInstance("@mozilla.org/variant;1");
+        RefPtr<nsVariant> value = new nsVariant();
 
         int32_t type;
         mStatement->GetTypeOfIndex(c, &type);
@@ -212,11 +208,15 @@ nsXULTemplateQueryProcessorStorage::GetDatasource(nsIArray* aDataSources,
     }
     else {
         nsCOMPtr<nsIChannel> channel;
-        nsCOMPtr<nsIIOService> ioservice =
-            do_GetService("@mozilla.org/network/io-service;1", &rv);
-        NS_ENSURE_SUCCESS(rv, rv);
+        nsCOMPtr<nsINode> node = do_QueryInterface(aRootNode);
 
-        rv = ioservice->NewChannelFromURI(uri, getter_AddRefs(channel));
+        // The following channel is never openend, so it does not matter what
+        // securityFlags we pass; let's follow the principle of least privilege.
+        rv = NS_NewChannel(getter_AddRefs(channel),
+                           uri,
+                           node,
+                           nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
+                           nsIContentPolicy::TYPE_OTHER);
         NS_ENSURE_SUCCESS(rv, rv);
 
         nsCOMPtr<nsIFileChannel> fileChannel = do_QueryInterface(channel, &rv);
@@ -238,7 +238,7 @@ nsXULTemplateQueryProcessorStorage::GetDatasource(nsIArray* aDataSources,
         return rv;
     }
 
-    NS_ADDREF(*aReturn = connection);
+    connection.forget(aReturn);
     return NS_OK;
 }
 
@@ -288,7 +288,7 @@ nsXULTemplateQueryProcessorStorage::CompileQuery(nsIXULTemplateBuilder* aBuilder
     nsAutoString sqlQuery;
 
     // Let's get all text nodes (which should be the query) 
-    if (!nsContentUtils::GetNodeTextContent(queryContent, false, sqlQuery)) {
+    if (!nsContentUtils::GetNodeTextContent(queryContent, false, sqlQuery, fallible)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
@@ -306,7 +306,7 @@ nsXULTemplateQueryProcessorStorage::CompileQuery(nsIXULTemplateBuilder* aBuilder
 
         if (child->NodeInfo()->Equals(nsGkAtoms::param, kNameSpaceID_XUL)) {
             nsAutoString value;
-            if (!nsContentUtils::GetNodeTextContent(child, false, value)) {
+            if (!nsContentUtils::GetNodeTextContent(child, false, value, fallible)) {
               return NS_ERROR_OUT_OF_MEMORY;
             }
 
@@ -403,10 +403,6 @@ nsXULTemplateQueryProcessorStorage::GenerateResults(nsISupports* aDatasource,
 
     nsXULTemplateResultSetStorage* results =
         new nsXULTemplateResultSetStorage(statement);
-
-    if (!results)
-        return NS_ERROR_OUT_OF_MEMORY;
-
     *aResults = results;
     NS_ADDREF(*aResults);
 
@@ -429,9 +425,6 @@ nsXULTemplateQueryProcessorStorage::TranslateRef(nsISupports* aDatasource,
 {
     nsXULTemplateResultStorage* result =
         new nsXULTemplateResultStorage(nullptr);
-    if (!result)
-        return NS_ERROR_OUT_OF_MEMORY;
-
     *aRef = result;
     NS_ADDREF(*aRef);
     return NS_OK;

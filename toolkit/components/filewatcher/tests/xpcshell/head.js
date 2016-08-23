@@ -4,7 +4,7 @@
 
 "use strict";
 
-let {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
+var {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/osfile.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
@@ -14,7 +14,7 @@ function makeWatcher() {
     Cc['@mozilla.org/toolkit/filewatcher/native-file-watcher;1']
       .getService(Ci.nsINativeFileWatcherService);
   return watcher;
-};
+}
 
 function promiseAddPath(watcher, resource, onChange=null, onError=null) {
   return new Promise(resolve =>

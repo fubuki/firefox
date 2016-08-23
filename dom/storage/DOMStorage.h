@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,7 +17,7 @@
 #include "nsISupports.h"
 
 class nsIPrincipal;
-class nsIDOMWindow;
+class nsPIDOMWindowInner;
 
 namespace mozilla {
 namespace dom {
@@ -24,7 +25,7 @@ namespace dom {
 class DOMStorageManager;
 class DOMStorageCache;
 
-class DOMStorage MOZ_FINAL
+class DOMStorage final
   : public nsIDOMStorage
   , public nsSupportsWeakReference
   , public nsWrapperCache
@@ -59,7 +60,7 @@ public:
     return mIsPrivate;
   }
 
-  DOMStorage(nsIDOMWindow* aWindow,
+  DOMStorage(nsPIDOMWindowInner* aWindow,
              DOMStorageManager* aManager,
              DOMStorageCache* aCache,
              const nsAString& aDocumentURI,
@@ -67,9 +68,9 @@ public:
              bool aIsPrivate);
 
   // WebIDL
-  JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  nsIDOMWindow* GetParentObject() const
+  nsPIDOMWindowInner* GetParentObject() const
   {
     return mWindow;
   }
@@ -88,7 +89,7 @@ public:
   void GetSupportedNames(unsigned, nsTArray<nsString>& aKeys);
 
   void NamedGetter(const nsAString& aKey, bool& aFound, nsAString& aResult,
-	           ErrorResult& aRv)
+                   ErrorResult& aRv)
   {
     GetItem(aKey, aResult, aRv);
     aFound = !aResult.IsVoid();
@@ -109,7 +110,7 @@ public:
   {
     RemoveItem(aKey, aRv);
 
-    aFound = (aRv.ErrorCode() != NS_SUCCESS_DOM_NO_OPERATION);
+    aFound = !aRv.ErrorCodeIs(NS_SUCCESS_DOM_NO_OPERATION);
   }
 
   void Clear(ErrorResult& aRv);
@@ -121,7 +122,8 @@ public:
   // It is an optimization since the privileges check and session only
   // state determination are complex and share the code (comes hand in
   // hand together).
-  static bool CanUseStorage(DOMStorage* aStorage = nullptr);
+  static bool CanUseStorage(nsPIDOMWindowInner* aWindow,
+                            DOMStorage* aStorage = nullptr);
 
   bool IsPrivate() const { return mIsPrivate; }
   bool IsSessionOnly() const { return mIsSessionOnly; }
@@ -138,9 +140,9 @@ private:
   friend class DOMStorageManager;
   friend class DOMStorageCache;
 
-  nsCOMPtr<nsIDOMWindow> mWindow;
-  nsRefPtr<DOMStorageManager> mManager;
-  nsRefPtr<DOMStorageCache> mCache;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
+  RefPtr<DOMStorageManager> mManager;
+  RefPtr<DOMStorageCache> mCache;
   nsString mDocumentURI;
 
   // Principal this DOMStorage (i.e. localStorage or sessionStorage) has
@@ -160,7 +162,7 @@ private:
                                    const nsSubstring& aNewValue);
 };
 
-} // ::dom
-} // ::mozilla
+} // namespace dom
+} // namespace mozilla
 
 #endif /* nsDOMStorage_h___ */

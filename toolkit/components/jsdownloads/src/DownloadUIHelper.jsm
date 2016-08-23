@@ -23,6 +23,7 @@ const Cu = Components.utils;
 const Cr = Components.results;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
@@ -40,7 +41,7 @@ const kStringsRequiringFormatting = {
   quitCancelDownloadsAlertMsgMultiple: true,
   quitCancelDownloadsAlertMsgMacMultiple: true,
   offlineCancelDownloadsAlertMsgMultiple: true,
-  leavePrivateBrowsingWindowsCancelDownloadsAlertMsgMultiple: true
+  leavePrivateBrowsingWindowsCancelDownloadsAlertMsgMultiple2: true
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -108,12 +109,12 @@ XPCOMUtils.defineLazyGetter(DownloadUIHelper, "strings", function () {
  */
 this.DownloadPrompter = function (aParent)
 {
-#ifdef MOZ_B2G
-  // On B2G there is no prompter implementation.
-  this._prompter = null;
-#else
-  this._prompter = Services.ww.getNewPrompter(aParent);
-#endif
+  if (AppConstants.MOZ_B2G) {
+    // On B2G there is no prompter implementation.
+    this._prompter = null;
+  } else {
+    this._prompter = Services.ww.getNewPrompter(aParent);
+  }
 }
 
 this.DownloadPrompter.prototype = {
@@ -210,17 +211,17 @@ this.DownloadPrompter.prototype = {
     switch (aPromptType) {
       case this.ON_QUIT:
         title = s.quitCancelDownloadsAlertTitle;
-#ifndef XP_MACOSX
-        message = aDownloadsCount > 1
-                  ? s.quitCancelDownloadsAlertMsgMultiple(aDownloadsCount)
-                  : s.quitCancelDownloadsAlertMsg;
-        cancelButton = s.dontQuitButtonWin;
-#else
-        message = aDownloadsCount > 1
-                  ? s.quitCancelDownloadsAlertMsgMacMultiple(aDownloadsCount)
-                  : s.quitCancelDownloadsAlertMsgMac;
-        cancelButton = s.dontQuitButtonMac;
-#endif
+        if (AppConstants.platform != "macosx") {
+          message = aDownloadsCount > 1
+                    ? s.quitCancelDownloadsAlertMsgMultiple(aDownloadsCount)
+                    : s.quitCancelDownloadsAlertMsg;
+          cancelButton = s.dontQuitButtonWin;
+        } else {
+          message = aDownloadsCount > 1
+                    ? s.quitCancelDownloadsAlertMsgMacMultiple(aDownloadsCount)
+                    : s.quitCancelDownloadsAlertMsgMac;
+          cancelButton = s.dontQuitButtonMac;
+        }
         break;
       case this.ON_OFFLINE:
         title = s.offlineCancelDownloadsAlertTitle;
@@ -232,9 +233,9 @@ this.DownloadPrompter.prototype = {
       case this.ON_LEAVE_PRIVATE_BROWSING:
         title = s.leavePrivateBrowsingCancelDownloadsAlertTitle;
         message = aDownloadsCount > 1
-                  ? s.leavePrivateBrowsingWindowsCancelDownloadsAlertMsgMultiple(aDownloadsCount)
-                  : s.leavePrivateBrowsingWindowsCancelDownloadsAlertMsg;
-        cancelButton = s.dontLeavePrivateBrowsingButton;
+                  ? s.leavePrivateBrowsingWindowsCancelDownloadsAlertMsgMultiple2(aDownloadsCount)
+                  : s.leavePrivateBrowsingWindowsCancelDownloadsAlertMsg2;
+        cancelButton = s.dontLeavePrivateBrowsingButton2;
         break;
     }
 

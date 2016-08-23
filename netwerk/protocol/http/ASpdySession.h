@@ -15,8 +15,6 @@ class nsISocketTransport;
 
 namespace mozilla { namespace net {
 
-class nsHttpConnectionInfo;
-
 class ASpdySession : public nsAHttpTransaction
 {
 public:
@@ -44,7 +42,7 @@ public:
 
   virtual void PrintDiagnostics (nsCString &log) = 0;
 
-  bool ResponseTimeoutEnabled() const MOZ_OVERRIDE MOZ_FINAL {
+  bool ResponseTimeoutEnabled() const override final {
     return true;
   }
 
@@ -53,11 +51,11 @@ public:
   const static uint32_t kSendingChunkSize = 4095;
   const static uint32_t kTCPSendBufferSize = 131072;
 
-  // until we have an API that can push back on receiving data (right now
-  // WriteSegments is obligated to accept data and buffer) there is no
-  // reason to throttle with the rwin other than in server push
-  // scenarios.
-  const static uint32_t kInitialRwin = 256 * 1024 * 1024;
+  // This is roughly the amount of data a suspended channel will have to
+  // buffer before h2 flow control kicks in.
+  const static uint32_t kInitialRwin = 12 * 1024 * 1024; // 12MB
+
+  const static uint32_t kDefaultMaxConcurrent = 100;
 
   // soft errors are errors that terminate a stream without terminating the
   // connection. In general non-network errors are stream errors as well
@@ -70,7 +68,7 @@ public:
 
     // this could go either way, but because there are network instances of
     // it being a hard error we should consider it hard.
-    if (code == NS_ERROR_FAILURE) {
+    if (code == NS_ERROR_FAILURE || code == NS_ERROR_OUT_OF_MEMORY) {
       return false;
     }
 
@@ -97,7 +95,7 @@ public:
   SpdyInformation();
   ~SpdyInformation() {}
 
-  static const uint32_t kCount = 5;
+  static const uint32_t kCount = 2;
 
   // determine the index (0..kCount-1) of the spdy information that
   // correlates to the npn string. NS_FAILED() if no match is found.
@@ -117,6 +115,7 @@ public:
   ALPNCallback ALPNCallbacks[kCount];
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // mozilla_net_ASpdySession_h

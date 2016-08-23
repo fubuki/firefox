@@ -28,7 +28,6 @@
 #include "nsIFragmentContentSink.h"
 #include "nsStreamUtils.h"
 #include "nsHTMLTokenizer.h"
-#include "nsNetUtil.h"
 #include "nsScriptLoader.h"
 #include "nsDataHashtable.h"
 #include "nsXPCOMCIDInternal.h"
@@ -112,7 +111,7 @@ For more details @see bugzilla bug 76722
 class nsParserContinueEvent : public nsRunnable
 {
 public:
-  nsRefPtr<nsParser> mParser;
+  RefPtr<nsParser> mParser;
 
   explicit nsParserContinueEvent(nsParser* aParser)
     : mParser(aParser)
@@ -752,8 +751,9 @@ FindSuitableDTD(CParserContext& aParserContext)
   aParserContext.mAutoDetectStatus = ePrimaryDetect;
 
   // Quick check for view source.
-  NS_ABORT_IF_FALSE(aParserContext.mParserCommand != eViewSource,
-    "The old parser is not supposed to be used for View Source anymore.");
+  MOZ_ASSERT(aParserContext.mParserCommand != eViewSource,
+             "The old parser is not supposed to be used for View Source "
+             "anymore.");
 
   // Now see if we're parsing HTML (which, as far as we're concerned, simply
   // means "not XML").
@@ -1512,7 +1512,9 @@ nsParser::ResumeParse(bool allowIteration, bool aIsFinalChunk,
               if (theContext) {
                 theIterationIsOk = allowIteration && theContextIsStringBased;
                 if (theContext->mCopyUnused) {
-                  theContext->mScanner->CopyUnusedData(mUnusedInput);
+                  if (!theContext->mScanner->CopyUnusedData(mUnusedInput)) {
+                    mInternalState = NS_ERROR_OUT_OF_MEMORY;
+                  }
                 }
 
                 delete theContext;
@@ -1684,7 +1686,7 @@ ExtractCharsetFromXmlDeclaration(const unsigned char* aBytes, int32_t aLen,
   return !oCharset.IsEmpty();
 }
 
-inline const char
+inline char
 GetNextChar(nsACString::const_iterator& aStart,
             nsACString::const_iterator& aEnd)
 {

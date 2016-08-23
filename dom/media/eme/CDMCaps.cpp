@@ -51,10 +51,36 @@ CDMCaps::AutoLock::~AutoLock()
   mData.Unlock();
 }
 
+static void
+TestCap(uint64_t aFlag,
+        uint64_t aCaps,
+        const nsACString& aCapName,
+        nsACString& aCapStr)
+{
+  if (!(aFlag & aCaps)) {
+    return;
+  }
+  if (!aCapStr.IsEmpty()) {
+    aCapStr.AppendLiteral(",");
+  }
+  aCapStr.Append(aCapName);
+}
+
+nsCString
+CapsToString(uint64_t aCaps)
+{
+  nsCString capsStr;
+  TestCap(GMP_EME_CAP_DECRYPT_AUDIO, aCaps, NS_LITERAL_CSTRING("DecryptAudio"), capsStr);
+  TestCap(GMP_EME_CAP_DECRYPT_VIDEO, aCaps, NS_LITERAL_CSTRING("DecryptVideo"), capsStr);
+  TestCap(GMP_EME_CAP_DECRYPT_AND_DECODE_AUDIO, aCaps, NS_LITERAL_CSTRING("DecryptAndDecodeAudio"), capsStr);
+  TestCap(GMP_EME_CAP_DECRYPT_AND_DECODE_VIDEO, aCaps, NS_LITERAL_CSTRING("DecryptAndDecodeVideo"), capsStr);
+  return capsStr;
+}
+
 void
 CDMCaps::AutoLock::SetCaps(uint64_t aCaps)
 {
-  EME_LOG("SetCaps()");
+  EME_LOG("SetCaps() %s", CapsToString(aCaps).get());
   mData.mMonitor.AssertCurrentThreadOwns();
   mData.mCaps = aCaps;
   for (size_t i = 0; i < mData.mWaitForCaps.Length(); i++) {
@@ -159,6 +185,18 @@ CDMCaps::AutoLock::AreCapsKnown()
 }
 
 bool
+CDMCaps::AutoLock::CanRenderAudio()
+{
+  return mData.HasCap(GMP_EME_CAP_RENDER_AUDIO);
+}
+
+bool
+CDMCaps::AutoLock::CanRenderVideo()
+{
+  return mData.HasCap(GMP_EME_CAP_RENDER_VIDEO);
+}
+
+bool
 CDMCaps::AutoLock::CanDecryptAndDecodeAudio()
 {
   return mData.HasCap(GMP_EME_CAP_DECRYPT_AND_DECODE_AUDIO);
@@ -192,6 +230,29 @@ CDMCaps::AutoLock::GetKeyStatusesForSession(const nsAString& aSessionId,
       aOutKeyStatuses.AppendElement(key);
     }
   }
+}
+
+void
+CDMCaps::AutoLock::GetSessionIdsForKeyId(const CencKeyId& aKeyId,
+                                         nsTArray<nsCString>& aOutSessionIds)
+{
+  for (const auto& keyStatus : mData.mKeyStatuses) {
+    if (keyStatus.mId == aKeyId) {
+      aOutSessionIds.AppendElement(NS_ConvertUTF16toUTF8(keyStatus.mSessionId));
+    }
+  }
+}
+
+bool
+CDMCaps::AutoLock::RemoveKeysForSession(const nsString& aSessionId)
+{
+  bool changed = false;
+  nsTArray<KeyStatus> statuses;
+  GetKeyStatusesForSession(aSessionId, statuses);
+  for (const KeyStatus& status : statuses) {
+    changed |= SetKeyStatus(status.mId, aSessionId, kGMPUnknown);
+  }
+  return changed;
 }
 
 } // namespace mozilla

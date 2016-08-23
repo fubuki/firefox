@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,6 +19,8 @@
 #include "nsIConstraintValidation.h"
 #include "mozilla/dom/HTMLFormElement.h" // for HasEverTriedInvalidSubmit()
 #include "mozilla/dom/HTMLInputElementBinding.h"
+#include "mozilla/dom/Promise.h"
+#include "mozilla/dom/UnionTypes.h"
 #include "nsIFilePicker.h"
 #include "nsIContentPrefService2.h"
 #include "mozilla/Decimal.h"
@@ -25,7 +28,6 @@
 #include "nsTextEditorState.h"
 
 class nsIRadioGroupContainer;
-class nsIRadioGroupVisitor;
 class nsIRadioVisitor;
 
 namespace mozilla {
@@ -36,12 +38,20 @@ class EventChainPreVisitor;
 namespace dom {
 
 class Date;
-class DirPickerFileListBuilderTask;
 class File;
 class FileList;
 
-class UploadLastDir MOZ_FINAL : public nsIObserver, public nsSupportsWeakReference {
-
+/**
+ * A class we use to create a singleton object that is used to keep track of
+ * the last directory from which the user has picked files (via
+ * <input type=file>) on a per-domain basis. The implementation uses
+ * nsIContentPrefService2/NS_CONTENT_PREF_SERVICE_CONTRACTID to store the last
+ * directory per-domain, and to ensure that whether the directories are
+ * persistently saved (saved across sessions) or not honors whether or not the
+ * page is being viewed in private browsing.
+ */
+class UploadLastDir final : public nsIObserver, public nsSupportsWeakReference
+{
   ~UploadLastDir() {}
 
 public:
@@ -68,7 +78,7 @@ public:
    */
   nsresult StoreLastUsedDirectory(nsIDocument* aDoc, nsIFile* aDir);
 
-  class ContentPrefCallback MOZ_FINAL : public nsIContentPrefCallback2
+  class ContentPrefCallback final : public nsIContentPrefCallback2
   {
     virtual ~ContentPrefCallback()
     { }
@@ -88,17 +98,14 @@ public:
   };
 };
 
-class HTMLInputElement MOZ_FINAL : public nsGenericHTMLFormElementWithState,
-                                   public nsImageLoadingContent,
-                                   public nsIDOMHTMLInputElement,
-                                   public nsITextControlElement,
-                                   public nsIPhonetic,
-                                   public nsIDOMNSEditableElement,
-                                   public nsITimerCallback,
-                                   public nsIConstraintValidation
+class HTMLInputElement final : public nsGenericHTMLFormElementWithState,
+                               public nsImageLoadingContent,
+                               public nsIDOMHTMLInputElement,
+                               public nsITextControlElement,
+                               public nsIPhonetic,
+                               public nsIDOMNSEditableElement,
+                               public nsIConstraintValidation
 {
-  friend class DirPickerFileListBuilderTask;
-
 public:
   using nsIConstraintValidation::GetValidationMessage;
   using nsIConstraintValidation::CheckValidity;
@@ -114,10 +121,13 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual int32_t TabIndexDefault() MOZ_OVERRIDE;
+  virtual int32_t TabIndexDefault() override;
   using nsGenericHTMLElement::Focus;
-  virtual void Blur(ErrorResult& aError) MOZ_OVERRIDE;
-  virtual void Focus(ErrorResult& aError) MOZ_OVERRIDE;
+  virtual void Blur(ErrorResult& aError) override;
+  virtual void Focus(ErrorResult& aError) override;
+
+  // Element
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override;
 
   // nsIDOMHTMLInputElement
   NS_DECL_NSIDOMHTMLINPUTELEMENT
@@ -126,39 +136,39 @@ public:
   NS_DECL_NSIPHONETIC
 
   // nsIDOMNSEditableElement
-  NS_IMETHOD GetEditor(nsIEditor** aEditor) MOZ_OVERRIDE
+  NS_IMETHOD GetEditor(nsIEditor** aEditor) override
   {
     return nsGenericHTMLElement::GetEditor(aEditor);
   }
 
-  NS_IMETHOD SetUserInput(const nsAString& aInput) MOZ_OVERRIDE;
+  NS_IMETHOD SetUserInput(const nsAString& aInput) override;
 
   // Overriden nsIFormControl methods
-  NS_IMETHOD_(uint32_t) GetType() const MOZ_OVERRIDE { return mType; }
-  NS_IMETHOD Reset() MOZ_OVERRIDE;
-  NS_IMETHOD SubmitNamesValues(nsFormSubmission* aFormSubmission) MOZ_OVERRIDE;
-  NS_IMETHOD SaveState() MOZ_OVERRIDE;
-  virtual bool RestoreState(nsPresState* aState) MOZ_OVERRIDE;
-  virtual bool AllowDrop() MOZ_OVERRIDE;
-  virtual bool IsDisabledForEvents(uint32_t aMessage) MOZ_OVERRIDE;
+  NS_IMETHOD_(uint32_t) GetType() const override { return mType; }
+  NS_IMETHOD Reset() override;
+  NS_IMETHOD SubmitNamesValues(nsFormSubmission* aFormSubmission) override;
+  NS_IMETHOD SaveState() override;
+  virtual bool RestoreState(nsPresState* aState) override;
+  virtual bool AllowDrop() override;
+  virtual bool IsDisabledForEvents(EventMessage aMessage) override;
 
-  virtual void FieldSetDisabledChanged(bool aNotify) MOZ_OVERRIDE;
+  virtual void FieldSetDisabledChanged(bool aNotify) override;
 
   // nsIContent
-  virtual bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) MOZ_OVERRIDE;
+  virtual bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) override;
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsIAtom* aAttribute,
                                 const nsAString& aValue,
-                                nsAttrValue& aResult) MOZ_OVERRIDE;
+                                nsAttrValue& aResult) override;
   virtual nsChangeHint GetAttributeChangeHint(const nsIAtom* aAttribute,
-                                              int32_t aModType) const MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const MOZ_OVERRIDE;
-  virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const MOZ_OVERRIDE;
+                                              int32_t aModType) const override;
+  NS_IMETHOD_(bool) IsAttributeMapped(const nsIAtom* aAttribute) const override;
+  virtual nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
 
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
-                     EventChainPostVisitor& aVisitor) MOZ_OVERRIDE;
+                     EventChainPostVisitor& aVisitor) override;
   void PostHandleEventForRangeThumb(EventChainPostVisitor& aVisitor);
   void StartRangeThumbDrag(WidgetGUIEvent* aEvent);
   void FinishRangeThumbDrag(WidgetGUIEvent* aEvent = nullptr);
@@ -167,56 +177,57 @@ public:
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
-                              bool aCompileEventHandlers) MOZ_OVERRIDE;
+                              bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep = true,
-                              bool aNullParent = true) MOZ_OVERRIDE;
+                              bool aNullParent = true) override;
 
-  virtual void DoneCreatingElement() MOZ_OVERRIDE;
+  virtual void DoneCreatingElement() override;
 
-  virtual EventStates IntrinsicState() const MOZ_OVERRIDE;
+  virtual EventStates IntrinsicState() const override;
 
   // Element
 private:
-  virtual void AddStates(EventStates aStates) MOZ_OVERRIDE;
-  virtual void RemoveStates(EventStates aStates) MOZ_OVERRIDE;
+  virtual void AddStates(EventStates aStates) override;
+  virtual void RemoveStates(EventStates aStates) override;
 
 public:
 
   // nsITextControlElement
-  NS_IMETHOD SetValueChanged(bool aValueChanged) MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsSingleLineTextControl() const MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsTextArea() const MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsPlainTextControl() const MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) IsPasswordTextControl() const MOZ_OVERRIDE;
-  NS_IMETHOD_(int32_t) GetCols() MOZ_OVERRIDE;
-  NS_IMETHOD_(int32_t) GetWrapCols() MOZ_OVERRIDE;
-  NS_IMETHOD_(int32_t) GetRows() MOZ_OVERRIDE;
-  NS_IMETHOD_(void) GetDefaultValueFromContent(nsAString& aValue) MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) ValueChanged() const MOZ_OVERRIDE;
-  NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const MOZ_OVERRIDE;
-  NS_IMETHOD_(nsIEditor*) GetTextEditor() MOZ_OVERRIDE;
-  NS_IMETHOD_(nsISelectionController*) GetSelectionController() MOZ_OVERRIDE;
-  NS_IMETHOD_(nsFrameSelection*) GetConstFrameSelection() MOZ_OVERRIDE;
-  NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) MOZ_OVERRIDE;
-  NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) MOZ_OVERRIDE;
-  NS_IMETHOD CreateEditor() MOZ_OVERRIDE;
-  NS_IMETHOD_(nsIContent*) GetRootEditorNode() MOZ_OVERRIDE;
-  NS_IMETHOD_(Element*) CreatePlaceholderNode() MOZ_OVERRIDE;
-  NS_IMETHOD_(Element*) GetPlaceholderNode() MOZ_OVERRIDE;
-  NS_IMETHOD_(void) UpdatePlaceholderVisibility(bool aNotify) MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) GetPlaceholderVisibility() MOZ_OVERRIDE;
-  NS_IMETHOD_(void) InitializeKeyboardEventListeners() MOZ_OVERRIDE;
-  NS_IMETHOD_(void) OnValueChanged(bool aNotify) MOZ_OVERRIDE;
-  NS_IMETHOD_(bool) HasCachedSelection() MOZ_OVERRIDE;
+  NS_IMETHOD SetValueChanged(bool aValueChanged) override;
+  NS_IMETHOD_(bool) IsSingleLineTextControl() const override;
+  NS_IMETHOD_(bool) IsTextArea() const override;
+  NS_IMETHOD_(bool) IsPlainTextControl() const override;
+  NS_IMETHOD_(bool) IsPasswordTextControl() const override;
+  NS_IMETHOD_(int32_t) GetCols() override;
+  NS_IMETHOD_(int32_t) GetWrapCols() override;
+  NS_IMETHOD_(int32_t) GetRows() override;
+  NS_IMETHOD_(void) GetDefaultValueFromContent(nsAString& aValue) override;
+  NS_IMETHOD_(bool) ValueChanged() const override;
+  NS_IMETHOD_(void) GetTextEditorValue(nsAString& aValue, bool aIgnoreWrap) const override;
+  NS_IMETHOD_(nsIEditor*) GetTextEditor() override;
+  NS_IMETHOD_(nsISelectionController*) GetSelectionController() override;
+  NS_IMETHOD_(nsFrameSelection*) GetConstFrameSelection() override;
+  NS_IMETHOD BindToFrame(nsTextControlFrame* aFrame) override;
+  NS_IMETHOD_(void) UnbindFromFrame(nsTextControlFrame* aFrame) override;
+  NS_IMETHOD CreateEditor() override;
+  NS_IMETHOD_(nsIContent*) GetRootEditorNode() override;
+  NS_IMETHOD_(Element*) CreatePlaceholderNode() override;
+  NS_IMETHOD_(Element*) GetPlaceholderNode() override;
+  NS_IMETHOD_(void) UpdatePlaceholderVisibility(bool aNotify) override;
+  NS_IMETHOD_(bool) GetPlaceholderVisibility() override;
+  NS_IMETHOD_(void) InitializeKeyboardEventListeners() override;
+  NS_IMETHOD_(void) OnValueChanged(bool aNotify) override;
+  NS_IMETHOD_(bool) HasCachedSelection() override;
 
   void GetDisplayFileName(nsAString& aFileName) const;
 
-  const nsTArray<nsRefPtr<File>>& GetFilesInternal() const
+  const nsTArray<OwningFileOrDirectory>& GetFilesOrDirectoriesInternal() const
   {
-    return mFiles;
+    return mFilesOrDirectories;
   }
 
-  void SetFiles(const nsTArray<nsRefPtr<File>>& aFiles, bool aSetValueChanged);
+  void SetFilesOrDirectories(const nsTArray<OwningFileOrDirectory>& aFilesOrDirectories,
+                             bool aSetValueChanged);
   void SetFiles(nsIDOMFileList* aFiles, bool aSetValueChanged);
 
   // Called when a nsIFilePicker or a nsIColorPicker terminate.
@@ -238,7 +249,7 @@ public:
    */
   already_AddRefed<nsIDOMHTMLInputElement> GetSelectedRadioButton();
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLInputElement,
                                            nsGenericHTMLFormElementWithState)
@@ -273,14 +284,6 @@ public:
     return mSelectionProperties;
   }
 
-  // nsITimerCallback
-  NS_DECL_NSITIMERCALLBACK
-
-  // Avoid warning about the implementation of nsITimerCallback::Notify hiding
-  // our nsImageLoadingContent base class' implementation of
-  // imgINotificationObserver::Notify:
-  using nsImageLoadingContent::Notify;
-
   // nsIConstraintValidation
   bool     IsTooLong();
   bool     IsValueMissing() const;
@@ -301,7 +304,7 @@ public:
   void     UpdateAllValidityStates(bool aNotify);
   void     UpdateBarredFromConstraintValidation();
   nsresult GetValidationMessage(nsAString& aValidationMessage,
-                                ValidityStateType aType) MOZ_OVERRIDE;
+                                ValidityStateType aType) override;
   /**
    * Update the value missing validity state for radio elements when they have
    * a group.
@@ -442,15 +445,6 @@ public:
   // XPCOM GetForm() is OK
 
   FileList* GetFiles();
-
-  void OpenDirectoryPicker(ErrorResult& aRv);
-  void CancelDirectoryPickerScanIfRunning();
-
-  void StartProgressEventTimer();
-  void MaybeDispatchProgressEvent(bool aFinalProgress);
-  void DispatchProgressEvent(const nsAString& aType,
-                             bool aLengthComputable,
-                             uint64_t aLoaded, uint64_t aTotal);
 
   // XPCOM GetFormAction() is OK
   void SetFormAction(const nsAString& aValue, ErrorResult& aRv)
@@ -694,6 +688,22 @@ public:
                     ErrorResult& aRv, int32_t aSelectionStart = -1,
                     int32_t aSelectionEnd = -1);
 
+  bool DirectoryAttr() const
+  {
+    return HasAttr(kNameSpaceID_None, nsGkAtoms::directory);
+  }
+
+  void SetDirectoryAttr(bool aValue, ErrorResult& aRv)
+  {
+    SetHTMLBoolAttr(nsGkAtoms::directory, aValue, aRv);
+  }
+
+  bool IsFilesAndDirectoriesSupported() const;
+
+  already_AddRefed<Promise> GetFilesAndDirectories(ErrorResult& aRv);
+
+  void ChooseDirectory(ErrorResult& aRv);
+
   // XPCOM GetAlign() is OK
   void SetAlign(const nsAString& aValue, ErrorResult& aRv)
   {
@@ -710,14 +720,21 @@ public:
 
   int32_t GetTextLength(ErrorResult& aRv);
 
-  void MozGetFileNameArray(nsTArray< nsString >& aFileNames);
+  void MozGetFileNameArray(nsTArray<nsString>& aFileNames, ErrorResult& aRv);
 
-  void MozSetFileNameArray(const Sequence< nsString >& aFileNames);
+  void MozSetFileNameArray(const Sequence< nsString >& aFileNames, ErrorResult& aRv);
+  void MozSetFileArray(const Sequence<OwningNonNull<File>>& aFiles);
+  void MozSetDirectory(const nsAString& aDirectoryPath, ErrorResult& aRv);
 
   HTMLInputElement* GetOwnerNumberControl();
 
   void StartNumberControlSpinnerSpin();
-  void StopNumberControlSpinnerSpin();
+  enum SpinnerStopState {
+    eAllowDispatchingEvents,
+    eDisallowDispatchingEvents
+  };
+  void StopNumberControlSpinnerSpin(SpinnerStopState aState =
+                                      eAllowDispatchingEvents);
   void StepNumberControlForUserEvent(int32_t aDirection);
 
   /**
@@ -758,7 +775,7 @@ public:
 protected:
   virtual ~HTMLInputElement();
 
-  virtual JSObject* WrapNode(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // Pull IsSingleLineTextControl into our scope, otherwise it'd be hidden
   // by the nsITextControlElement version.
@@ -827,9 +844,14 @@ protected:
                                      uint32_t aLen, uint32_t* aResult);
 
   // Helper method
-  nsresult SetValueInternal(const nsAString& aValue,
-                            bool aUserInput,
-                            bool aSetValueChanged);
+
+  /**
+   * Setting the value.
+   *
+   * @param aValue      String to set.
+   * @param aFlags      See nsTextEditorState::SetValueFlags.
+   */
+  nsresult SetValueInternal(const nsAString& aValue, uint32_t aFlags);
 
   nsresult GetValueInternal(nsAString& aValue) const;
 
@@ -851,13 +873,13 @@ protected:
    * Called when an attribute is about to be changed
    */
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
-                                 bool aNotify) MOZ_OVERRIDE;
+                                 nsAttrValueOrString* aValue,
+                                 bool aNotify) override;
   /**
    * Called when an attribute has just been changed
    */
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                const nsAttrValue* aValue, bool aNotify) MOZ_OVERRIDE;
+                                const nsAttrValue* aValue, bool aNotify) override;
 
   /**
    * Dispatch a select event. Returns true if the event was not cancelled.
@@ -908,12 +930,12 @@ protected:
   /**
    * Update mFileList with the currently selected file.
    */
-  nsresult UpdateFileList();
+  void UpdateFileList();
 
   /**
-   * Called after calling one of the SetFiles() functions.
+   * Called after calling one of the SetFilesOrDirectories() functions.
    */
-  void AfterSetFiles(bool aSetValueChanged);
+  void AfterSetFilesOrDirectories(bool aSetValueChanged);
 
   /**
    * Determine whether the editor needs to be initialized explicitly for
@@ -1250,21 +1272,28 @@ protected:
      */
     nsTextEditorState*       mState;
   } mInputData;
+
   /**
-   * The value of the input if it is a file input. This is the list of filenames
-   * used when uploading a file. It is vital that this is kept separate from
-   * mValue so that it won't be possible to 'leak' the value from a text-input
-   * to a file-input. Additionally, the logic for this value is kept as simple
-   * as possible to avoid accidental errors where the wrong filename is used.
-   * Therefor the list of filenames is always owned by this member, never by
-   * the frame. Whenever the frame wants to change the filename it has to call
-   * SetFileNames to update this member.
+   * The value of the input if it is a file input. This is the list of files or
+   * directories DOM objects used when uploading a file. It is vital that this
+   * is kept separate from mValue so that it won't be possible to 'leak' the
+   * value from a text-input to a file-input. Additionally, the logic for this
+   * value is kept as simple as possible to avoid accidental errors where the
+   * wrong filename is used.  Therefor the list of filenames is always owned by
+   * this member, never by the frame. Whenever the frame wants to change the
+   * filename it has to call SetFilesOrDirectories to update this member.
    */
-  nsTArray<nsRefPtr<File>> mFiles;
+  nsTArray<OwningFileOrDirectory> mFilesOrDirectories;
 
-  nsRefPtr<FileList>  mFileList;
+#ifndef MOZ_CHILD_PERMISSIONS
+  /**
+   * Hack for bug 1086684: Stash the .value when we're a file picker.
+   */
+  nsString mFirstFilePath;
+#endif
 
-  nsRefPtr<DirPickerFileListBuilderTask> mDirPickerFileListBuilderTask;
+  RefPtr<FileList>  mFileList;
+  RefPtr<Promise> mFilesAndDirectoriesPromise;
 
   nsString mStaticDocFileList;
   
@@ -1283,13 +1312,6 @@ protected:
    * canceled.
    */
   Decimal mRangeThumbDragStartValue;
-
-  /**
-   * Timer that is used when mType == NS_FORM_INPUT_FILE and the user selects a
-   * directory. It is used to fire progress events while the list of files
-   * under that directory tree is built.
-   */
-  nsCOMPtr<nsITimer> mProgressTimer;
 
   /**
    * The selection properties cache for number controls.  This is needed because
@@ -1334,7 +1356,6 @@ protected:
   bool                     mCanShowInvalidUI    : 1;
   bool                     mHasRange            : 1;
   bool                     mIsDraggingRange     : 1;
-  bool                     mProgressTimerIsActive : 1;
   bool                     mNumberControlSpinnerIsSpinning : 1;
   bool                     mNumberControlSpinnerSpinsUp : 1;
   bool                     mPickerRunning : 1;
@@ -1411,11 +1432,11 @@ private:
                               nsIFilePicker* aFilePicker);
     NS_DECL_ISUPPORTS
 
-    NS_IMETHOD Done(int16_t aResult) MOZ_OVERRIDE;
+    NS_IMETHOD Done(int16_t aResult) override;
 
   private:
     nsCOMPtr<nsIFilePicker> mFilePicker;
-    nsRefPtr<HTMLInputElement> mInput;
+    RefPtr<HTMLInputElement> mInput;
   };
 };
 

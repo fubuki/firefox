@@ -4,6 +4,7 @@
 
 package org.mozilla.search;
 
+import android.support.annotation.NonNull;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.Locales;
 import org.mozilla.gecko.R;
@@ -11,14 +12,14 @@ import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.db.BrowserContract.SearchHistory;
 import org.mozilla.gecko.distribution.Distribution;
-import org.mozilla.gecko.health.BrowserHealthRecorder;
+import org.mozilla.gecko.search.SearchEngine;
+import org.mozilla.gecko.search.SearchEngineManager;
+import org.mozilla.gecko.search.SearchEngineManager.SearchEngineCallback;
 import org.mozilla.search.autocomplete.SearchBar;
 import org.mozilla.search.autocomplete.SuggestionsFragment;
-import org.mozilla.search.providers.SearchEngine;
-import org.mozilla.search.providers.SearchEngineManager;
-import org.mozilla.search.providers.SearchEngineManager.SearchEngineCallback;
 
 import android.content.AsyncQueryHandler;
+import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.Rect;
@@ -29,9 +30,9 @@ import android.view.View;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.Interpolator;
 
-import com.nineoldandroids.animation.Animator;
-import com.nineoldandroids.animation.AnimatorSet;
-import com.nineoldandroids.animation.ObjectAnimator;
+import android.animation.Animator;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
 
 /**
  * The main entrance for the Android search intent.
@@ -62,7 +63,8 @@ public class SearchActivity extends Locales.LocaleAwareFragmentActivity
     private SearchState searchState = SearchState.PRESEARCH;
     private EditState editState = EditState.WAITING;
 
-    private SearchEngineManager searchEngineManager;
+    @NonNull
+    private SearchEngineManager searchEngineManager; // Contains reference to Context - DO NOT LEAK!
 
     // Only accessed on the main thread.
     private SearchEngine engine;
@@ -92,6 +94,16 @@ public class SearchActivity extends Locales.LocaleAwareFragmentActivity
     private int cardPaddingX;
     private int cardPaddingY;
 
+    /**
+     * An empty implementation of AsyncQueryHandler to avoid the "HandlerLeak" warning from Android
+     * Lint. See also {@see org.mozilla.gecko.util.WeakReferenceHandler}.
+     */
+    private static class AsyncQueryHandlerImpl extends AsyncQueryHandler {
+        public AsyncQueryHandlerImpl(final ContentResolver that) {
+            super(that);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         GeckoAppShell.ensureCrashHandling();
@@ -108,7 +120,7 @@ public class SearchActivity extends Locales.LocaleAwareFragmentActivity
         // Initialize the fragments with the selected search engine.
         searchEngineManager.getEngine(this);
 
-        queryHandler = new AsyncQueryHandler(getContentResolver()) {};
+        queryHandler = new AsyncQueryHandlerImpl(getContentResolver());
 
         searchBar = (SearchBar) findViewById(R.id.search_bar);
         searchBar.setOnClickListener(new View.OnClickListener() {
@@ -183,8 +195,7 @@ public class SearchActivity extends Locales.LocaleAwareFragmentActivity
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        searchEngineManager.destroy();
-        searchEngineManager = null;
+        searchEngineManager.unregisterListeners();
         engine = null;
         suggestionsFragment = null;
         postSearchFragment = null;
@@ -244,7 +255,7 @@ public class SearchActivity extends Locales.LocaleAwareFragmentActivity
         storeQuery(query);
 
         try {
-            BrowserHealthRecorder.recordSearchDelayed("activity", engine.getIdentifier());
+            //BrowserHealthRecorder.recordSearchDelayed("activity", engine.getIdentifier());
         } catch (Exception e) {
             // This should never happen: it'll only throw if the
             // search location is wrong. But let's not tempt fate.

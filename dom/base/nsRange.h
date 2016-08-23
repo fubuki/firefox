@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,12 +28,13 @@ namespace dom {
 class DocumentFragment;
 class DOMRect;
 class DOMRectList;
-}
-}
+class Selection;
+} // namespace dom
+} // namespace mozilla
 
-class nsRange MOZ_FINAL : public nsIDOMRange,
-                          public nsStubMutationObserver,
-                          public nsWrapperCache
+class nsRange final : public nsIDOMRange,
+                      public nsStubMutationObserver,
+                      public nsWrapperCache
 {
   typedef mozilla::ErrorResult ErrorResult;
   typedef mozilla::dom::DOMRect DOMRect;
@@ -41,25 +43,7 @@ class nsRange MOZ_FINAL : public nsIDOMRange,
   virtual ~nsRange();
 
 public:
-  explicit nsRange(nsINode* aNode)
-    : mRoot(nullptr)
-    , mStartOffset(0)
-    , mEndOffset(0)
-    , mIsPositioned(false)
-    , mIsDetached(false)
-    , mMaySpanAnonymousSubtrees(false)
-    , mInSelection(false)
-    , mStartOffsetWasIncremented(false)
-    , mEndOffsetWasIncremented(false)
-    , mEnableGravitationOnElementRemoval(true)
-#ifdef DEBUG
-    , mAssertNextInsertOrAppendIndex(-1)
-    , mAssertNextInsertOrAppendNode(nullptr)
-#endif
-  {
-    MOZ_ASSERT(aNode, "range isn't in a document!");
-    mOwner = aNode->OwnerDoc();
-  }
+  explicit nsRange(nsINode* aNode);
 
   static nsresult CreateRange(nsIDOMNode* aStartParent, int32_t aStartOffset,
                               nsIDOMNode* aEndParent, int32_t aEndOffset,
@@ -127,30 +111,38 @@ public:
   }
   
   /**
-   * Return true iff this range is part of at least one Selection object
+   * Return true iff this range is part of a Selection object
    * and isn't detached.
    */
   bool IsInSelection() const
   {
-    return mInSelection;
+    return !!mSelection;
   }
 
   /**
    * Called when the range is added/removed from a Selection.
    */
-  void SetInSelection(bool aInSelection)
+  void SetSelection(mozilla::dom::Selection* aSelection);
+
+  /**
+   * Return true if this range was generated.
+   * @see SetIsGenerated
+   */
+  bool IsGenerated() const
   {
-    if (mInSelection == aInSelection) {
-      return;
-    }
-    mInSelection = aInSelection;
-    nsINode* commonAncestor = GetCommonAncestor();
-    NS_ASSERTION(commonAncestor, "unexpected disconnected nodes");
-    if (mInSelection) {
-      RegisterCommonAncestor(commonAncestor);
-    } else {
-      UnregisterCommonAncestor(commonAncestor);
-    }
+    return mIsGenerated;
+  }
+
+  /**
+   * Mark this range as being generated or not.
+   * Currently it is used for marking ranges that are created when splitting up
+   * a range to exclude a -moz-user-select:none region.
+   * @see Selection::AddItem
+   * @see ExcludeNonSelectableNodes
+   */
+  void SetIsGenerated(bool aIsGenerated)
+  {
+    mIsGenerated = aIsGenerated;
   }
 
   nsINode* GetCommonAncestor() const;
@@ -220,9 +212,15 @@ public:
                                                   bool aFlushLayout = true);
   already_AddRefed<DOMRectList> GetClientRects(bool aClampToEdge = true,
                                                bool aFlushLayout = true);
+  static void GetInnerTextNoFlush(mozilla::dom::DOMString& aValue,
+                                  mozilla::ErrorResult& aError,
+                                  nsIContent* aStartParent,
+                                  uint32_t aStartOffset,
+                                  nsIContent* aEndParent,
+                                  uint32_t aEndOffset);
 
   nsINode* GetParentObject() const { return mOwner; }
-  virtual JSObject* WrapObject(JSContext* cx) MOZ_OVERRIDE MOZ_FINAL;
+  virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto) override final;
 
 private:
   // no copy's or assigns
@@ -254,6 +252,14 @@ public:
                                      bool *outNodeBefore,
                                      bool *outNodeAfter);
 
+  /**
+   * Return true if any part of (aNode, aStartOffset) .. (aNode, aEndOffset)
+   * overlaps any nsRange in aNode's GetNextRangeCommonAncestor ranges (i.e.
+   * where aNode is a descendant of a range's common ancestor node).
+   * If a nsRange starts in (aNode, aEndOffset) or if it ends in
+   * (aNode, aStartOffset) then it is non-overlapping and the result is false
+   * for that nsRange.  Collapsed ranges always counts as non-overlapping.
+   */
   static bool IsNodeSelected(nsINode* aNode, uint32_t aStartOffset,
                              uint32_t aEndOffset);
 
@@ -274,7 +280,7 @@ public:
    * will be empty.
    * @param aOutRanges the resulting set of ranges
    */
-  void ExcludeNonSelectableNodes(nsTArray<nsRefPtr<nsRange>>* aOutRanges);
+  void ExcludeNonSelectableNodes(nsTArray<RefPtr<nsRange>>* aOutRanges);
 
   typedef nsTHashtable<nsPtrHashKey<nsRange> > RangeHashTable;
 protected:
@@ -300,6 +306,14 @@ protected:
    */
   nsINode* GetRegisteredCommonAncestor();
 
+  // Helper to IsNodeSelected.
+  static bool IsNodeInSortedRanges(nsINode* aNode,
+                                   uint32_t aStartOffset,
+                                   uint32_t aEndOffset,
+                                   const nsTArray<const nsRange*>& aRanges,
+                                   size_t aRangeStart,
+                                   size_t aRangeEnd);
+
   struct MOZ_STACK_CLASS AutoInvalidateSelection
   {
     explicit AutoInvalidateSelection(nsRange* aRange) : mRange(aRange)
@@ -315,7 +329,7 @@ protected:
     }
     ~AutoInvalidateSelection();
     nsRange* mRange;
-    nsRefPtr<nsINode> mCommonAncestor;
+    RefPtr<nsINode> mCommonAncestor;
 #ifdef DEBUG
     bool mWasInSelection;
 #endif
@@ -326,16 +340,17 @@ protected:
   nsCOMPtr<nsINode> mRoot;
   nsCOMPtr<nsINode> mStartParent;
   nsCOMPtr<nsINode> mEndParent;
+  RefPtr<mozilla::dom::Selection> mSelection;
   int32_t mStartOffset;
   int32_t mEndOffset;
 
-  bool mIsPositioned;
-  bool mIsDetached;
-  bool mMaySpanAnonymousSubtrees;
-  bool mInSelection;
-  bool mStartOffsetWasIncremented;
-  bool mEndOffsetWasIncremented;
-  bool mEnableGravitationOnElementRemoval;
+  bool mIsPositioned : 1;
+  bool mIsDetached : 1;
+  bool mMaySpanAnonymousSubtrees : 1;
+  bool mIsGenerated : 1;
+  bool mStartOffsetWasIncremented : 1;
+  bool mEndOffsetWasIncremented : 1;
+  bool mEnableGravitationOnElementRemoval : 1;
 #ifdef DEBUG
   int32_t  mAssertNextInsertOrAppendIndex;
   nsINode* mAssertNextInsertOrAppendNode;

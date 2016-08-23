@@ -1,8 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+"use strict";
 
-let FakeSSLStatus = function() {
+var FakeSSLStatus = function() {
 };
 
 FakeSSLStatus.prototype = {
@@ -21,9 +22,9 @@ FakeSSLStatus.prototype = {
         aIID.equals(Ci.nsISupports)) {
       return this;
     }
-    throw Components.results.NS_ERROR_NO_INTERFACE;
+    throw new Error(Cr.NS_ERROR_NO_INTERFACE);
   },
-}
+};
 
 // This is a template to help porting global private browsing tests
 // to per-window private browsing tests
@@ -61,9 +62,9 @@ function test() {
       // execute should only be called when need, like when you are opening
       // web pages on the test. If calling executeSoon() is not necesary, then
       // call whenNewWindowLoaded() instead of testOnWindow() on your test.
-      executeSoon(function() aCallback(aWin));
+      executeSoon(function() { aCallback(aWin); });
     });
-  };
+  }
 
    // this function is called after calling finish() on the test.
   registerCleanupFunction(function() {

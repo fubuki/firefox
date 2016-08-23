@@ -6,7 +6,7 @@
 
 toolkit = CONFIG['MOZ_WIDGET_TOOLKIT']
 
-if toolkit in ('cocoa', 'qt', 'android', 'gonk'):
+if toolkit in ('cocoa', 'qt', 'android', 'gonk', 'uikit'):
     DIRS += [toolkit]
 if toolkit in ('qt', 'android', 'gonk', 'gtk2', 'gtk3'):
     EXPORTS += ['nsIPrintDialogService.h']
@@ -15,7 +15,6 @@ if toolkit == 'windows':
     DIRS += ['windows']
 
     XPIDL_SOURCES += [
-        'nsIGfxInfo2.idl',
         'nsIJumpListBuilder.idl',
         'nsIJumpListItem.idl',
         'nsIPrintSettingsWin.idl',
@@ -26,11 +25,11 @@ if toolkit == 'windows':
         'nsITaskbarProgress.idl',
         'nsITaskbarTabPreview.idl',
         'nsITaskbarWindowPreview.idl',
+        'nsIWindowsUIUtils.idl',
         'nsIWinTaskbar.idl',
     ]
 elif toolkit == 'cocoa':
     XPIDL_SOURCES += [
-        'nsIGfxInfo2.idl',
         'nsIMacDockSupport.idl',
         'nsIMacWebAppUtils.idl',
         'nsIStandaloneNativeMenu.idl',
@@ -50,7 +49,7 @@ TEST_DIRS += ['tests']
 # multiple implementations of widget can be built on the same
 # source tree.
 #
-if CONFIG['MOZ_ENABLE_GTK']:
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     DIRS += ['gtk']
 
     if CONFIG['MOZ_X11']:
@@ -66,6 +65,7 @@ XPIDL_SOURCES += [
     'nsIClipboardHelper.idl',
     'nsIClipboardOwner.idl',
     'nsIColorPicker.idl',
+    'nsIDisplayInfo.idl',
     'nsIDragService.idl',
     'nsIDragSession.idl',
     'nsIFilePicker.idl',
@@ -74,7 +74,6 @@ XPIDL_SOURCES += [
     'nsIGfxInfoDebug.idl',
     'nsIIdleService.idl',
     'nsIIdleServiceInternal.idl',
-    'nsIIMEPicker.idl',
     'nsIPrintOptions.idl',
     'nsIPrintSession.idl',
     'nsIPrintSettings.idl',
@@ -84,12 +83,6 @@ XPIDL_SOURCES += [
     'nsISound.idl',
     'nsITransferable.idl',
 ]
-
-if CONFIG['MOZ_METRO']:
-    XPIDL_SOURCES += [
-        'MetroUIUtils.idl',
-        'nsIWinMetroUtils.idl',
-    ]
 
 XPIDL_MODULE = 'widget'
 
@@ -101,7 +94,9 @@ EXPORTS += [
     'InputData.h',
     'nsBaseScreen.h',
     'nsBaseWidget.h',
+    'nsDeviceContextSpecProxy.h',
     'nsIDeviceContextSpec.h',
+    'nsIKeyEventInPluginCallback.h',
     'nsIPluginWidget.h',
     'nsIRollupListener.h',
     'nsIWidget.h',
@@ -115,12 +110,17 @@ EXPORTS += [
 EXPORTS.mozilla += [
     'BasicEvents.h',
     'CommandList.h',
+    'ContentCache.h',
     'ContentEvents.h',
     'EventClassList.h',
     'EventForwards.h',
+    'EventMessageList.h',
+    'FontRange.h',
     'LookAndFeel.h',
     'MiscEvents.h',
     'MouseEvents.h',
+    'TextEventDispatcher.h',
+    'TextEventDispatcherListener.h',
     'TextEvents.h',
     'TextRange.h',
     'TouchEvents.h',
@@ -128,7 +128,14 @@ EXPORTS.mozilla += [
     'WidgetUtils.h',
 ]
 
+EXPORTS.mozilla.widget += [
+    'IMEData.h',
+    'PuppetBidiKeyboard.h',
+    'WidgetMessageUtils.h',
+]
+
 UNIFIED_SOURCES += [
+    'ContentCache.cpp',
     'ContentHelper.cpp',
     'GfxDriverInfo.cpp',
     'GfxInfoBase.cpp',
@@ -142,6 +149,8 @@ UNIFIED_SOURCES += [
     'nsClipboardProxy.cpp',
     'nsColorPickerProxy.cpp',
     'nsContentProcessWidgetFactory.cpp',
+    'nsDeviceContextSpecProxy.cpp',
+    'nsDragServiceProxy.cpp',
     'nsFilePickerProxy.cpp',
     'nsHTMLFormatConverter.cpp',
     'nsIdleService.cpp',
@@ -150,13 +159,14 @@ UNIFIED_SOURCES += [
     'nsPrintSession.cpp',
     'nsPrintSettingsImpl.cpp',
     'nsScreenManagerProxy.cpp',
-    'nsShmImage.cpp',
     'nsTransferable.cpp',
     'nsXPLookAndFeel.cpp',
     'PluginWidgetProxy.cpp',
+    'PuppetBidiKeyboard.cpp',
     'PuppetWidget.cpp',
     'ScreenProxy.cpp',
     'SharedWidgetUtils.cpp',
+    'TextEventDispatcher.cpp',
     'VsyncDispatcher.cpp',
     'WidgetEventImpl.cpp',
     'WidgetUtils.cpp',
@@ -187,14 +197,17 @@ if CONFIG['MOZ_X11']:
     UNIFIED_SOURCES += [
         'GfxInfoX11.cpp'
     ]
+    SOURCES += [
+        'nsShmImage.cpp'
+    ]
 
 if toolkit in ('cocoa', 'windows'):
     UNIFIED_SOURCES += [
         'nsBaseClipboard.cpp',
     ]
 
-if toolkit in ('qt', 'gtk2', 'gtk3', 'cocoa', 'windows',
-                                    'android', 'gonk'):
+if toolkit in {'qt', 'gtk2', 'gtk3', 'cocoa', 'windows',
+               'android', 'gonk', 'uikit'}:
     UNIFIED_SOURCES += [
         'nsBaseFilePicker.cpp',
     ]
@@ -203,17 +216,19 @@ if toolkit in ('qt', 'gtk2', 'gtk3', 'windows', 'cocoa'):
     UNIFIED_SOURCES += [
         'nsNativeTheme.cpp',
     ]
+if toolkit == 'gtk3':
+    XPIDL_SOURCES += [
+        'nsIApplicationChooser.idl',
+    ]
 
 if not CONFIG['MOZ_B2G']:
     DEFINES['MOZ_CROSS_PROCESS_IME'] = True
 
-FAIL_ON_WARNINGS = True
-
-MSVC_ENABLE_PGO = True
-
 include('/ipc/chromium/chromium-config.mozbuild')
 
 LOCAL_INCLUDES += [
+    '/dom/base',
+    '/dom/ipc',
     '/layout/base',
     '/layout/forms',
     '/layout/generic',

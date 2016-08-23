@@ -194,8 +194,8 @@ this.Log = {
     }
     // Standard JS exception
     if (e.stack) {
-      return "JS Stack trace: " + e.stack.trim().replace(/\n/g, " < ").
-        replace(/@[^@]*?([^\/\.]+\.\w+:)/g, "@$1");
+      return "JS Stack trace: " + Task.Debugging.generateReadableStack(e.stack).trim()
+        .replace(/\n/g, " < ").replace(/@[^@]*?([^\/\.]+\.\w+:)/g, "@$1");
     }
 
     return "No traceback available";
@@ -280,7 +280,9 @@ Logger.prototype = {
   },
 
   _parent: null,
-  get parent() this._parent,
+  get parent() {
+    return this._parent;
+  },
   set parent(parent) {
     if (this._parent == parent) {
       return;
@@ -348,7 +350,8 @@ Logger.prototype = {
       throw "An action is required when logging a structured message.";
     }
     if (!params) {
-      return this.log(this.level, undefined, {"action": action});
+      this.log(this.level, undefined, {"action": action});
+      return;
     }
     if (typeof(params) != "object") {
       throw "The params argument is required to be an object.";
@@ -573,6 +576,7 @@ BasicFormatter.prototype = {
       }
       return textParts.join(': ');
     }
+    return undefined;
   },
 
   format: function BF_format(message) {
@@ -632,7 +636,7 @@ StructuredFormatter.prototype = {
 function isError(aObj) {
   return (aObj && typeof(aObj) == 'object' && "name" in aObj && "message" in aObj &&
           "fileName" in aObj && "lineNumber" in aObj && "stack" in aObj);
-};
+}
 
 /*
  * Parameter Formatters
@@ -865,7 +869,7 @@ FileAppender.prototype = {
   __proto__: Appender.prototype,
 
   _openFile: function () {
-    return Task.spawn(function _openFile() {
+    return Task.spawn(function* _openFile() {
       try {
         this._file = yield OS.File.open(this._path,
                                         {truncate: true});
@@ -897,6 +901,7 @@ FileAppender.prototype = {
         if (this._file) {
           return this._file.write(array);
         }
+        return undefined;
       });
     }
   },
@@ -940,6 +945,7 @@ BoundedFileAppender.prototype = {
       this._removeFilePromise = null;
       this.doAppend(formatted);
     });
+    return undefined;
   },
 
   reset: function () {

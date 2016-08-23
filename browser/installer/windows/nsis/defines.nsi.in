@@ -36,8 +36,12 @@
 !endif
 !define BrandFullName         "${BrandFullNameInternal}"
 
-!define CERTIFICATE_NAME      "Mozilla Corporation"
-!define CERTIFICATE_ISSUER    "DigiCert Assured ID Code Signing CA-1"
+!define CERTIFICATE_NAME            "Mozilla Corporation"
+!define CERTIFICATE_ISSUER          "DigiCert SHA2 Assured ID Code Signing CA"
+; Changing the name or issuer requires us to have both the old and the new
+;  in the registry at the same time, temporarily.
+!define CERTIFICATE_NAME_PREVIOUS   "Mozilla Corporation"
+!define CERTIFICATE_ISSUER_PREVIOUS "DigiCert Assured ID Code Signing CA-1"
 
 # LSP_CATEGORIES is the permitted LSP categories for the application. Each LSP
 # category value is ANDed together to set multiple permitted categories.
@@ -72,10 +76,6 @@
 
 #ifdef MOZ_MAINTENANCE_SERVICE
 !define MOZ_MAINTENANCE_SERVICE
-#endif
-
-#ifdef MOZ_METRO
-!define MOZ_METRO
 #endif
 
 # File details shared by both the installer and uninstaller

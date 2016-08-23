@@ -8,21 +8,24 @@
 #ifndef nsTransitionManager_h_
 #define nsTransitionManager_h_
 
-#include "mozilla/Attributes.h"
+#include "mozilla/ContentEvents.h"
+#include "mozilla/EffectCompositor.h" // For EffectCompositor::CascadeLevel
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/Animation.h"
-#include "mozilla/dom/AnimationPlayer.h"
+#include "mozilla/dom/KeyframeEffect.h" // For KeyframeEffectReadOnly
 #include "AnimationCommon.h"
-#include "nsCSSPseudoElements.h"
+#include "nsCSSProps.h"
 
+class nsIGlobalObject;
 class nsStyleContext;
 class nsPresContext;
 class nsCSSPropertySet;
-struct ElementDependentRuleProcessorData;
 
 namespace mozilla {
+enum class CSSPseudoElementType : uint8_t;
+struct Keyframe;
 struct StyleTransition;
-}
+} // namespace mozilla
 
 /*****************************************************************************
  * Per-Element data                                                          *
@@ -30,24 +33,54 @@ struct StyleTransition;
 
 namespace mozilla {
 
-struct ElementPropertyTransition : public dom::Animation
+struct ElementPropertyTransition : public dom::KeyframeEffectReadOnly
 {
   ElementPropertyTransition(nsIDocument* aDocument,
                             dom::Element* aTarget,
-                            nsCSSPseudoElements::Type aPseudoType,
-                            const AnimationTiming &aTiming)
-    : dom::Animation(aDocument, aTarget, aPseudoType, aTiming, EmptyString())
+                            CSSPseudoElementType aPseudoType,
+                            const TimingParams &aTiming,
+                            StyleAnimationValue aStartForReversingTest,
+                            double aReversePortion)
+    : dom::KeyframeEffectReadOnly(aDocument, aTarget, aPseudoType, aTiming)
+    , mStartForReversingTest(aStartForReversingTest)
+    , mReversePortion(aReversePortion)
   { }
 
-  virtual ElementPropertyTransition* AsTransition() { return this; }
-  virtual const ElementPropertyTransition* AsTransition() const { return this; }
+  ElementPropertyTransition* AsTransition() override { return this; }
+  const ElementPropertyTransition* AsTransition() const override
+  {
+    return this;
+  }
+
+  nsCSSProperty TransitionProperty() const {
+    MOZ_ASSERT(mFrames.Length() == 2,
+               "Transitions should have exactly two animation frames. "
+               "Perhaps we are using an un-initialized transition?");
+    MOZ_ASSERT(mFrames[0].mPropertyValues.Length() == 1,
+               "Transitions should have exactly one property in their first "
+               "frame");
+    return mFrames[0].mPropertyValues[0].mProperty;
+  }
+
+  StyleAnimationValue ToValue() const {
+    // If we failed to generate properties from the transition frames,
+    // return a null value but also show a warning since we should be
+    // detecting that kind of situation in advance and not generating a
+    // transition in the first place.
+    if (mProperties.Length() < 1 ||
+        mProperties[0].mSegments.Length() < 1) {
+      NS_WARNING("Failed to generate transition property values");
+      return StyleAnimationValue();
+    }
+    return mProperties[0].mSegments[0].mToValue;
+  }
 
   // This is the start value to be used for a check for whether a
   // transition is being reversed.  Normally the same as
   // mProperties[0].mSegments[0].mFromValue, except when this transition
   // started as the reversal of another in-progress transition.
   // Needed so we can handle two reverses in a row.
-  mozilla::StyleAnimationValue mStartForReversingTest;
+  StyleAnimationValue mStartForReversingTest;
   // Likewise, the portion (in value space) of the "full" reversed
   // transition that we're actually covering.  For example, if a :hover
   // effect has a transition that moves the element 10px to the right
@@ -65,50 +98,205 @@ struct ElementPropertyTransition : public dom::Animation
   double CurrentValuePortion() const;
 };
 
-class CSSTransitionPlayer MOZ_FINAL : public dom::AnimationPlayer
+namespace dom {
+
+class CSSTransition final : public Animation
 {
 public:
- explicit CSSTransitionPlayer(dom::AnimationTimeline* aTimeline)
-    : dom::AnimationPlayer(aTimeline)
+ explicit CSSTransition(nsIGlobalObject* aGlobal)
+    : dom::Animation(aGlobal)
+    , mWasFinishedOnLastTick(false)
+    , mNeedsNewAnimationIndexWhenRun(false)
   {
   }
 
-  virtual CSSTransitionPlayer*
-  AsCSSTransitionPlayer() MOZ_OVERRIDE { return this; }
+  JSObject* WrapObject(JSContext* aCx,
+                       JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual dom::AnimationPlayState PlayStateFromJS() const MOZ_OVERRIDE;
-  virtual void PlayFromJS() MOZ_OVERRIDE;
+  CSSTransition* AsCSSTransition() override { return this; }
+  const CSSTransition* AsCSSTransition() const override { return this; }
+
+  // CSSTransition interface
+  void GetTransitionProperty(nsString& aRetVal) const;
+
+  // Animation interface overrides
+  virtual AnimationPlayState PlayStateFromJS() const override;
+  virtual void PlayFromJS(ErrorResult& aRv) override;
 
   // A variant of Play() that avoids posting style updates since this method
   // is expected to be called whilst already updating style.
-  void PlayFromStyle() { DoPlay(); }
+  void PlayFromStyle()
+  {
+    ErrorResult rv;
+    DoPlay(rv, Animation::LimitBehavior::Continue);
+    // play() should not throw when LimitBehavior is Continue
+    MOZ_ASSERT(!rv.Failed(), "Unexpected exception playing transition");
+  }
+
+  void CancelFromStyle() override
+  {
+    // The animation index to use for compositing will be established when
+    // this transition next transitions out of the idle state but we still
+    // update it now so that the sort order of this transition remains
+    // defined until that moment.
+    //
+    // See longer explanation in CSSAnimation::CancelFromStyle.
+    mAnimationIndex = sNextAnimationIndex++;
+    mNeedsNewAnimationIndexWhenRun = true;
+
+    Animation::CancelFromStyle();
+
+    // It is important we do this *after* calling CancelFromStyle().
+    // This is because CancelFromStyle() will end up posting a restyle and
+    // that restyle should target the *transitions* level of the cascade.
+    // However, once we clear the owning element, CascadeLevel() will begin
+    // returning CascadeLevel::Animations.
+    mOwningElement = OwningElementRef();
+  }
+
+  void Tick() override;
+
+  nsCSSProperty TransitionProperty() const;
+  StyleAnimationValue ToValue() const;
+
+  bool HasLowerCompositeOrderThan(const CSSTransition& aOther) const;
+  EffectCompositor::CascadeLevel CascadeLevel() const override
+  {
+    return IsTiedToMarkup() ?
+           EffectCompositor::CascadeLevel::Transitions :
+           EffectCompositor::CascadeLevel::Animations;
+  }
+
+  void SetCreationSequence(uint64_t aIndex)
+  {
+    MOZ_ASSERT(IsTiedToMarkup());
+    mAnimationIndex = aIndex;
+  }
+
+  // Sets the owning element which is used for determining the composite
+  // oder of CSSTransition objects generated from CSS markup.
+  //
+  // @see mOwningElement
+  void SetOwningElement(const OwningElementRef& aElement)
+  {
+    mOwningElement = aElement;
+  }
+  // True for transitions that are generated from CSS markup and continue to
+  // reflect changes to that markup.
+  bool IsTiedToMarkup() const { return mOwningElement.IsSet(); }
 
 protected:
-  virtual ~CSSTransitionPlayer() { }
+  virtual ~CSSTransition()
+  {
+    MOZ_ASSERT(!mOwningElement.IsSet(), "Owning element should be cleared "
+                                        "before a CSS transition is destroyed");
+  }
 
-  virtual css::CommonAnimationManager* GetAnimationManager() const MOZ_OVERRIDE;
+  // Animation overrides
+  void UpdateTiming(SeekFlag aSeekFlag,
+                    SyncNotifyFlag aSyncNotifyFlag) override;
+
+  void QueueEvents();
+
+  // The (pseudo-)element whose computed transition-property refers to this
+  // transition (if any).
+  //
+  // This is used for determining the relative composite order of transitions
+  // generated from CSS markup.
+  //
+  // Typically this will be the same as the target element of the keyframe
+  // effect associated with this transition. However, it can differ in the
+  // following circumstances:
+  //
+  // a) If script removes or replaces the effect of this transition,
+  // b) If this transition is cancelled (e.g. by updating the
+  //    transition-property or removing the owning element from the document),
+  // c) If this object is generated from script using the CSSTransition
+  //    constructor.
+  //
+  // For (b) and (c) the owning element will return !IsSet().
+  OwningElementRef mOwningElement;
+
+  bool mWasFinishedOnLastTick;
+
+  // When true, indicates that when this transition next leaves the idle state,
+  // its animation index should be updated.
+  bool mNeedsNewAnimationIndexWhenRun;
+};
+
+} // namespace dom
+
+template <>
+struct AnimationTypeTraits<dom::CSSTransition>
+{
+  static nsIAtom* ElementPropertyAtom()
+  {
+    return nsGkAtoms::transitionsProperty;
+  }
+  static nsIAtom* BeforePropertyAtom()
+  {
+    return nsGkAtoms::transitionsOfBeforeProperty;
+  }
+  static nsIAtom* AfterPropertyAtom()
+  {
+    return nsGkAtoms::transitionsOfAfterProperty;
+  }
+};
+
+struct TransitionEventInfo {
+  RefPtr<dom::Element> mElement;
+  RefPtr<dom::Animation> mAnimation;
+  InternalTransitionEvent mEvent;
+  TimeStamp mTimeStamp;
+
+  TransitionEventInfo(dom::Element* aElement,
+                      CSSPseudoElementType aPseudoType,
+                      nsCSSProperty aProperty,
+                      StickyTimeDuration aDuration,
+                      const TimeStamp& aTimeStamp,
+                      dom::Animation* aAnimation)
+    : mElement(aElement)
+    , mAnimation(aAnimation)
+    , mEvent(true, eTransitionEnd)
+    , mTimeStamp(aTimeStamp)
+  {
+    // XXX Looks like nobody initialize WidgetEvent::time
+    mEvent.mPropertyName =
+      NS_ConvertUTF8toUTF16(nsCSSProps::GetStringValue(aProperty));
+    mEvent.mElapsedTime = aDuration.ToSeconds();
+    mEvent.mPseudoElement =
+      AnimationCollection<dom::CSSTransition>::PseudoTypeAsString(aPseudoType);
+  }
+
+  // InternalTransitionEvent doesn't support copy-construction, so we need
+  // to ourselves in order to work with nsTArray
+  TransitionEventInfo(const TransitionEventInfo& aOther)
+    : mElement(aOther.mElement)
+    , mAnimation(aOther.mAnimation)
+    , mEvent(true, eTransitionEnd)
+    , mTimeStamp(aOther.mTimeStamp)
+  {
+    mEvent.AssignTransitionEventData(aOther.mEvent, false);
+  }
 };
 
 } // namespace mozilla
 
-class nsTransitionManager MOZ_FINAL
-  : public mozilla::css::CommonAnimationManager
+class nsTransitionManager final
+  : public mozilla::CommonAnimationManager<mozilla::dom::CSSTransition>
 {
 public:
   explicit nsTransitionManager(nsPresContext *aPresContext)
-    : mozilla::css::CommonAnimationManager(aPresContext)
+    : mozilla::CommonAnimationManager<mozilla::dom::CSSTransition>(aPresContext)
     , mInAnimationOnlyStyleUpdate(false)
   {
   }
 
-  typedef mozilla::AnimationPlayerCollection AnimationPlayerCollection;
+  NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(nsTransitionManager)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(nsTransitionManager)
 
-  static AnimationPlayerCollection*
-  GetAnimationsForCompositor(nsIContent* aContent, nsCSSProperty aProperty)
-  {
-    return mozilla::css::CommonAnimationManager::GetAnimationsForCompositor(
-      aContent, nsGkAtoms::transitionsProperty, aProperty);
-  }
+  typedef mozilla::AnimationCollection<mozilla::dom::CSSTransition>
+    CSSTransitionCollection;
 
   /**
    * StyleContextChanged
@@ -119,55 +307,93 @@ public:
    * pseudos, aElement is expected to be the generated before/after
    * element.
    *
-   * It may return a "cover rule" (see CoverTransitionStartStyleRule) to
-   * cover up some of the changes for the duration of the restyling of
-   * descendants.  If it does, this function will take care of causing
-   * the necessary restyle afterwards, but the caller must restyle the
-   * element *again* with the original sequence of rules plus the
-   * returned cover rule as the most specific rule.
+   * It may modify the new style context (by replacing
+   * *aNewStyleContext) to cover up some of the changes for the duration
+   * of the restyling of descendants.  If it does, this function will
+   * take care of causing the necessary restyle afterwards.
    */
-  already_AddRefed<nsIStyleRule>
-    StyleContextChanged(mozilla::dom::Element *aElement,
-                        nsStyleContext *aOldStyleContext,
-                        nsStyleContext *aNewStyleContext);
+  void StyleContextChanged(mozilla::dom::Element *aElement,
+                           nsStyleContext *aOldStyleContext,
+                           RefPtr<nsStyleContext>* aNewStyleContext /* inout */);
+
+  /**
+   * When we're resolving style for an element that previously didn't have
+   * style, we might have some old finished transitions for it, if,
+   * say, it was display:none for a while, but previously displayed.
+   *
+   * This method removes any finished transitions that don't match the
+   * new style.
+   */
+  void PruneCompletedTransitions(mozilla::dom::Element* aElement,
+                                 mozilla::CSSPseudoElementType aPseudoType,
+                                 nsStyleContext* aNewStyleContext);
 
   void SetInAnimationOnlyStyleUpdate(bool aInAnimationOnlyUpdate) {
     mInAnimationOnlyStyleUpdate = aInAnimationOnlyUpdate;
   }
 
-  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
-    MOZ_MUST_OVERRIDE MOZ_OVERRIDE;
-  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
-    MOZ_MUST_OVERRIDE MOZ_OVERRIDE;
+  bool InAnimationOnlyStyleUpdate() const {
+    return mInAnimationOnlyStyleUpdate;
+  }
 
-  // nsARefreshObserver
-  virtual void WillRefresh(mozilla::TimeStamp aTime) MOZ_OVERRIDE;
+  void QueueEvent(mozilla::TransitionEventInfo&& aEventInfo)
+  {
+    mEventDispatcher.QueueEvent(
+      mozilla::Forward<mozilla::TransitionEventInfo>(aEventInfo));
+  }
 
-  void FlushTransitions(FlushFlags aFlags);
+  void DispatchEvents()
+  {
+    RefPtr<nsTransitionManager> kungFuDeathGrip(this);
+    mEventDispatcher.DispatchEvents(mPresContext);
+  }
+  void SortEvents()      { mEventDispatcher.SortEvents(); }
+  void ClearEventQueue() { mEventDispatcher.ClearEventQueue(); }
+
+  // Stop transitions on the element. This method takes the real element
+  // rather than the element for the generated content for transitions on
+  // ::before and ::after.
+  void StopTransitionsForElement(mozilla::dom::Element* aElement,
+                                 mozilla::CSSPseudoElementType aPseudoType);
 
 protected:
-  virtual nsIAtom* GetAnimationsAtom() MOZ_OVERRIDE {
-    return nsGkAtoms::transitionsProperty;
-  }
-  virtual nsIAtom* GetAnimationsBeforeAtom() MOZ_OVERRIDE {
-    return nsGkAtoms::transitionsOfBeforeProperty;
-  }
-  virtual nsIAtom* GetAnimationsAfterAtom() MOZ_OVERRIDE {
-    return nsGkAtoms::transitionsOfAfterProperty;
-  }
+  virtual ~nsTransitionManager() {}
 
-private:
+  typedef nsTArray<RefPtr<mozilla::dom::CSSTransition>>
+    OwningCSSTransitionPtrArray;
+
+  // Update the transitions. It'd start new, replace, or stop current
+  // transitions if need. aDisp and aElement shouldn't be nullptr.
+  // aElementTransitions is the collection of current transitions, and it
+  // could be a nullptr if we don't have any transitions.
+  bool
+  UpdateTransitions(const nsStyleDisplay* aDisp,
+                    mozilla::dom::Element* aElement,
+                    CSSTransitionCollection*& aElementTransitions,
+                    nsStyleContext* aOldStyleContext,
+                    nsStyleContext* aNewStyleContext);
+
   void
   ConsiderStartingTransition(nsCSSProperty aProperty,
                              const mozilla::StyleTransition& aTransition,
                              mozilla::dom::Element* aElement,
-                             AnimationPlayerCollection*& aElementTransitions,
+                             CSSTransitionCollection*& aElementTransitions,
                              nsStyleContext* aOldStyleContext,
                              nsStyleContext* aNewStyleContext,
                              bool* aStartedAny,
                              nsCSSPropertySet* aWhichStarted);
 
+  nsTArray<mozilla::Keyframe> GetTransitionKeyframes(
+    nsStyleContext* aStyleContext,
+    nsCSSProperty aProperty,
+    mozilla::StyleAnimationValue&& aStartValue,
+    mozilla::StyleAnimationValue&& aEndValue,
+    const nsTimingFunction& aTimingFunction);
+
   bool mInAnimationOnlyStyleUpdate;
+
+  mozilla::DelayedEventDispatcher<mozilla::TransitionEventInfo>
+      mEventDispatcher;
 };
 
 #endif /* !defined(nsTransitionManager_h_) */

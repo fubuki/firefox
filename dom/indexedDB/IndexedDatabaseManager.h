@@ -1,11 +1,11 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_indexeddb_indexeddatabasemanager_h__
-#define mozilla_dom_indexeddb_indexeddatabasemanager_h__
+#ifndef mozilla_dom_indexeddatabasemanager_h__
+#define mozilla_dom_indexeddatabasemanager_h__
 
 #include "nsIObserver.h"
 
@@ -14,29 +14,35 @@
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "mozilla/Mutex.h"
 #include "nsClassHashtable.h"
+#include "nsCOMPtr.h"
 #include "nsHashKeys.h"
+#include "nsITimer.h"
 
-class nsPIDOMWindow;
-struct PRLogModuleInfo;
+class nsIEventTarget;
 
 namespace mozilla {
 
-class DOMEventTargetHelper;
 class EventChainPostVisitor;
 
 namespace dom {
 
-class TabContext;
+class IDBFactory;
 
 namespace indexedDB {
 
+class BackgroundUtilsChild;
 class FileManager;
 class FileManagerInfo;
-class IDBFactory;
 
-class IndexedDatabaseManager MOZ_FINAL : public nsIObserver
+} // namespace indexedDB
+
+class IndexedDatabaseManager final
+  : public nsIObserver
+  , public nsITimerCallback
 {
   typedef mozilla::dom::quota::PersistenceType PersistenceType;
+  typedef mozilla::dom::indexedDB::FileManager FileManager;
+  typedef mozilla::dom::indexedDB::FileManagerInfo FileManagerInfo;
 
 public:
   enum LoggingMode
@@ -50,6 +56,7 @@ public:
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSITIMERCALLBACK
 
   // Returns a non-owning reference.
   static IndexedDatabaseManager*
@@ -98,7 +105,7 @@ public:
   }
 #endif
 
-  static PRLogModuleInfo*
+  static mozilla::LogModule*
   GetLoggingModule()
 #ifdef DEBUG
   ;
@@ -109,7 +116,19 @@ public:
 #endif
 
   static bool
+  ExperimentalFeaturesEnabled();
+
+  static bool
   ExperimentalFeaturesEnabled(JSContext* aCx, JSObject* aGlobal);
+
+  static bool
+  IsFileHandleEnabled();
+
+  void
+  ClearBackgroundActor();
+
+  void
+  NoteBackgroundThread(nsIEventTarget* aBackgroundThread);
 
   already_AddRefed<FileManager>
   GetFileManager(PersistenceType aPersistenceType,
@@ -148,6 +167,14 @@ public:
                             int32_t* aSliceRefCnt,
                             bool* aResult);
 
+  nsresult
+  FlushPendingFileDeletions();
+
+#ifdef ENABLE_INTL_API
+  static const nsCString&
+  GetLocale();
+#endif
+
   static mozilla::Mutex&
   FileMutex()
   {
@@ -158,13 +185,10 @@ public:
   }
 
   static nsresult
-  CommonPostHandleEvent(DOMEventTargetHelper* aEventTarget,
-                        IDBFactory* aFactory,
-                        EventChainPostVisitor& aVisitor);
+  CommonPostHandleEvent(EventChainPostVisitor& aVisitor, IDBFactory* aFactory);
 
   static bool
-  TabContextMayAccessOrigin(const mozilla::dom::TabContext& aContext,
-                            const nsACString& aOrigin);
+  ResolveSandboxBinding(JSContext* aCx, JS::Handle<JSObject*> aGlobal);
 
   static bool
   DefineIndexedDB(JSContext* aCx, JS::Handle<JSObject*> aGlobal);
@@ -182,24 +206,36 @@ private:
   static void
   LoggingModePrefChangedCallback(const char* aPrefName, void* aClosure);
 
+  nsCOMPtr<nsIEventTarget> mBackgroundThread;
+
+  nsCOMPtr<nsITimer> mDeleteTimer;
+
   // Maintains a list of all file managers per origin. This list isn't
   // protected by any mutex but it is only ever touched on the IO thread.
   nsClassHashtable<nsCStringHashKey, FileManagerInfo> mFileManagerInfos;
 
-  // Lock protecting FileManager.mFileInfos and FileImplBase.mFileInfos
+  nsClassHashtable<nsRefPtrHashKey<FileManager>,
+                   nsTArray<int64_t>> mPendingDeleteInfos;
+
+  // Lock protecting FileManager.mFileInfos.
   // It's s also used to atomically update FileInfo.mRefCnt, FileInfo.mDBRefCnt
   // and FileInfo.mSliceRefCnt
   mozilla::Mutex mFileMutex;
 
+#ifdef ENABLE_INTL_API
+  nsCString mLocale;
+#endif
+
+  indexedDB::BackgroundUtilsChild* mBackgroundActor;
+
   static bool sIsMainProcess;
   static bool sFullSynchronousMode;
-  static PRLogModuleInfo* sLoggingModule;
+  static LazyLogModule sLoggingModule;
   static Atomic<LoggingMode> sLoggingMode;
   static mozilla::Atomic<bool> sLowDiskSpaceMode;
 };
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla
 
-#endif // mozilla_dom_indexeddb_indexeddatabasemanager_h__
+#endif // mozilla_dom_indexeddatabasemanager_h__

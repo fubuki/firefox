@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,6 +11,7 @@
 #include "nsIDocument.h"
 #include "nsIDOMHTMLCollection.h"
 #include "nsStyledElement.h"
+#include "HTMLCanvasElement.h"
 
 namespace mozilla {
 namespace dom {
@@ -111,11 +113,35 @@ AnonymousContent::RemoveAttributeForElement(const nsAString& aElementId,
   element->RemoveAttribute(aName, aRv);
 }
 
+already_AddRefed<nsISupports>
+AnonymousContent::GetCanvasContext(const nsAString& aElementId,
+                                   const nsAString& aContextId,
+                                   ErrorResult& aRv)
+{
+  Element* element = GetElementById(aElementId);
+
+  if (!element) {
+    aRv.Throw(NS_ERROR_NOT_AVAILABLE);
+    return nullptr;
+  }
+
+  if (!element->IsHTMLElement(nsGkAtoms::canvas)) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISupports> context;
+
+  HTMLCanvasElement* canvas = static_cast<HTMLCanvasElement*>(element);
+  canvas->GetContext(aContextId, getter_AddRefs(context));
+
+  return context.forget();
+}
+
 Element*
 AnonymousContent::GetElementById(const nsAString& aElementId)
 {
   // This can be made faster in the future if needed.
-  nsCOMPtr<nsIAtom> elementId = do_GetAtom(aElementId);
+  nsCOMPtr<nsIAtom> elementId = NS_Atomize(aElementId);
   for (nsIContent* kid = mContentNode->GetFirstChild(); kid;
        kid = kid->GetNextNode(mContentNode)) {
     if (!kid->IsElement()) {
@@ -129,11 +155,13 @@ AnonymousContent::GetElementById(const nsAString& aElementId)
   return nullptr;
 }
 
-JSObject*
-AnonymousContent::WrapObject(JSContext* aCx)
+bool
+AnonymousContent::WrapObject(JSContext* aCx,
+                             JS::Handle<JSObject*> aGivenProto,
+                             JS::MutableHandle<JSObject*> aReflector)
 {
-  return AnonymousContentBinding::Wrap(aCx, this);
+  return AnonymousContentBinding::Wrap(aCx, this, aGivenProto, aReflector);
 }
 
-} // dom namespace
-} // mozilla namespace
+} // namespace dom
+} // namespace mozilla

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,15 +17,15 @@
 namespace mozilla {
 namespace dom {
 
-class MobileConnectionInfo MOZ_FINAL : public nsIMobileConnectionInfo
-                                     , public nsWrapperCache
+class MobileConnectionInfo final : public nsIMobileConnectionInfo
+                                 , public nsWrapperCache
 {
 public:
   NS_DECL_NSIMOBILECONNECTIONINFO
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MobileConnectionInfo)
 
-  explicit MobileConnectionInfo(nsPIDOMWindow* aWindow);
+  explicit MobileConnectionInfo(nsPIDOMWindowInner* aWindow);
 
   MobileConnectionInfo(const nsAString& aState, bool aConnected,
                        bool aEmergencyCallsOnly, bool aRoaming,
@@ -38,14 +38,14 @@ public:
   void
   Update(nsIMobileConnectionInfo* aInfo);
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const
   {
     return mWindow;
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   // WebIDL interface
   bool
@@ -109,9 +109,9 @@ private:
   bool mConnected;
   bool mEmergencyCallsOnly;
   bool mRoaming;
-  nsCOMPtr<nsPIDOMWindow> mWindow;
-  nsRefPtr<MobileNetworkInfo> mNetworkInfo;
-  nsRefPtr<MobileCellInfo> mCellInfo;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
+  RefPtr<MobileNetworkInfo> mNetworkInfo;
+  RefPtr<MobileCellInfo> mCellInfo;
   Nullable<MobileConnectionState> mState;
   Nullable<MobileConnectionType> mType;
   Nullable<int32_t> mSignalStrength;

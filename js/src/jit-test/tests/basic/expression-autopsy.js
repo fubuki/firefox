@@ -39,36 +39,13 @@ function check(expr, expected=expr) {
             Function("o", "undef", "function myfunc() { return o + undef; }\n" + statement),
             // Let definitions in a block
             Function("{ let o, undef;\n" + statement + "}"),
-            // Let block
-            Function("let (o, undef) { " + statement + " }"),
-            // Let block with some other variables
-            Function("var v1, v2; let (o, undef) { " + statement + " }"),
-            // Shadowed let block
-            Function("o", "undef", "let (o, undef) { " + statement + " }"),
             // Let in a switch
             Function("var x = 4; switch (x) { case 4: let o, undef;" + statement + "\ncase 6: break;}"),
-            // The more lets the merrier
-            Function("let (x=4, y=5) { x + y; }\nlet (a, b, c) { a + b - c; }\nlet (o, undef) {" + statement + " }"),
-            // Let destructuring
-            Function("o", "undef", "let ([] = []) {} let (o, undef) { " + statement + " }"),
             // Try-catch blocks
-            Function("o", "undef", "try { let q = 4; try { let p = 4; } catch (e) {} } catch (e) {} let (o, undef) { " + statement + " }")
+            Function("o", "undef", "try { let q = 4; try { let p = 4; } catch (e) {} } catch (e) {} { let o, undef; " + statement + " }"),
+            // Let in for-in (uses with to prevent jit compilation: bug 942804, bug 831120 and bug 1041586)
+            Function("with ({}) {} var undef, o; for (let z in [1, 2]) { " + statement + " }"),
         ];
-
-        try {
-            // Let in for-in
-            check_one(expected,
-                      Function("var undef, o; for (let z in [1, 2]) { " + statement + " }"),
-                      err);
-        } catch (ex) {
-            // Bug 831120.  See bug 942804 comment 5.
-            if (expected == 'undef' && err == ' is undefined')
-                check_one(expected + end,
-                          Function("var undef, o; for (let z in [1, 2]) { " + statement + " }"),
-                          err);
-            else
-                throw ex;
-        }
 
         for (var f of cases) {
             check_one(expected, f, err);
@@ -107,14 +84,31 @@ check("o[~(o)]");
 check("o[+ (o)]");
 check("o[- (o)]");
 
+
 // A few one off tests
 check_one("6", (function () { 6() }), " is not a function");
-check_one("Array.prototype.reverse.call(...)", (function () { Array.prototype.reverse.call('123'); }), " is read-only");
-var ITERATOR = JS_HAS_SYMBOLS ? "Symbol.iterator" : "'@@iterator'";
-check_one(`(intermediate value)[${ITERATOR}](...).next(...).value`,
-          function () { var [{ x }] = [null, {}]; }, " is null");
-check_one(`(intermediate value)[${ITERATOR}](...).next(...).value`,
-          function () { ieval("let (x) { var [a, b, [c0, c1]] = [x, x, x]; }") }, " is undefined");
+check_one("0", (function () { Array.prototype.reverse.call('123'); }), " is read-only");
+check_one("(intermediate value)[Symbol.iterator](...).next(...).value",
+          function () { ieval("{ let x; var [a, b, [c0, c1]] = [x, x, x]; }") }, " is undefined");
+check_one("void 1", function() { (void 1)(); }, " is not a function");
+check_one("void o[1]", function() { var o = []; (void o[1])() }, " is not a function");
+
+// Manual testing for this case: the only way to trigger an error is *not* on
+// an attempted property access during destructuring, and the error message
+// invoking ToObject(null) is different: "can't convert {0} to object".
+try
+{
+  (function() {
+    var [{x}] = [null, {}];
+   })();
+  throw new Error("didn't throw");
+}
+catch (e)
+{
+  assertEq(e instanceof TypeError, true,
+           "expected TypeError, got " + e);
+  assertEq(e.message, "can't convert null to object");
+}
 
 // Check fallback behavior
 assertThrowsInstanceOf(function () { for (let x of undefined) {} }, TypeError);

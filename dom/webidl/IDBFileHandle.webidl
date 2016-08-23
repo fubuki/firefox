@@ -8,6 +8,7 @@ dictionary IDBFileMetadataParameters
   boolean lastModified = true;
 };
 
+[Exposed=(Window,System)]
 interface IDBFileHandle : EventTarget
 {
   readonly attribute IDBMutableFile? mutableFile;
@@ -26,17 +27,9 @@ interface IDBFileHandle : EventTarget
                              optional DOMString? encoding = null);
 
   [Throws]
-  IDBFileRequest? write(ArrayBuffer value);
+  IDBFileRequest? write((DOMString or ArrayBuffer or ArrayBufferView or Blob) value);
   [Throws]
-  IDBFileRequest? write(Blob value);
-  [Throws]
-  IDBFileRequest? write(DOMString value);
-  [Throws]
-  IDBFileRequest? append(ArrayBuffer value);
-  [Throws]
-  IDBFileRequest? append(Blob value);
-  [Throws]
-  IDBFileRequest? append(DOMString value);
+  IDBFileRequest? append((DOMString or ArrayBuffer or ArrayBufferView or Blob) value);
   [Throws]
   IDBFileRequest? truncate(optional unsigned long long size);
   [Throws]

@@ -10,15 +10,10 @@
 #include "mozilla/net/NeckoChild.h"
 #include "nsITabChild.h"
 #include "nsILoadContext.h"
-#include "nsNetUtil.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "nsStringStream.h"
-#include "prlog.h"
-
-PRLogModuleInfo* gRtspChildLog = nullptr;
-#undef LOG
-#define LOG(args) PR_LOG(gRtspChildLog, PR_LOG_DEBUG, args)
+#include "mozilla/Logging.h"
 
 const uint32_t kRtspTotalTracks = 2;
 const unsigned long kRtspCommandDelayMs = 200;
@@ -27,6 +22,10 @@ using namespace mozilla::ipc;
 
 namespace mozilla {
 namespace net {
+
+static LazyLogModule gRtspChildLog("nsRtspChild");
+#undef LOG
+#define LOG(args) MOZ_LOG(mozilla::net::gRtspChildLog, mozilla::LogLevel::Debug, args)
 
 NS_IMPL_ADDREF(RtspControllerChild)
 
@@ -70,10 +69,6 @@ RtspControllerChild::RtspControllerChild(nsIChannel *channel)
   , mPlayTimer(nullptr)
   , mPauseTimer(nullptr)
 {
-#if defined(PR_LOGGING)
-  if (!gRtspChildLog)
-    gRtspChildLog = PR_NewLogModule("nsRtspChild");
-#endif
   AddIPDLReference();
   gNeckoChild->SendPRtspControllerConstructor(this);
 }
@@ -136,9 +131,9 @@ RtspControllerChild::RecvOnMediaDataAvailable(
                        const nsCString& data,
                        const uint32_t& length,
                        const uint32_t& offset,
-                       const InfallibleTArray<RtspMetadataParam>& metaArray)
+                       InfallibleTArray<RtspMetadataParam>&& metaArray)
 {
-  nsRefPtr<RtspMetaData> meta = new RtspMetaData();
+  RefPtr<RtspMetaData> meta = new RtspMetaData();
   nsresult rv = meta->DeserializeRtspMetaData(metaArray);
   NS_ENSURE_SUCCESS(rv, true);
 
@@ -164,10 +159,10 @@ RtspControllerChild::GetMetaDataLength()
 bool
 RtspControllerChild::RecvOnConnected(
                        const uint8_t& index,
-                       const InfallibleTArray<RtspMetadataParam>& metaArray)
+                       InfallibleTArray<RtspMetadataParam>&& metaArray)
 {
   // Deserialize meta data.
-  nsRefPtr<RtspMetaData> meta = new RtspMetaData();
+  RefPtr<RtspMetaData> meta = new RtspMetaData();
   nsresult rv = meta->DeserializeRtspMetaData(metaArray);
   NS_ENSURE_SUCCESS(rv, true);
   meta->GetTotalTracks(&mTotalTracks);
@@ -219,8 +214,8 @@ RtspControllerChild::RecvAsyncOpenFailed(const nsresult& reason)
 void
 RtspControllerChild::AddIPDLReference()
 {
-  NS_ABORT_IF_FALSE(!mIPCOpen,
-                    "Attempt to retain more than one IPDL reference");
+  MOZ_ASSERT(!mIPCOpen,
+             "Attempt to retain more than one IPDL reference");
   mIPCOpen = true;
   AllowIPC();
   AddRef();
@@ -229,7 +224,7 @@ RtspControllerChild::AddIPDLReference()
 void
 RtspControllerChild::ReleaseIPDLReference()
 {
-  NS_ABORT_IF_FALSE(mIPCOpen, "Attempt to release nonexistent IPDL reference");
+  MOZ_ASSERT(mIPCOpen, "Attempt to release nonexistent IPDL reference");
   mIPCOpen = false;
   DisallowIPC();
   Release();
@@ -307,7 +302,7 @@ public:
     return NS_OK;
   }
 private:
-  nsRefPtr<RtspControllerChild> mController;
+  RefPtr<RtspControllerChild> mController;
   IPCEvent mEvent;
   uint64_t mSeekTime;
 };

@@ -18,8 +18,6 @@
 #include "nsITimer.h"
 #include "nsRepeatService.h"
 
-class nsSliderFrame;
-
 class nsScrollbarButtonFrame : public nsButtonBoxFrame
 {
 public:
@@ -29,16 +27,15 @@ public:
     nsButtonBoxFrame(aContext), mCursorOnThis(false) {}
 
   // Overrides
-  virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
+  virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
 
   friend nsIFrame* NS_NewScrollbarButtonFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
   virtual nsresult HandleEvent(nsPresContext* aPresContext,
                                mozilla::WidgetGUIEvent* aEvent,
-                               nsEventStatus* aEventStatus) MOZ_OVERRIDE;
+                               nsEventStatus* aEventStatus) override;
 
-  static nsresult GetChildWithTag(nsPresContext* aPresContext,
-                                  nsIAtom* atom, nsIFrame* start, nsIFrame*& result);
+  static nsresult GetChildWithTag(nsIAtom* atom, nsIFrame* start, nsIFrame*& result);
   static nsresult GetParentWithTag(nsIAtom* atom, nsIFrame* start, nsIFrame*& result);
 
   bool HandleButtonPress(nsPresContext* aPresContext,
@@ -48,25 +45,24 @@ public:
   NS_IMETHOD HandleMultiplePress(nsPresContext* aPresContext,
                                  mozilla::WidgetGUIEvent* aEvent,
                                  nsEventStatus* aEventStatus,
-                                 bool aControlHeld) MOZ_OVERRIDE
+                                 bool aControlHeld) override
  {
    return NS_OK;
  }
 
   NS_IMETHOD HandleDrag(nsPresContext* aPresContext,
                         mozilla::WidgetGUIEvent* aEvent,
-                        nsEventStatus* aEventStatus) MOZ_OVERRIDE
+                        nsEventStatus* aEventStatus) override
   {
     return NS_OK;
   }
 
   NS_IMETHOD HandleRelease(nsPresContext* aPresContext,
                            mozilla::WidgetGUIEvent* aEvent,
-                           nsEventStatus* aEventStatus) MOZ_OVERRIDE;
+                           nsEventStatus* aEventStatus) override;
 
 protected:
-  virtual void MouseClicked(nsPresContext* aPresContext,
-                            mozilla::WidgetGUIEvent* aEvent) MOZ_OVERRIDE;
+  virtual void MouseClicked(mozilla::WidgetGUIEvent* aEvent) override;
 
   void StartRepeat() {
     nsRepeatService::GetInstance()->Start(Notify, this);

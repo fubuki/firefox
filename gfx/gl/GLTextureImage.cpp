@@ -12,6 +12,7 @@
 #include "mozilla/gfx/2D.h"
 #include "ScopedGLHelpers.h"
 #include "GLUploadHelpers.h"
+#include "GfxTexturesReporter.h"
 
 #include "TextureImageEGL.h"
 #ifdef XP_MACOSX
@@ -39,14 +40,14 @@ CreateTextureImage(GLContext* gl,
         case GLContextType::EGL:
             return CreateTextureImageEGL(gl, aSize, aContentType, aWrapMode, aFlags, aImageFormat);
         default:
-            return CreateBasicTextureImage(gl, aSize, aContentType, aWrapMode, aFlags, aImageFormat);
+            return CreateBasicTextureImage(gl, aSize, aContentType, aWrapMode, aFlags);
     }
 }
 
 
 static already_AddRefed<TextureImage>
 TileGenFunc(GLContext* gl,
-            const nsIntSize& aSize,
+            const IntSize& aSize,
             TextureImage::ContentType aContentType,
             TextureImage::Flags aFlags,
             TextureImage::ImageFormat aImageFormat)
@@ -54,7 +55,7 @@ TileGenFunc(GLContext* gl,
     switch (gl->GetContextType()) {
 #ifdef XP_MACOSX
         case GLContextType::CGL:
-            return TileGenFuncCGL(gl, aSize, aContentType, aFlags, aImageFormat);
+            return TileGenFuncCGL(gl, aSize, aContentType, aFlags);
 #endif
         case GLContextType::EGL:
             return TileGenFuncEGL(gl, aSize, aContentType, aFlags, aImageFormat);
@@ -79,7 +80,7 @@ TextureImage::UpdateFromDataSource(gfx::DataSourceSurface *aSurface,
                                    const gfx::IntPoint* aSrcPoint)
 {
     nsIntRegion destRegion = aDestRegion ? *aDestRegion
-                                         : nsIntRect(0, 0,
+                                         : IntRect(0, 0,
                                                      aSurface->GetSize().width,
                                                      aSurface->GetSize().height);
     gfx::IntPoint srcPoint = aSrcPoint ? *aSrcPoint
@@ -93,6 +94,16 @@ gfx::IntRect TextureImage::GetTileRect() {
 
 gfx::IntRect TextureImage::GetSrcTileRect() {
     return GetTileRect();
+}
+
+void
+TextureImage::UpdateUploadSize(size_t amount)
+{
+    if (mUploadSize > 0) {
+        GfxTexturesReporter::UpdateAmount(GfxTexturesReporter::MemoryFreed, mUploadSize);
+    }
+    mUploadSize = amount;
+    GfxTexturesReporter::UpdateAmount(GfxTexturesReporter::MemoryAllocated, mUploadSize);
 }
 
 BasicTextureImage::~BasicTextureImage()
@@ -120,13 +131,13 @@ BasicTextureImage::BeginUpdate(nsIntRegion& aRegion)
     if (CanUploadSubTextures(mGLContext)) {
         GetUpdateRegion(aRegion);
     } else {
-        aRegion = nsIntRect(nsIntPoint(0, 0), gfx::ThebesIntSize(mSize));
+        aRegion = IntRect(IntPoint(0, 0), mSize);
     }
 
     mUpdateRegion = aRegion;
 
-    nsIntRect rgnSize = mUpdateRegion.GetBounds();
-    if (!nsIntRect(nsIntPoint(0, 0), gfx::ThebesIntSize(mSize)).Contains(rgnSize)) {
+    IntRect rgnSize = mUpdateRegion.GetBounds();
+    if (!IntRect(IntPoint(0, 0), mSize).Contains(rgnSize)) {
         NS_ERROR("update outside of image");
         return nullptr;
     }
@@ -146,8 +157,9 @@ BasicTextureImage::GetUpdateRegion(nsIntRegion& aForRegion)
   // if the texture hasn't been initialized yet, or something important
   // changed, we need to recreate our backing surface and force the
   // client to paint everything
-  if (mTextureState != Valid)
-      aForRegion = nsIntRect(nsIntPoint(0, 0), gfx::ThebesIntSize(mSize));
+  if (mTextureState != Valid) {
+      aForRegion = IntRect(IntPoint(0, 0), mSize);
+  }
 }
 
 void
@@ -161,16 +173,21 @@ BasicTextureImage::EndUpdate()
     RefPtr<gfx::DataSourceSurface> updateData = updateSnapshot->GetDataSurface();
 
     bool relative = FinishedSurfaceUpdate();
-
+    bool needInit = mTextureState == Created;
+    size_t uploadSize;
     mTextureFormat =
         UploadSurfaceToTexture(mGLContext,
                                updateData,
                                mUpdateRegion,
                                mTexture,
-                               mTextureState == Created,
+                               &uploadSize,
+                               needInit,
                                mUpdateOffset,
                                relative);
     FinishedSurfaceUpload();
+    if (uploadSize > 0) {
+        UpdateUploadSize(uploadSize);
+    }
 
     mUpdateDrawTarget = nullptr;
     mTextureState = Valid;
@@ -184,7 +201,7 @@ BasicTextureImage::BindTexture(GLenum aTextureUnit)
     mGLContext->fActiveTexture(LOCAL_GL_TEXTURE0);
 }
 
-TemporaryRef<gfx::DrawTarget>
+already_AddRefed<gfx::DrawTarget>
 BasicTextureImage::GetDrawTargetForUpdate(const gfx::IntSize& aSize, gfx::SurfaceFormat aFmt)
 {
     return gfx::Factory::CreateDrawTarget(gfx::BackendType::CAIRO, aSize, aFmt);
@@ -204,23 +221,29 @@ BasicTextureImage::FinishedSurfaceUpload()
 bool
 BasicTextureImage::DirectUpdate(gfx::DataSourceSurface* aSurf, const nsIntRegion& aRegion, const gfx::IntPoint& aFrom /* = gfx::IntPoint(0, 0) */)
 {
-    nsIntRect bounds = aRegion.GetBounds();
+    IntRect bounds = aRegion.GetBounds();
     nsIntRegion region;
     if (mTextureState != Valid) {
-        bounds = nsIntRect(0, 0, mSize.width, mSize.height);
+        bounds = IntRect(0, 0, mSize.width, mSize.height);
         region = nsIntRegion(bounds);
     } else {
         region = aRegion;
     }
 
+    size_t uploadSize;
+    bool needInit = mTextureState == Created;
     mTextureFormat =
         UploadSurfaceToTexture(mGLContext,
                                aSurf,
                                region,
                                mTexture,
-                               mTextureState == Created,
-                               bounds.TopLeft() + nsIntPoint(aFrom.x, aFrom.y),
+                               &uploadSize,
+                               needInit,
+                               bounds.TopLeft() + IntPoint(aFrom.x, aFrom.y),
                                false);
+    if (uploadSize > 0) {
+        UpdateUploadSize(uploadSize);
+    }
     mTextureState = Valid;
     return true;
 }
@@ -269,33 +292,19 @@ TextureImage::TextureImage(const gfx::IntSize& aSize,
     : mSize(aSize)
     , mWrapMode(aWrapMode)
     , mContentType(aContentType)
-    , mFilter(GraphicsFilter::FILTER_GOOD)
+    , mTextureFormat(gfx::SurfaceFormat::UNKNOWN)
+    , mFilter(Filter::GOOD)
     , mFlags(aFlags)
+    , mUploadSize(0)
 {}
-
-BasicTextureImage::BasicTextureImage(GLuint aTexture,
-                                     const nsIntSize& aSize,
-                                     GLenum aWrapMode,
-                                     ContentType aContentType,
-                                     GLContext* aContext,
-                                     TextureImage::Flags aFlags /* = TextureImage::NoFlags */,
-                                     TextureImage::ImageFormat aImageFormat /* = gfxImageFormat::Unknown */)
-    : TextureImage(aSize, aWrapMode, aContentType, aFlags, aImageFormat)
-    , mTexture(aTexture)
-    , mTextureState(Created)
-    , mGLContext(aContext)
-    , mUpdateOffset(0, 0)
-{
-}
 
 BasicTextureImage::BasicTextureImage(GLuint aTexture,
                   const gfx::IntSize& aSize,
                   GLenum aWrapMode,
                   ContentType aContentType,
                   GLContext* aContext,
-                  TextureImage::Flags aFlags,
-                  TextureImage::ImageFormat aImageFormat)
-  : TextureImage(ThebesIntSize(aSize), aWrapMode, aContentType, aFlags, aImageFormat)
+                  TextureImage::Flags aFlags)
+  : TextureImage(aSize, aWrapMode, aContentType, aFlags)
   , mTexture(aTexture)
   , mTextureState(Created)
   , mGLContext(aContext)
@@ -305,15 +314,15 @@ BasicTextureImage::BasicTextureImage(GLuint aTexture,
 static bool
 WantsSmallTiles(GLContext* gl)
 {
-    // We must use small tiles for good performance if we can't use
-    // glTexSubImage2D() for some reason.
-    if (!CanUploadSubTextures(gl))
-        return true;
-
     // We can't use small tiles on the SGX 540, because of races in texture upload.
     if (gl->WorkAroundDriverBugs() &&
         gl->Renderer() == GLRenderer::SGX540)
         return false;
+
+    // We should use small tiles for good performance if we can't use
+    // glTexSubImage2D() for some reason.
+    if (!CanUploadSubTextures(gl))
+        return true;
 
     // Don't use small tiles otherwise. (If we implement incremental texture upload,
     // then we will want to revisit this.)
@@ -328,6 +337,7 @@ TiledTextureImage::TiledTextureImage(GLContext* aGL,
     : TextureImage(aSize, LOCAL_GL_CLAMP_TO_EDGE, aContentType, aFlags)
     , mCurrentImage(0)
     , mIterationCallback(nullptr)
+    , mIterationCallbackData(nullptr)
     , mInUpdate(false)
     , mRows(0)
     , mColumns(0)
@@ -359,7 +369,7 @@ TiledTextureImage::DirectUpdate(gfx::DataSourceSurface* aSurf, const nsIntRegion
     nsIntRegion region;
 
     if (mTextureState != Valid) {
-        nsIntRect bounds = nsIntRect(0, 0, mSize.width, mSize.height);
+        IntRect bounds = IntRect(0, 0, mSize.width, mSize.height);
         region = nsIntRegion(bounds);
     } else {
         region = aRegion;
@@ -369,7 +379,7 @@ TiledTextureImage::DirectUpdate(gfx::DataSourceSurface* aSurf, const nsIntRegion
     int oldCurrentImage = mCurrentImage;
     BeginBigImageIteration();
     do {
-        nsIntRect tileRect = ThebesIntRect(GetSrcTileRect());
+        IntRect tileRect = GetSrcTileRect();
         int xPos = tileRect.x;
         int yPos = tileRect.y;
 
@@ -414,7 +424,7 @@ TiledTextureImage::GetUpdateRegion(nsIntRegion& aForRegion)
         // if the texture hasn't been initialized yet, or something important
         // changed, we need to recreate our backing surface and force the
         // client to paint everything
-        aForRegion = nsIntRect(nsIntPoint(0, 0), gfx::ThebesIntSize(mSize));
+        aForRegion = IntRect(IntPoint(0, 0), mSize);
         return;
     }
 
@@ -425,8 +435,8 @@ TiledTextureImage::GetUpdateRegion(nsIntRegion& aForRegion)
     for (unsigned i = 0; i < mImages.Length(); i++) {
         int xPos = (i % mColumns) * mTileSize;
         int yPos = (i / mColumns) * mTileSize;
-        nsIntRect imageRect = nsIntRect(nsIntPoint(xPos,yPos),
-                                        ThebesIntSize(mImages[i]->GetSize()));
+        IntRect imageRect = IntRect(IntPoint(xPos,yPos),
+                                        mImages[i]->GetSize());
 
         if (aForRegion.Intersects(imageRect)) {
             // Make a copy of the region
@@ -460,17 +470,17 @@ TiledTextureImage::BeginUpdate(nsIntRegion& aRegion)
         // if the texture hasn't been initialized yet, or something important
         // changed, we need to recreate our backing surface and force the
         // client to paint everything
-        aRegion = nsIntRect(nsIntPoint(0, 0), gfx::ThebesIntSize(mSize));
+        aRegion = IntRect(IntPoint(0, 0), mSize);
     }
 
-    nsIntRect bounds = aRegion.GetBounds();
+    IntRect bounds = aRegion.GetBounds();
 
     for (unsigned i = 0; i < mImages.Length(); i++) {
         int xPos = (i % mColumns) * mTileSize;
         int yPos = (i / mColumns) * mTileSize;
         nsIntRegion imageRegion =
-          nsIntRegion(nsIntRect(nsIntPoint(xPos,yPos),
-                                ThebesIntSize(mImages[i]->GetSize())));
+          nsIntRegion(IntRect(IntPoint(xPos,yPos),
+                                mImages[i]->GetSize()));
 
         // a single Image can handle this update request
         if (imageRegion.Contains(aRegion)) {
@@ -499,7 +509,7 @@ TiledTextureImage::BeginUpdate(nsIntRegion& aRegion)
         (GetContentType() == gfxContentType::COLOR) ?
         gfx::SurfaceFormat::B8G8R8X8: gfx::SurfaceFormat::B8G8R8A8;
     mUpdateDrawTarget = gfx::Factory::CreateDrawTarget(gfx::BackendType::CAIRO,
-                                                       bounds.Size().ToIntSize(),
+                                                       bounds.Size(),
                                                        format);
 
     return mUpdateDrawTarget;;
@@ -524,8 +534,7 @@ TiledTextureImage::EndUpdate()
     for (unsigned i = 0; i < mImages.Length(); i++) {
         int xPos = (i % mColumns) * mTileSize;
         int yPos = (i / mColumns) * mTileSize;
-        nsIntRect imageRect = nsIntRect(nsIntPoint(xPos,yPos),
-                                        ThebesIntSize(mImages[i]->GetSize()));
+        IntRect imageRect = IntRect(IntPoint(xPos,yPos), mImages[i]->GetSize());
 
         nsIntRegion subregion;
         subregion.And(mUpdateRegion, imageRect);
@@ -648,7 +657,7 @@ void TiledTextureImage::Resize(const gfx::IntSize& aSize)
 
         int col;
         for (col = 0; col < (int)columns; col++) {
-            nsIntSize size( // use tilesize first, then the remainder
+            IntSize size( // use tilesize first, then the remainder
                     (col+1) * mTileSize > (unsigned int)aSize.width  ? aSize.width  % mTileSize : mTileSize,
                     (row+1) * mTileSize > (unsigned int)aSize.height ? aSize.height % mTileSize : mTileSize);
 
@@ -679,7 +688,7 @@ void TiledTextureImage::Resize(const gfx::IntSize& aSize)
             }
 
             // Create a new tile.
-            nsRefPtr<TextureImage> teximg =
+            RefPtr<TextureImage> teximg =
                 TileGenFunc(mGL, size, mContentType, mFlags, mImageFormat);
             if (replace)
                 mImages.ReplaceElementAt(i, teximg);
@@ -719,8 +728,7 @@ CreateBasicTextureImage(GLContext* aGL,
                         const gfx::IntSize& aSize,
                         TextureImage::ContentType aContentType,
                         GLenum aWrapMode,
-                        TextureImage::Flags aFlags,
-                        TextureImage::ImageFormat aImageFormat)
+                        TextureImage::Flags aFlags)
 {
     bool useNearestFilter = aFlags & TextureImage::UseNearestFilter;
     if (!aGL->MakeCurrent()) {
@@ -738,11 +746,11 @@ CreateBasicTextureImage(GLContext* aGL,
     aGL->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_S, aWrapMode);
     aGL->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_T, aWrapMode);
 
-    nsRefPtr<BasicTextureImage> texImage =
+    RefPtr<BasicTextureImage> texImage =
         new BasicTextureImage(texture, aSize, aWrapMode, aContentType,
-                              aGL, aFlags, aImageFormat);
+                              aGL, aFlags);
     return texImage.forget();
 }
 
-} // namespace
-} // namespace
+} // namespace gl
+} // namespace mozilla

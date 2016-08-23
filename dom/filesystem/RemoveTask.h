@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,55 +14,88 @@
 namespace mozilla {
 namespace dom {
 
-class FileImpl;
+class BlobImpl;
 class Promise;
 
-class RemoveTask MOZ_FINAL
-  : public FileSystemTaskBase
+class RemoveTaskChild final : public FileSystemTaskChildBase
 {
 public:
-  RemoveTask(FileSystemBase* aFileSystem,
-             const nsAString& aDirPath,
-             FileImpl* aTargetFile,
-             const nsAString& aTargetPath,
-             bool aRecursive,
-             ErrorResult& aRv);
-  RemoveTask(FileSystemBase* aFileSystem,
-             const FileSystemRemoveParams& aParam,
-             FileSystemRequestParent* aParent);
+  static already_AddRefed<RemoveTaskChild>
+  Create(FileSystemBase* aFileSystem,
+         nsIFile* aDirPath,
+         nsIFile* aTargetPath,
+         bool aRecursive,
+         ErrorResult& aRv);
 
   virtual
-  ~RemoveTask();
+  ~RemoveTaskChild();
 
   already_AddRefed<Promise>
   GetPromise();
 
   virtual void
-  GetPermissionAccessType(nsCString& aAccess) const MOZ_OVERRIDE;
+  GetPermissionAccessType(nsCString& aAccess) const override;
 
 protected:
   virtual FileSystemParams
-  GetRequestParams(const nsString& aFileSystem) const MOZ_OVERRIDE;
-
-  virtual FileSystemResponseValue
-  GetSuccessRequestResult() const MOZ_OVERRIDE;
+  GetRequestParams(const nsString& aSerializedDOMPath,
+                   ErrorResult& aRv) const override;
 
   virtual void
-  SetSuccessRequestResult(const FileSystemResponseValue& aValue) MOZ_OVERRIDE;
-
-  virtual nsresult
-  Work() MOZ_OVERRIDE;
+  SetSuccessRequestResult(const FileSystemResponseValue& aValue,
+                          ErrorResult& aRv) override;
 
   virtual void
-  HandlerCallback() MOZ_OVERRIDE;
+  HandlerCallback() override;
 
 private:
-  nsRefPtr<Promise> mPromise;
-  nsString mDirRealPath;
-  // This cannot be a File because this object will be used on a different
-  // thread and File is not thread-safe. Let's use the FileImpl instead.
-  nsRefPtr<FileImpl> mTargetFileImpl;
-  nsString mTargetRealPath;
+  RemoveTaskChild(FileSystemBase* aFileSystem,
+                  nsIFile* aDirPath,
+                  nsIFile* aTargetPath,
+                  bool aRecursive);
+
+  RefPtr<Promise> mPromise;
+
+  // This path is the Directory::mFile.
+  nsCOMPtr<nsIFile> mDirPath;
+
+  // This is what we want to remove. mTargetPath is discendant path of mDirPath.
+  nsCOMPtr<nsIFile> mTargetPath;
+
+  bool mRecursive;
+  bool mReturnValue;
+};
+
+class RemoveTaskParent final : public FileSystemTaskParentBase
+{
+public:
+  static already_AddRefed<RemoveTaskParent>
+  Create(FileSystemBase* aFileSystem,
+         const FileSystemRemoveParams& aParam,
+         FileSystemRequestParent* aParent,
+         ErrorResult& aRv);
+
+  virtual void
+  GetPermissionAccessType(nsCString& aAccess) const override;
+
+protected:
+  virtual FileSystemResponseValue
+  GetSuccessRequestResult(ErrorResult& aRv) const override;
+
+  virtual nsresult
+  IOWork() override;
+
+private:
+  RemoveTaskParent(FileSystemBase* aFileSystem,
+                   const FileSystemRemoveParams& aParam,
+                   FileSystemRequestParent* aParent);
+
+  // This path is the Directory::mFile.
+  nsCOMPtr<nsIFile> mDirPath;
+
+  // This is what we want to remove. mTargetPath is discendant path of mDirPath.
+  nsCOMPtr<nsIFile> mTargetPath;
+
   bool mRecursive;
   bool mReturnValue;
 };

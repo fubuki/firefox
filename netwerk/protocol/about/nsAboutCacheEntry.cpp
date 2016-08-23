@@ -18,6 +18,7 @@
 #include "nsInputStreamPump.h"
 #include "CacheFileUtils.h"
 #include <algorithm>
+#include "nsIPipe.h"
 
 using namespace mozilla::net;
 
@@ -80,10 +81,12 @@ HexDump(uint32_t *state, const char *buf, int32_t n, nsCString &result)
 // nsAboutCacheEntry::nsISupports
 
 NS_IMPL_ISUPPORTS(nsAboutCacheEntry,
-                  nsIAboutModule,
+                  nsIAboutModule)
+NS_IMPL_ISUPPORTS(nsAboutCacheEntry::Channel,
                   nsICacheEntryOpenCallback,
                   nsICacheEntryMetaDataVisitor,
-                  nsIStreamListener)
+                  nsIStreamListener,
+                  nsIChannel)
 
 //-----------------------------------------------------------------------------
 // nsAboutCacheEntry::nsIAboutModule
@@ -96,29 +99,13 @@ nsAboutCacheEntry::NewChannel(nsIURI* uri,
     NS_ENSURE_ARG_POINTER(uri);
     nsresult rv;
 
-    nsCOMPtr<nsIInputStream> stream;
-    rv = GetContentStream(uri, getter_AddRefs(stream));
+    RefPtr<Channel> channel = new Channel();
+    rv = channel->Init(uri, aLoadInfo);
     if (NS_FAILED(rv)) return rv;
-    // Bug 1087720 (and Bug 1099296):
-    // Once all callsites have been updated to call NewChannel2()
-    // instead of NewChannel() we should have a non-null loadInfo
-    // consistently. Until then we have to branch on the loadInfo.
-    if (aLoadInfo) {
-      return NS_NewInputStreamChannelInternal(result,
-                                              uri,
-                                              stream,
-                                              NS_LITERAL_CSTRING("text/html"),
-                                              NS_LITERAL_CSTRING("utf-8"),
-                                              aLoadInfo);
-    }
-    return NS_NewInputStreamChannel(result,
-                                    uri,
-                                    stream,
-                                    nsContentUtils::GetSystemPrincipal(),
-                                    nsILoadInfo::SEC_NORMAL,
-                                    nsIContentPolicy::TYPE_OTHER,
-                                    NS_LITERAL_CSTRING("text/html"),
-                                    NS_LITERAL_CSTRING("utf-8"));
+
+    channel.forget(result);
+
+    return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -136,10 +123,30 @@ nsAboutCacheEntry::GetIndexedDBOriginPostfix(nsIURI *aURI, nsAString &result)
 }
 
 //-----------------------------------------------------------------------------
-// nsAboutCacheEntry
+// nsAboutCacheEntry::Channel
 
 nsresult
-nsAboutCacheEntry::GetContentStream(nsIURI *uri, nsIInputStream **result)
+nsAboutCacheEntry::Channel::Init(nsIURI* uri, nsILoadInfo* aLoadInfo)
+{
+    nsresult rv;
+
+    nsCOMPtr<nsIInputStream> stream;
+    rv = GetContentStream(uri, getter_AddRefs(stream));
+    if (NS_FAILED(rv)) return rv;
+
+    rv =  NS_NewInputStreamChannelInternal(getter_AddRefs(mChannel),
+                                           uri,
+                                           stream,
+                                           NS_LITERAL_CSTRING("text/html"),
+                                           NS_LITERAL_CSTRING("utf-8"),
+                                           aLoadInfo);
+    if (NS_FAILED(rv)) return rv;
+
+    return NS_OK;
+}
+
+nsresult
+nsAboutCacheEntry::Channel::GetContentStream(nsIURI *uri, nsIInputStream **result)
 {
     nsresult rv;
 
@@ -177,7 +184,7 @@ nsAboutCacheEntry::GetContentStream(nsIURI *uri, nsIInputStream **result)
 }
 
 nsresult
-nsAboutCacheEntry::OpenCacheEntry(nsIURI *uri)
+nsAboutCacheEntry::Channel::OpenCacheEntry(nsIURI *uri)
 {
     nsresult rv;
 
@@ -197,7 +204,7 @@ nsAboutCacheEntry::OpenCacheEntry(nsIURI *uri)
 }
 
 nsresult
-nsAboutCacheEntry::OpenCacheEntry()
+nsAboutCacheEntry::Channel::OpenCacheEntry()
 {
     nsresult rv;
 
@@ -214,11 +221,11 @@ nsAboutCacheEntry::OpenCacheEntry()
 }
 
 nsresult
-nsAboutCacheEntry::ParseURI(nsIURI *uri,
-                            nsACString &storageName,
-                            nsILoadContextInfo **loadInfo,
-                            nsCString &enahnceID,
-                            nsIURI **cacheUri)
+nsAboutCacheEntry::Channel::ParseURI(nsIURI *uri,
+                                     nsACString &storageName,
+                                     nsILoadContextInfo **loadInfo,
+                                     nsCString &enahnceID,
+                                     nsIURI **cacheUri)
 {
     //
     // about:cache-entry?storage=[string]&contenxt=[string]&eid=[string]&uri=[string]
@@ -283,19 +290,19 @@ nsAboutCacheEntry::ParseURI(nsIURI *uri,
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
-nsAboutCacheEntry::OnCacheEntryCheck(nsICacheEntry *aEntry,
-                                     nsIApplicationCache *aApplicationCache,
-                                     uint32_t *result)
+nsAboutCacheEntry::Channel::OnCacheEntryCheck(nsICacheEntry *aEntry,
+                                              nsIApplicationCache *aApplicationCache,
+                                              uint32_t *result)
 {
     *result = nsICacheEntryOpenCallback::ENTRY_WANTED;
     return NS_OK;
 }
 
 NS_IMETHODIMP
-nsAboutCacheEntry::OnCacheEntryAvailable(nsICacheEntry *entry,
-                                         bool isNew,
-                                         nsIApplicationCache *aApplicationCache,
-                                         nsresult status)
+nsAboutCacheEntry::Channel::OnCacheEntryAvailable(nsICacheEntry *entry,
+                                                  bool isNew,
+                                                  nsIApplicationCache *aApplicationCache,
+                                                  nsresult status)
 {
     nsresult rv;
 
@@ -347,7 +354,7 @@ nsAboutCacheEntry::OnCacheEntryAvailable(nsICacheEntry *entry,
     PR_END_MACRO
 
 nsresult
-nsAboutCacheEntry::WriteCacheEntryDescription(nsICacheEntry *entry)
+nsAboutCacheEntry::Channel::WriteCacheEntryDescription(nsICacheEntry *entry)
 {
     nsresult rv;
     nsCString buffer;
@@ -387,7 +394,7 @@ nsAboutCacheEntry::WriteCacheEntryDescription(nsICacheEntry *entry)
     } else {
         buffer.Append(escapedStr);
     }
-    nsMemory::Free(escapedStr);
+    free(escapedStr);
     buffer.AppendLiteral("</td>\n"
                          "  </tr>\n");
 
@@ -481,7 +488,7 @@ nsAboutCacheEntry::WriteCacheEntryDescription(nsICacheEntry *entry)
         return NS_OK;
     }
 
-    nsRefPtr<nsInputStreamPump> pump;
+    RefPtr<nsInputStreamPump> pump;
     rv = nsInputStreamPump::Create(getter_AddRefs(pump), stream);
     if (NS_FAILED(rv)) {
         return NS_OK; // just ignore
@@ -497,7 +504,7 @@ nsAboutCacheEntry::WriteCacheEntryDescription(nsICacheEntry *entry)
 }
 
 nsresult
-nsAboutCacheEntry::WriteCacheEntryUnavailable()
+nsAboutCacheEntry::Channel::WriteCacheEntryUnavailable()
 {
     uint32_t n;
     NS_NAMED_LITERAL_CSTRING(buffer,
@@ -511,7 +518,7 @@ nsAboutCacheEntry::WriteCacheEntryUnavailable()
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
-nsAboutCacheEntry::OnMetaDataElement(char const * key, char const * value)
+nsAboutCacheEntry::Channel::OnMetaDataElement(char const * key, char const * value)
 {
     mBuffer->AppendLiteral("  <tr>\n"
                            "    <th>");
@@ -520,7 +527,7 @@ nsAboutCacheEntry::OnMetaDataElement(char const * key, char const * value)
                            "    <td>");
     char* escapedValue = nsEscapeHTML(value);
     mBuffer->Append(escapedValue);
-    nsMemory::Free(escapedValue);
+    free(escapedValue);
     mBuffer->AppendLiteral("</td>\n"
                            "  </tr>\n");
 
@@ -532,7 +539,7 @@ nsAboutCacheEntry::OnMetaDataElement(char const * key, char const * value)
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
-nsAboutCacheEntry::OnStartRequest(nsIRequest *request, nsISupports *ctx)
+nsAboutCacheEntry::Channel::OnStartRequest(nsIRequest *request, nsISupports *ctx)
 {
     mHexDumpState = 0;
 
@@ -542,26 +549,27 @@ nsAboutCacheEntry::OnStartRequest(nsIRequest *request, nsISupports *ctx)
 }
 
 NS_IMETHODIMP
-nsAboutCacheEntry::OnDataAvailable(nsIRequest *request, nsISupports *ctx,
+nsAboutCacheEntry::Channel::OnDataAvailable(nsIRequest *request, nsISupports *ctx,
                                    nsIInputStream *aInputStream,
                                    uint64_t aOffset,
                                    uint32_t aCount)
 {
     uint32_t n;
     return aInputStream->ReadSegments(
-        &nsAboutCacheEntry::PrintCacheData, this, aCount, &n);
+        &nsAboutCacheEntry::Channel::PrintCacheData, this, aCount, &n);
 }
 
 // static
 NS_METHOD
-nsAboutCacheEntry::PrintCacheData(nsIInputStream *aInStream,
-                                  void *aClosure,
-                                  const char *aFromSegment,
-                                  uint32_t aToOffset,
-                                  uint32_t aCount,
-                                  uint32_t *aWriteCount)
+nsAboutCacheEntry::Channel::PrintCacheData(nsIInputStream *aInStream,
+                                           void *aClosure,
+                                           const char *aFromSegment,
+                                           uint32_t aToOffset,
+                                           uint32_t aCount,
+                                           uint32_t *aWriteCount)
 {
-    nsAboutCacheEntry *a = static_cast<nsAboutCacheEntry*>(aClosure);
+    nsAboutCacheEntry::Channel *a =
+      static_cast<nsAboutCacheEntry::Channel*>(aClosure);
 
     nsCString buffer;
     HexDump(&a->mHexDumpState, aFromSegment, aCount, buffer);
@@ -575,8 +583,8 @@ nsAboutCacheEntry::PrintCacheData(nsIInputStream *aInStream,
 }
 
 NS_IMETHODIMP
-nsAboutCacheEntry::OnStopRequest(nsIRequest *request, nsISupports *ctx,
-                                 nsresult result)
+nsAboutCacheEntry::Channel::OnStopRequest(nsIRequest *request, nsISupports *ctx,
+                                          nsresult result)
 {
     NS_NAMED_LITERAL_CSTRING(buffer, "</pre>\n");
     uint32_t n;
@@ -588,7 +596,7 @@ nsAboutCacheEntry::OnStopRequest(nsIRequest *request, nsISupports *ctx,
 }
 
 void
-nsAboutCacheEntry::CloseContent()
+nsAboutCacheEntry::Channel::CloseContent()
 {
     NS_NAMED_LITERAL_CSTRING(buffer, "</body>\n</html>\n");
     uint32_t n;

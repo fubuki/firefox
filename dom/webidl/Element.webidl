@@ -14,14 +14,13 @@
  */
 
 interface Element : Node {
-/*
-  We haven't moved these from Node to Element like the spec wants.
-
-  [Throws]
+  [Constant]
   readonly attribute DOMString? namespaceURI;
+  [Constant]
   readonly attribute DOMString? prefix;
+  [Constant]
   readonly attribute DOMString localName;
-*/
+
   // Not [Constant] because it depends on which document we're in
   [Pure]
   readonly attribute DOMString tagName;
@@ -30,11 +29,13 @@ interface Element : Node {
            attribute DOMString id;
   [Pure]
            attribute DOMString className;
-  [Constant]
+  [Constant, PutForwards=value]
   readonly attribute DOMTokenList classList;
 
   [SameObject]
   readonly attribute NamedNodeMap attributes;
+  [Pure]
+  sequence<DOMString> getAttributeNames();
   [Pure]
   DOMString? getAttribute(DOMString name);
   [Pure]
@@ -59,6 +60,8 @@ interface Element : Node {
 
   [Throws, Pure]
   boolean matches(DOMString selector);
+  [Throws, Pure, BinaryName="matches"]
+  boolean webkitMatchesSelector(DOMString selector);
 
   [Pure]
   HTMLCollection getElementsByTagName(DOMString localName);
@@ -66,6 +69,12 @@ interface Element : Node {
   HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
   [Pure]
   HTMLCollection getElementsByClassName(DOMString classNames);
+
+  [Throws, Pure]
+  Element? insertAdjacentElement(DOMString where, Element element); // historical
+
+  [Throws]
+  void insertAdjacentText(DOMString where, DOMString data); // historical
 
   /**
    * The ratio of font-size-inflated text font size to computed font
@@ -92,7 +101,7 @@ interface Element : Node {
    *
    * See <http://dev.w3.org/2006/webapi/selectors-api2/#matchesselector>
    */
-  [Throws, Pure]
+  [Throws, Pure, BinaryName="matches"]
   boolean mozMatchesSelector(DOMString selector);
 
   // Pointer events methods.
@@ -120,17 +129,6 @@ interface Element : Node {
   void releaseCapture();
 
   // Mozilla extensions
-  /**
-   * Requests that this element be made the full-screen element, as per the DOM
-   * full-screen api.
-   *
-   * The options parameter is non-standard. In Gecko, it can be:
-   *  a RequestFullscreenOptions object
-   *
-   * @see <https://wiki.mozilla.org/index.php?title=Gecko:FullScreenAPI>
-   */
-  [Throws, UnsafeInPrerendering]
-  void mozRequestFullScreen(optional any options);
 
   /**
    * Requests that this element be made the pointer-locked element, as per the DOM
@@ -185,6 +183,11 @@ partial interface Element {
   void scrollTo(optional ScrollToOptions options);
   void scrollBy(unrestricted double x, unrestricted double y);
   void scrollBy(optional ScrollToOptions options);
+  // mozScrollSnap is used by chrome to perform scroll snapping after the
+  // user performs actions that may affect scroll position
+  // mozScrollSnap is deprecated, to be replaced by a web accessible API, such
+  // as an extension to the ScrollOptions dictionary.  See bug 1137937.
+  [ChromeOnly] void mozScrollSnap();
 
   readonly attribute long clientTop;
   readonly attribute long clientLeft;
@@ -192,11 +195,13 @@ partial interface Element {
   readonly attribute long clientHeight;
 
   // Mozilla specific stuff
-  /* The maximum offset that the element can be scrolled to
+  /* The minimum/maximum offset that the element can be scrolled to
      (i.e., the value that scrollLeft/scrollTop would be clamped to if they were
      set to arbitrarily large values. */
-  readonly attribute long scrollTopMax;
-  readonly attribute long scrollLeftMax;
+  [ChromeOnly] readonly attribute long scrollTopMin;
+               readonly attribute long scrollTopMax;
+  [ChromeOnly] readonly attribute long scrollLeftMin;
+               readonly attribute long scrollLeftMax;
 };
 
 // http://dvcs.w3.org/hg/undomanager/raw-file/tip/undomanager.html
@@ -241,9 +246,21 @@ Element implements ParentNode;
 Element implements Animatable;
 Element implements GeometryUtils;
 
-// non-standard: allows passing options to Element.requestFullScreen
+// non-standard: allows passing options to Element.requestFullscreen
 dictionary RequestFullscreenOptions {
   // Which HMDVRDevice to go full screen on; also enables VR rendering.
   // If null, normal fullscreen is entered.
   HMDVRDevice? vrDisplay = null;
+};
+
+// https://fullscreen.spec.whatwg.org/#api
+partial interface Element {
+  /**
+   * The options parameter is non-standard. In Gecko, it can be:
+   *  a RequestFullscreenOptions object
+   */
+  [Throws, UnsafeInPrerendering, Func="nsDocument::IsUnprefixedFullscreenEnabled"]
+  void requestFullscreen(optional any options);
+  [Throws, UnsafeInPrerendering, BinaryName="requestFullscreen"]
+  void mozRequestFullScreen(optional any options);
 };

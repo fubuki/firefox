@@ -55,57 +55,57 @@ public:
 
 
   virtual bool
-  AnswerInvalidate() MOZ_OVERRIDE;
+  AnswerInvalidate() override;
 
   virtual bool
   AnswerHasMethod(const PluginIdentifier& aId,
-                  bool* aHasMethod) MOZ_OVERRIDE;
+                  bool* aHasMethod) override;
 
   virtual bool
   AnswerInvoke(const PluginIdentifier& aId,
-               const InfallibleTArray<Variant>& aArgs,
+               InfallibleTArray<Variant>&& aArgs,
                Variant* aResult,
-               bool* aSuccess) MOZ_OVERRIDE;
+               bool* aSuccess) override;
 
   virtual bool
-  AnswerInvokeDefault(const InfallibleTArray<Variant>& aArgs,
+  AnswerInvokeDefault(InfallibleTArray<Variant>&& aArgs,
                       Variant* aResult,
-                      bool* aSuccess) MOZ_OVERRIDE;
+                      bool* aSuccess) override;
 
   virtual bool
   AnswerHasProperty(const PluginIdentifier& aId,
-                    bool* aHasProperty) MOZ_OVERRIDE;
+                    bool* aHasProperty) override;
 
   virtual bool
   AnswerGetChildProperty(const PluginIdentifier& aId,
                          bool* aHasProperty,
                          bool* aHasMethod,
                          Variant* aResult,
-                         bool* aSuccess) MOZ_OVERRIDE;
+                         bool* aSuccess) override;
 
   virtual bool
   AnswerSetProperty(const PluginIdentifier& aId,
                     const Variant& aValue,
-                    bool* aSuccess) MOZ_OVERRIDE;
+                    bool* aSuccess) override;
 
   virtual bool
   AnswerRemoveProperty(const PluginIdentifier& aId,
-                       bool* aSuccess) MOZ_OVERRIDE;
+                       bool* aSuccess) override;
 
   virtual bool
   AnswerEnumerate(InfallibleTArray<PluginIdentifier>* aProperties,
-                  bool* aSuccess) MOZ_OVERRIDE;
+                  bool* aSuccess) override;
 
   virtual bool
-  AnswerConstruct(const InfallibleTArray<Variant>& aArgs,
+  AnswerConstruct(InfallibleTArray<Variant>&& aArgs,
                   Variant* aResult,
-                  bool* aSuccess) MOZ_OVERRIDE;
+                  bool* aSuccess) override;
 
   virtual bool
-  RecvProtect() MOZ_OVERRIDE;
+  RecvProtect() override;
 
   virtual bool
-  RecvUnprotect() MOZ_OVERRIDE;
+  RecvUnprotect() override;
 
   NPObject*
   GetObject(bool aCanResurrect);
@@ -212,7 +212,7 @@ public:
     DISALLOW_COPY_AND_ASSIGN(StackIdentifier);
 
     PluginIdentifier mIdentifier;
-    nsRefPtr<StoredIdentifier> mStored;
+    RefPtr<StoredIdentifier> mStored;
   };
 
   static void ClearIdentifiers();
@@ -311,7 +311,7 @@ private:
   static StoredIdentifier* HashIdentifier(const nsCString& aIdentifier);
   static void UnhashIdentifier(StoredIdentifier* aIdentifier);
 
-  typedef nsDataHashtable<nsCStringHashKey, nsRefPtr<StoredIdentifier>> IdentifierTable;
+  typedef nsDataHashtable<nsCStringHashKey, RefPtr<StoredIdentifier>> IdentifierTable;
   static IdentifierTable sIdentifiers;
 
   struct NPObjectData : public nsPtrHashKey<NPObject>
@@ -328,8 +328,6 @@ private:
     // sometimes nullptr (no actor associated with an NPObject)
     PluginScriptableObjectChild* actor;
   };
-
-  static PLDHashOperator CollectForInstance(NPObjectData* d, void* userArg);
 
   /**
    * mObjectMap contains all the currently active NPObjects (from NPN_CreateObject until the

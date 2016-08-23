@@ -8,10 +8,8 @@
 
 #include "2D.h"
 #include <vector>
-#include "skia/SkCanvas.h"
-#include "skia/SkBitmap.h"
-
-class GrContext;
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkBitmap.h"
 
 namespace mozilla {
 
@@ -41,14 +39,17 @@ public:
                       SurfaceFormat aFormat,
                       DrawTargetSkia* aOwner);
 
+  void InitFromBitmap(const SkBitmap& aBitmap);
+
+#ifdef USE_SKIA_GPU
   /**
    * NOTE: While wrapping a Texture for SkiaGL, the texture *must* be created
    *       with the same GLcontext of DrawTargetSkia
    */
-  bool InitFromTexture(DrawTargetSkia* aOwner,
-                       unsigned int aTexture,
-                       const IntSize &aSize,
-                       SurfaceFormat aFormat);
+  bool InitFromGrTexture(GrTexture* aTexture,
+                         const IntSize &aSize,
+                         SurfaceFormat aFormat);
+#endif
 
   virtual unsigned char *GetData();
 
@@ -68,7 +69,7 @@ private:
   bool mLocked;
 };
 
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 #endif /* MOZILLA_GFX_SOURCESURFACESKIA_H_ */

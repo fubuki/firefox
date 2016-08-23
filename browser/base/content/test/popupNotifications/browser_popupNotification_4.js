@@ -12,7 +12,7 @@ function test() {
   goNext();
 }
 
-let tests = [
+var tests = [
   // Popup Notifications main actions should catch exceptions from callbacks
   { id: "Test#1",
     run: function () {
@@ -117,7 +117,7 @@ let tests = [
   },
   // Moving a tab to a new window should preserve swappable notifications.
   { id: "Test#6",
-    run: function() {
+    run: function* () {
       gBrowser.selectedTab = gBrowser.addTab("about:blank");
       let notifyObj = new BasicNotification(this.id);
       let originalCallback = notifyObj.options.eventCallback;
@@ -126,17 +126,26 @@ let tests = [
         return eventName == "swapping";
       };
 
-      showNotification(notifyObj);
+      let notification = showNotification(notifyObj);
       let win = gBrowser.replaceTabWithWindow(gBrowser.selectedTab);
-      whenDelayedStartupFinished(win, function() {
-        let [tab] = win.gBrowser.tabs;
-        let anchor = win.document.getElementById("default-notification-icon");
-        win.PopupNotifications._reshowNotifications(anchor);
-        checkPopup(win.PopupNotifications.panel, notifyObj);
-        ok(notifyObj.swappingCallbackTriggered, "the swapping callback was triggered");
-        win.close();
-        goNext();
+      yield whenDelayedStartupFinished(win);
+      let [tab] = win.gBrowser.tabs;
+      let anchor = win.document.getElementById("default-notification-icon");
+
+      yield new Promise(resolve => {
+        notification.options.eventCallback = function (eventName) {
+          if (eventName == "shown") {
+            resolve();
+          }
+        };
+        info("Showing the notification again");
+        notification.reshow();
       });
+
+      checkPopup(win.PopupNotifications.panel, notifyObj);
+      ok(notifyObj.swappingCallbackTriggered, "the swapping callback was triggered");
+      win.close();
+      goNext();
     }
   },
   // the hideNotNow option
@@ -254,5 +263,20 @@ let tests = [
       this.notification2.remove();
     },
     onHidden: function(popup) { }
+  },
+  // The anchor icon should be shown for notifications in background windows.
+  { id: "Test#13",
+    run: function() {
+      let notifyObj = new BasicNotification(this.id);
+      notifyObj.options.dismissed = true;
+      let win = gBrowser.replaceTabWithWindow(gBrowser.addTab("about:blank"));
+      whenDelayedStartupFinished(win, function() {
+        showNotification(notifyObj);
+        let anchor = document.getElementById("default-notification-icon");
+        is(anchor.getAttribute("showing"), "true", "the anchor is shown");
+        win.close();
+        goNext();
+      });
+    }
   }
 ];

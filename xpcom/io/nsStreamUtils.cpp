@@ -10,24 +10,31 @@
 #include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsIPipe.h"
+#include "nsICloneableInputStream.h"
 #include "nsIEventTarget.h"
-#include "nsIRunnable.h"
+#include "nsICancelableRunnable.h"
 #include "nsISafeOutputStream.h"
 #include "nsString.h"
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
 #include "nsIBufferedStreams.h"
+#include "nsNetCID.h"
+#include "nsServiceManagerUtils.h"
+#include "nsThreadUtils.h"
 
 using namespace mozilla;
 
 //-----------------------------------------------------------------------------
 
-class nsInputStreamReadyEvent MOZ_FINAL
-  : public nsIRunnable
+// This is a nsICancelableRunnable because we can dispatch it to Workers and
+// those can be shut down at any time, and in these cases, Cancel() is called
+// instead of Run().
+class nsInputStreamReadyEvent final
+  : public CancelableRunnable
   , public nsIInputStreamCallback
 {
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
 
   nsInputStreamReadyEvent(nsIInputStreamCallback* aCallback,
                           nsIEventTarget* aTarget)
@@ -67,7 +74,7 @@ private:
   }
 
 public:
-  NS_IMETHOD OnInputStreamReady(nsIAsyncInputStream* aStream) MOZ_OVERRIDE
+  NS_IMETHOD OnInputStreamReady(nsIAsyncInputStream* aStream) override
   {
     mStream = aStream;
 
@@ -81,7 +88,7 @@ public:
     return NS_OK;
   }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     if (mCallback) {
       if (mStream) {
@@ -92,23 +99,32 @@ public:
     return NS_OK;
   }
 
+  nsresult Cancel() override
+  {
+    mCallback = nullptr;
+    return NS_OK;
+  }
+
 private:
   nsCOMPtr<nsIAsyncInputStream>    mStream;
   nsCOMPtr<nsIInputStreamCallback> mCallback;
   nsCOMPtr<nsIEventTarget>         mTarget;
 };
 
-NS_IMPL_ISUPPORTS(nsInputStreamReadyEvent, nsIRunnable,
-                  nsIInputStreamCallback)
+NS_IMPL_ISUPPORTS_INHERITED(nsInputStreamReadyEvent, CancelableRunnable,
+                            nsIInputStreamCallback)
 
 //-----------------------------------------------------------------------------
 
-class nsOutputStreamReadyEvent MOZ_FINAL
-  : public nsIRunnable
+// This is a nsICancelableRunnable because we can dispatch it to Workers and
+// those can be shut down at any time, and in these cases, Cancel() is called
+// instead of Run().
+class nsOutputStreamReadyEvent final
+  : public CancelableRunnable
   , public nsIOutputStreamCallback
 {
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
 
   nsOutputStreamReadyEvent(nsIOutputStreamCallback* aCallback,
                            nsIEventTarget* aTarget)
@@ -148,7 +164,7 @@ private:
   }
 
 public:
-  NS_IMETHOD OnOutputStreamReady(nsIAsyncOutputStream* aStream) MOZ_OVERRIDE
+  NS_IMETHOD OnOutputStreamReady(nsIAsyncOutputStream* aStream) override
   {
     mStream = aStream;
 
@@ -162,7 +178,7 @@ public:
     return NS_OK;
   }
 
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     if (mCallback) {
       if (mStream) {
@@ -173,14 +189,20 @@ public:
     return NS_OK;
   }
 
+  nsresult Cancel() override
+  {
+    mCallback = nullptr;
+    return NS_OK;
+  }
+
 private:
   nsCOMPtr<nsIAsyncOutputStream>    mStream;
   nsCOMPtr<nsIOutputStreamCallback> mCallback;
   nsCOMPtr<nsIEventTarget>          mTarget;
 };
 
-NS_IMPL_ISUPPORTS(nsOutputStreamReadyEvent, nsIRunnable,
-                  nsIOutputStreamCallback)
+NS_IMPL_ISUPPORTS_INHERITED(nsOutputStreamReadyEvent, CancelableRunnable,
+                            nsIOutputStreamCallback)
 
 //-----------------------------------------------------------------------------
 
@@ -190,7 +212,7 @@ NS_NewInputStreamReadyEvent(nsIInputStreamCallback* aCallback,
 {
   NS_ASSERTION(aCallback, "null callback");
   NS_ASSERTION(aTarget, "null target");
-  nsRefPtr<nsInputStreamReadyEvent> ev =
+  RefPtr<nsInputStreamReadyEvent> ev =
     new nsInputStreamReadyEvent(aCallback, aTarget);
   return ev.forget();
 }
@@ -201,7 +223,7 @@ NS_NewOutputStreamReadyEvent(nsIOutputStreamCallback* aCallback,
 {
   NS_ASSERTION(aCallback, "null callback");
   NS_ASSERTION(aTarget, "null target");
-  nsRefPtr<nsOutputStreamReadyEvent> ev =
+  RefPtr<nsOutputStreamReadyEvent> ev =
     new nsOutputStreamReadyEvent(aCallback, aTarget);
   return ev.forget();
 }
@@ -213,10 +235,10 @@ NS_NewOutputStreamReadyEvent(nsIOutputStreamCallback* aCallback,
 class nsAStreamCopier
   : public nsIInputStreamCallback
   , public nsIOutputStreamCallback
-  , public nsIRunnable
+  , public CancelableRunnable
 {
 public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
 
   nsAStreamCopier()
     : mLock("nsAStreamCopier.mLock")
@@ -271,7 +293,6 @@ public:
       return;
     }
 
-    nsresult sourceCondition, sinkCondition;
     nsresult cancelStatus;
     bool canceled;
     {
@@ -279,6 +300,13 @@ public:
       canceled = mCanceled;
       cancelStatus = mCancelStatus;
     }
+
+    // If the copy was canceled before Process() was even called, then
+    // sourceCondition and sinkCondition should be set to error results to
+    // ensure we don't call Finish() on a canceled nsISafeOutputStream.
+    MOZ_ASSERT(NS_FAILED(cancelStatus) == canceled, "cancel needs an error");
+    nsresult sourceCondition = cancelStatus;
+    nsresult sinkCondition = cancelStatus;
 
     // Copy data from the source to the sink until we hit failure or have
     // copied all the data.
@@ -396,20 +424,20 @@ public:
     return NS_OK;
   }
 
-  NS_IMETHOD OnInputStreamReady(nsIAsyncInputStream* aSource) MOZ_OVERRIDE
+  NS_IMETHOD OnInputStreamReady(nsIAsyncInputStream* aSource) override
   {
     PostContinuationEvent();
     return NS_OK;
   }
 
-  NS_IMETHOD OnOutputStreamReady(nsIAsyncOutputStream* aSink) MOZ_OVERRIDE
+  NS_IMETHOD OnOutputStreamReady(nsIAsyncOutputStream* aSink) override
   {
     PostContinuationEvent();
     return NS_OK;
   }
 
   // continuation event handler
-  NS_IMETHOD Run() MOZ_OVERRIDE
+  NS_IMETHOD Run() override
   {
     Process();
 
@@ -423,6 +451,8 @@ public:
 
     return NS_OK;
   }
+
+  nsresult Cancel() MOZ_MUST_OVERRIDE override = 0;
 
   nsresult PostContinuationEvent()
   {
@@ -477,12 +507,12 @@ protected:
   }
 };
 
-NS_IMPL_ISUPPORTS(nsAStreamCopier,
-                  nsIInputStreamCallback,
-                  nsIOutputStreamCallback,
-                  nsIRunnable)
+NS_IMPL_ISUPPORTS_INHERITED(nsAStreamCopier,
+                            CancelableRunnable,
+                            nsIInputStreamCallback,
+                            nsIOutputStreamCallback)
 
-class nsStreamCopierIB MOZ_FINAL : public nsAStreamCopier
+class nsStreamCopierIB final : public nsAStreamCopier
 {
 public:
   nsStreamCopierIB() : nsAStreamCopier()
@@ -492,9 +522,10 @@ public:
   {
   }
 
-  struct ReadSegmentsState
+  struct MOZ_STACK_CLASS ReadSegmentsState
   {
-    nsIOutputStream* mSink;
+    // the nsIOutputStream will outlive the ReadSegmentsState on the stack
+    nsIOutputStream* MOZ_NON_OWNING_REF mSink;
     nsresult         mSinkCondition;
   };
 
@@ -517,7 +548,8 @@ public:
     return state->mSinkCondition;
   }
 
-  uint32_t DoCopy(nsresult* aSourceCondition, nsresult* aSinkCondition)
+  uint32_t DoCopy(nsresult* aSourceCondition,
+                  nsresult* aSinkCondition) override
   {
     ReadSegmentsState state;
     state.mSink = mSink;
@@ -529,9 +561,14 @@ public:
     *aSinkCondition = state.mSinkCondition;
     return n;
   }
+
+  nsresult Cancel() override
+  {
+    return NS_OK;
+  }
 };
 
-class nsStreamCopierOB MOZ_FINAL : public nsAStreamCopier
+class nsStreamCopierOB final : public nsAStreamCopier
 {
 public:
   nsStreamCopierOB() : nsAStreamCopier()
@@ -541,9 +578,10 @@ public:
   {
   }
 
-  struct WriteSegmentsState
+  struct MOZ_STACK_CLASS WriteSegmentsState
   {
-    nsIInputStream* mSource;
+    // the nsIInputStream will outlive the WriteSegmentsState on the stack
+    nsIInputStream* MOZ_NON_OWNING_REF mSource;
     nsresult        mSourceCondition;
   };
 
@@ -566,7 +604,8 @@ public:
     return state->mSourceCondition;
   }
 
-  uint32_t DoCopy(nsresult* aSourceCondition, nsresult* aSinkCondition)
+  uint32_t DoCopy(nsresult* aSourceCondition,
+                  nsresult* aSinkCondition) override
   {
     WriteSegmentsState state;
     state.mSource = mSource;
@@ -577,6 +616,11 @@ public:
       mSink->WriteSegments(FillOutputBuffer, &state, mChunkSize, &n);
     *aSourceCondition = state.mSourceCondition;
     return n;
+  }
+
+  nsresult Cancel() override
+  {
+    return NS_OK;
   }
 };
 
@@ -604,10 +648,6 @@ NS_AsyncCopy(nsIInputStream*         aSource,
     copier = new nsStreamCopierIB();
   } else {
     copier = new nsStreamCopierOB();
-  }
-
-  if (!copier) {
-    return NS_ERROR_OUT_OF_MEMORY;
   }
 
   // Start() takes an owning ref to the copier...
@@ -848,4 +888,70 @@ NS_FillArray(FallibleTArray<char>& aDest, nsIInputStream* aInput,
 
   MOZ_ASSERT(aDest.Length() <= aDest.Capacity(), "buffer overflow");
   return rv;
+}
+
+bool
+NS_InputStreamIsCloneable(nsIInputStream* aSource)
+{
+  if (!aSource) {
+    return false;
+  }
+
+  nsCOMPtr<nsICloneableInputStream> cloneable = do_QueryInterface(aSource);
+  return cloneable && cloneable->GetCloneable();
+}
+
+nsresult
+NS_CloneInputStream(nsIInputStream* aSource, nsIInputStream** aCloneOut,
+                    nsIInputStream** aReplacementOut)
+{
+  if (NS_WARN_IF(!aSource)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Attempt to perform the clone directly on the source stream
+  nsCOMPtr<nsICloneableInputStream> cloneable = do_QueryInterface(aSource);
+  if (cloneable && cloneable->GetCloneable()) {
+    if (aReplacementOut) {
+      *aReplacementOut = nullptr;
+    }
+    return cloneable->Clone(aCloneOut);
+  }
+
+  // If we failed the clone and the caller does not want to replace their
+  // original stream, then we are done.  Return error.
+  if (!aReplacementOut) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // The caller has opted-in to the fallback clone support that replaces
+  // the original stream.  Copy the data to a pipe and return two cloned
+  // input streams.
+
+  nsCOMPtr<nsIInputStream> reader;
+  nsCOMPtr<nsIInputStream> readerClone;
+  nsCOMPtr<nsIOutputStream> writer;
+
+  nsresult rv = NS_NewPipe(getter_AddRefs(reader), getter_AddRefs(writer),
+                           0, 0,        // default segment size and max size
+                           true, true); // non-blocking
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  cloneable = do_QueryInterface(reader);
+  MOZ_ASSERT(cloneable && cloneable->GetCloneable());
+
+  rv = cloneable->Clone(getter_AddRefs(readerClone));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  nsCOMPtr<nsIEventTarget> target =
+    do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID, &rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = NS_AsyncCopy(aSource, writer, target, NS_ASYNCCOPY_VIA_WRITESEGMENTS);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  readerClone.forget(aCloneOut);
+  reader.forget(aReplacementOut);
+
+  return NS_OK;
 }

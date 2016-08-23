@@ -4,9 +4,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-if CONFIG['MOZ_METRO']:
-    DIRS += ['winrt']
-
 TEST_DIRS += ['tests']
 
 EXPORTS += [
@@ -17,12 +14,17 @@ EXPORTS += [
 
 EXPORTS.mozilla.widget += [
     'AudioSession.h',
+    'WinMessages.h',
+    'WinModifierKeyState.h',
+    'WinNativeEventData.h',
 ]
 
 UNIFIED_SOURCES += [
     'AudioSession.cpp',
     'GfxInfo.cpp',
     'IEnumFE.cpp',
+    'IMMHandler.cpp',
+    'InkCollector.cpp',
     'JumpListItem.cpp',
     'KeyboardLayout.cpp',
     'nsAppShell.cpp',
@@ -33,7 +35,6 @@ UNIFIED_SOURCES += [
     'nsDragService.cpp',
     'nsIdleServiceWin.cpp',
     'nsImageClipboard.cpp',
-    'nsIMM32Handler.cpp',
     'nsLookAndFeel.cpp',
     'nsNativeDragSource.cpp',
     'nsNativeDragTarget.cpp',
@@ -56,6 +57,7 @@ UNIFIED_SOURCES += [
     'WindowHook.cpp',
     'WinIMEHandler.cpp',
     'WinTaskbar.cpp',
+    'WinTextEventDispatcherListener.cpp',
     'WinUtils.cpp',
 ]
 
@@ -65,6 +67,7 @@ SOURCES += [
     'nsBidiKeyboard.cpp',
     'nsFilePicker.cpp',
     'nsWidgetFactory.cpp',
+    'WindowsUIUtils.cpp',
     'WinMouseScrollHandler.cpp',
 ]
 
@@ -82,10 +85,8 @@ if CONFIG['NS_PRINTING']:
 
 if CONFIG['NS_ENABLE_TSF']:
     SOURCES += [
-        'nsTextStore.cpp',
+        'TSFTextStore.cpp',
     ]
-
-MSVC_ENABLE_PGO = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -101,10 +102,14 @@ LOCAL_INCLUDES += [
 
 DEFINES['MOZ_UNICODE'] = True
 
-for var in ('MOZ_ENABLE_D3D9_LAYER', 'MOZ_ENABLE_D3D10_LAYER'):
+for var in ('MOZ_ENABLE_D3D10_LAYER'):
     if CONFIG[var]:
         DEFINES[var] = True
 
 RESFILE = 'widget.res'
 
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+
+OS_LIBS += [
+    'rpcrt4',
+]

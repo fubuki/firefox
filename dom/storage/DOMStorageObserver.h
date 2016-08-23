@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,7 +27,9 @@ public:
 
 private:
   friend class DOMStorageObserver;
-  virtual nsresult Observe(const char* aTopic, const nsACString& aScopePrefix) = 0;
+  virtual nsresult Observe(const char* aTopic,
+                           const nsAString& aOriginAttributesPattern,
+                           const nsACString& aOriginScope) = 0;
 };
 
 // Statically (though layout statics) initialized observer receiving and processing
@@ -44,7 +47,9 @@ public:
 
   void AddSink(DOMStorageObserverSink* aObs);
   void RemoveSink(DOMStorageObserverSink* aObs);
-  void Notify(const char* aTopic, const nsACString& aData = EmptyCString());
+  void Notify(const char* aTopic,
+              const nsAString& aOriginAttributesPattern = EmptyString(),
+              const nsACString& aOriginScope = EmptyCString());
 
 private:
   virtual ~DOMStorageObserver() {}
@@ -56,7 +61,7 @@ private:
   nsCOMPtr<nsITimer> mDBThreadStartDelayTimer;
 };
 
-} // ::dom
-} // ::mozilla
+} // namespace dom
+} // namespace mozilla
 
 #endif

@@ -49,4 +49,4 @@ private:
 #endif
 };
 
-#endif  // nsScreenManagerGtk_h___ 
+#endif  // nsScreenManagerGtk_h___

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -43,6 +44,8 @@
 #include "mozilla/dom/CDATASection.h"
 #include "mozilla/dom/Comment.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/StyleSheetHandle.h"
+#include "mozilla/StyleSheetHandleInlines.h"
 
 #ifdef MOZ_XUL
 #include "nsXULElement.h"
@@ -360,9 +363,7 @@ nsXBLPrototypeBinding::AttributeChanged(nsIAtom* aAttribute,
         // Check to see if the src attribute is xbl:text.  If so, then we need to obtain the
         // children of the real element and get the text nodes' values.
         if (aAttribute == nsGkAtoms::text && aNameSpaceID == kNameSpaceID_XBL) {
-          if (!nsContentUtils::GetNodeTextContent(aChangedElement, false, value)) {
-            NS_RUNTIMEABORT("OOM");
-          }
+          nsContentUtils::GetNodeTextContent(aChangedElement, false, value);
           value.StripChar(char16_t('\n'));
           value.StripChar(char16_t('\r'));
           nsAutoString stripVal(value);
@@ -396,7 +397,7 @@ nsXBLPrototypeBinding::AttributeChanged(nsIAtom* aAttribute,
           nsAutoString value;
           aChangedElement->GetAttr(aNameSpaceID, aAttribute, value);
           if (!value.IsEmpty()) {
-            nsRefPtr<nsTextNode> textContent =
+            RefPtr<nsTextNode> textContent =
               new nsTextNode(realElement->NodeInfo()->NodeInfoManager());
 
             textContent->SetText(value, true);
@@ -452,7 +453,7 @@ nsXBLPrototypeBinding::GetImmediateChild(nsIAtom* aTag)
 }
 
 nsresult
-nsXBLPrototypeBinding::InitClass(const nsCString& aClassName,
+nsXBLPrototypeBinding::InitClass(const nsString& aClassName,
                                  JSContext * aContext,
                                  JS::Handle<JSObject*> aScriptObject,
                                  JS::MutableHandle<JSObject*> aClassObject,
@@ -489,103 +490,74 @@ nsXBLPrototypeBinding::LocateInstance(nsIContent* aBoundElement,
   return copyParent->GetChildAt(templParent->IndexOf(aTemplChild));
 }
 
-struct nsXBLAttrChangeData
-{
-  nsXBLPrototypeBinding* mProto;
-  nsIContent* mBoundElement;
-  nsIContent* mContent;
-  int32_t mSrcNamespace;
-
-  nsXBLAttrChangeData(nsXBLPrototypeBinding* aProto,
-                      nsIContent* aElt, nsIContent* aContent) 
-  :mProto(aProto), mBoundElement(aElt), mContent(aContent) {}
-};
-
-// XXXbz this duplicates lots of AttributeChanged
-static PLDHashOperator
-SetAttrs(nsISupports* aKey, nsXBLAttributeEntry* aEntry, void* aClosure)
-{
-  nsXBLAttrChangeData* changeData = static_cast<nsXBLAttrChangeData*>(aClosure);
-
-  nsIAtom* src = aEntry->GetSrcAttribute();
-  int32_t srcNs = changeData->mSrcNamespace;
-  nsAutoString value;
-  bool attrPresent = true;
-
-  if (src == nsGkAtoms::text && srcNs == kNameSpaceID_XBL) {
-    if (!nsContentUtils::GetNodeTextContent(changeData->mBoundElement, false,
-                                       value)) {
-      NS_RUNTIMEABORT("OOM");
-    }
-    value.StripChar(char16_t('\n'));
-    value.StripChar(char16_t('\r'));
-    nsAutoString stripVal(value);
-    stripVal.StripWhitespace();
-
-    if (stripVal.IsEmpty()) 
-      attrPresent = false;
-  }
-  else {
-    attrPresent = changeData->mBoundElement->GetAttr(srcNs, src, value);
-  }
-
-  if (attrPresent) {
-    nsIContent* content =
-      changeData->mProto->GetImmediateChild(nsGkAtoms::content);
-
-    nsXBLAttributeEntry* curr = aEntry;
-    while (curr) {
-      nsIAtom* dst = curr->GetDstAttribute();
-      int32_t dstNs = curr->GetDstNameSpace();
-      nsIContent* element = curr->GetElement();
-
-      nsIContent *realElement =
-        changeData->mProto->LocateInstance(changeData->mBoundElement, content,
-                                           changeData->mContent, element);
-
-      if (realElement) {
-        realElement->SetAttr(dstNs, dst, value, false);
-
-        // XXXndeakin shouldn't this be done in lieu of SetAttr?
-        if ((dst == nsGkAtoms::text && dstNs == kNameSpaceID_XBL) ||
-            (realElement->NodeInfo()->Equals(nsGkAtoms::html,
-                                             kNameSpaceID_XUL) &&
-             dst == nsGkAtoms::value && !value.IsEmpty())) {
-
-          nsRefPtr<nsTextNode> textContent =
-            new nsTextNode(realElement->NodeInfo()->NodeInfoManager());
-
-          textContent->SetText(value, false);
-          realElement->AppendChildTo(textContent, false);
-        }
-      }
-
-      curr = curr->GetNext();
-    }
-  }
-
-  return PL_DHASH_NEXT;
-}
-
-static PLDHashOperator
-SetAttrsNS(const uint32_t &aNamespace,
-           nsXBLPrototypeBinding::InnerAttributeTable* aXBLAttributes,
-           void* aClosure)
-{
-  if (aXBLAttributes && aClosure) {
-    nsXBLAttrChangeData* changeData = static_cast<nsXBLAttrChangeData*>(aClosure);
-    changeData->mSrcNamespace = aNamespace;
-    aXBLAttributes->EnumerateRead(SetAttrs, aClosure);
-  }
-  return PL_DHASH_NEXT;
-}
-
 void
 nsXBLPrototypeBinding::SetInitialAttributes(nsIContent* aBoundElement, nsIContent* aAnonymousContent)
 {
-  if (mAttributeTable) {
-    nsXBLAttrChangeData data(this, aBoundElement, aAnonymousContent);
-    mAttributeTable->EnumerateRead(SetAttrsNS, &data);
+  if (!mAttributeTable) {
+    return;
+  }
+
+  for (auto iter1 = mAttributeTable->Iter(); !iter1.Done(); iter1.Next()) {
+    InnerAttributeTable* xblAttributes = iter1.UserData();
+    if (xblAttributes) {
+      int32_t srcNamespace = iter1.Key();
+
+      for (auto iter2 = xblAttributes->Iter(); !iter2.Done(); iter2.Next()) {
+        // XXXbz this duplicates lots of AttributeChanged
+        nsXBLAttributeEntry* entry = iter2.UserData();
+        nsIAtom* src = entry->GetSrcAttribute();
+        nsAutoString value;
+        bool attrPresent = true;
+
+        if (src == nsGkAtoms::text && srcNamespace == kNameSpaceID_XBL) {
+          nsContentUtils::GetNodeTextContent(aBoundElement, false, value);
+          value.StripChar(char16_t('\n'));
+          value.StripChar(char16_t('\r'));
+          nsAutoString stripVal(value);
+          stripVal.StripWhitespace();
+
+          if (stripVal.IsEmpty()) {
+            attrPresent = false;
+          }
+        } else {
+          attrPresent = aBoundElement->GetAttr(srcNamespace, src, value);
+        }
+
+        if (attrPresent) {
+          nsIContent* content = GetImmediateChild(nsGkAtoms::content);
+
+          nsXBLAttributeEntry* curr = entry;
+          while (curr) {
+            nsIAtom* dst = curr->GetDstAttribute();
+            int32_t dstNs = curr->GetDstNameSpace();
+            nsIContent* element = curr->GetElement();
+
+            nsIContent* realElement =
+              LocateInstance(aBoundElement, content,
+                             aAnonymousContent, element);
+
+            if (realElement) {
+              realElement->SetAttr(dstNs, dst, value, false);
+
+              // XXXndeakin shouldn't this be done in lieu of SetAttr?
+              if ((dst == nsGkAtoms::text && dstNs == kNameSpaceID_XBL) ||
+                  (realElement->NodeInfo()->Equals(nsGkAtoms::html,
+                                                   kNameSpaceID_XUL) &&
+                   dst == nsGkAtoms::value && !value.IsEmpty())) {
+
+                RefPtr<nsTextNode> textContent =
+                  new nsTextNode(realElement->NodeInfo()->NodeInfoManager());
+
+                textContent->SetText(value, false);
+                realElement->AppendChildTo(textContent, false);
+              }
+            }
+
+            curr = curr->GetNext();
+          }
+        }
+      }
+    }
   }
 }
 
@@ -701,7 +673,7 @@ nsXBLPrototypeBinding::ConstructAttributeTable(nsIContent* aElement)
         token = nsCRT::strtok( newStr, ", ", &newStr );
       }
 
-      nsMemory::Free(str);
+      free(str);
     }
   }
 
@@ -807,11 +779,9 @@ nsXBLPrototypeBinding::CreateKeyHandlers()
       }
 
       if (i == count) {
-        nsRefPtr<nsXBLKeyEventHandler> newHandler;
-        NS_NewXBLKeyEventHandler(eventAtom, phase, type,
-                                 getter_AddRefs(newHandler));
-        if (newHandler)
-          mKeyHandlers.AppendObject(newHandler);
+        RefPtr<nsXBLKeyEventHandler> newHandler =
+          new nsXBLKeyEventHandler(eventAtom, phase, type);
+        mKeyHandlers.AppendObject(newHandler);
         handler = newHandler;
       }
 
@@ -882,11 +852,11 @@ nsXBLPrototypeBinding::Read(nsIObjectInputStream* aStream,
   rv = aStream->ReadString(baseTag);
   NS_ENSURE_SUCCESS(rv, rv);
   if (!baseTag.IsEmpty()) {
-    mBaseTag = do_GetAtom(baseTag);
+    mBaseTag = NS_Atomize(baseTag);
   }
 
-  aDocument->CreateElem(NS_LITERAL_STRING("binding"), nullptr, kNameSpaceID_XBL,
-                        getter_AddRefs(mBinding));
+  mBinding = aDocument->CreateElem(NS_LITERAL_STRING("binding"), nullptr,
+                                   kNameSpaceID_XBL);
 
   nsCOMPtr<nsIContent> child;
   rv = ReadContentNode(aStream, aDocument, aDocument->NodeInfoManager(), getter_AddRefs(child));
@@ -906,13 +876,17 @@ nsXBLPrototypeBinding::Read(nsIObjectInputStream* aStream,
 
   for (; interfaceCount > 0; interfaceCount--) {
     nsIID iid;
-    aStream->ReadID(&iid);
+    rv = aStream->ReadID(&iid);
+    NS_ENSURE_SUCCESS(rv, rv);
     mInterfaceTable.Put(iid, mBinding);
   }
 
-  AutoSafeJSContext cx;
-  JS::Rooted<JSObject*> compilationGlobal(cx, xpc::CompilationScope());
-  JSAutoCompartment ac(cx, compilationGlobal);
+  // We're not directly using this AutoJSAPI here, but callees use it via
+  // AutoJSContext.
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(xpc::CompilationScope())) {
+    return NS_ERROR_UNEXPECTED;
+  }
 
   bool isFirstBinding = aFlags & XBLBinding_Serialize_IsFirstBinding;
   rv = Init(id, aDocInfo, nullptr, isFirstBinding);
@@ -995,8 +969,8 @@ nsXBLPrototypeBinding::Read(nsIObjectInputStream* aStream,
       rv = aStream->ReadString(attrValue);
       NS_ENSURE_SUCCESS(rv, rv);
 
-      nsCOMPtr<nsIAtom> atomPrefix = do_GetAtom(attrPrefix);
-      nsCOMPtr<nsIAtom> atomName = do_GetAtom(attrName);
+      nsCOMPtr<nsIAtom> atomPrefix = NS_Atomize(attrPrefix);
+      nsCOMPtr<nsIAtom> atomName = NS_Atomize(attrName);
       mBinding->SetAttr(attrNamespace, atomName, atomPrefix, attrValue, false);
     }
   }
@@ -1046,15 +1020,6 @@ nsXBLPrototypeBinding::ReadNewBinding(nsIObjectInputStream* aStream,
   return rv;
 }
 
-static PLDHashOperator
-WriteInterfaceID(const nsIID& aKey, nsIContent* aData, void* aClosure)
-{
-  // We can just write out the ids. The cache will be invalidated when a
-  // different build is used, so we don't need to worry about ids changing.
-  static_cast<nsIObjectOutputStream *>(aClosure)->WriteID(aKey);
-  return PL_DHASH_NEXT;
-}
-
 nsresult
 nsXBLPrototypeBinding::Write(nsIObjectOutputStream* aStream)
 {
@@ -1062,9 +1027,12 @@ nsXBLPrototypeBinding::Write(nsIObjectOutputStream* aStream)
   // mKeyHandlersRegistered and mKeyHandlers are not serialized as they are
   // computed on demand.
 
-  AutoSafeJSContext cx;
-  JS::Rooted<JSObject*> compilationGlobal(cx, xpc::CompilationScope());
-  JSAutoCompartment ac(cx, compilationGlobal);
+  // We're not directly using this AutoJSAPI here, but callees use it via
+  // AutoJSContext.
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(xpc::CompilationScope())) {
+    return NS_ERROR_UNEXPECTED;
+  }
 
   uint8_t flags = mInheritStyle ? XBLBinding_Serialize_InheritStyle : 0;
 
@@ -1123,7 +1091,11 @@ nsXBLPrototypeBinding::Write(nsIObjectOutputStream* aStream)
   rv = aStream->Write32(mInterfaceTable.Count());
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mInterfaceTable.EnumerateRead(WriteInterfaceID, aStream);
+  for (auto iter = mInterfaceTable.Iter(); !iter.Done(); iter.Next()) {
+    // We can just write out the ids. The cache will be invalidated when a
+    // different build is used, so we don't need to worry about ids changing.
+    aStream->WriteID(iter.Key());
+  }
 
   // Write out the implementation details.
   if (mImplementation) {
@@ -1133,7 +1105,7 @@ nsXBLPrototypeBinding::Write(nsIObjectOutputStream* aStream)
   else {
     // Write out an empty classname. This indicates that the binding does not
     // define an implementation.
-    rv = aStream->WriteWStringZ(EmptyString().get());
+    rv = aStream->WriteUtf8Z(EmptyString().get());
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -1244,13 +1216,13 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
 
   nsCOMPtr<nsIAtom> prefixAtom;
   if (!prefix.IsEmpty())
-    prefixAtom = do_GetAtom(prefix);
+    prefixAtom = NS_Atomize(prefix);
 
   rv = aStream->ReadString(tag);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIAtom> tagAtom = do_GetAtom(tag);
-  nsRefPtr<NodeInfo> nodeInfo =
+  nsCOMPtr<nsIAtom> tagAtom = NS_Atomize(tag);
+  RefPtr<NodeInfo> nodeInfo =
     aNim->GetNodeInfo(tagAtom, prefixAtom, namespaceID, nsIDOMNode::ELEMENT_NODE);
 
   uint32_t attrCount;
@@ -1263,8 +1235,7 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
   if (namespaceID == kNameSpaceID_XUL) {
     nsIURI* documentURI = aDocument->GetDocumentURI();
 
-    nsRefPtr<nsXULPrototypeElement> prototype = new nsXULPrototypeElement();
-    NS_ENSURE_TRUE(prototype, NS_ERROR_OUT_OF_MEMORY);
+    RefPtr<nsXULPrototypeElement> prototype = new nsXULPrototypeElement();
 
     prototype->mNodeInfo = nodeInfo;
 
@@ -1288,16 +1259,16 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
       rv = aStream->ReadString(val);
       NS_ENSURE_SUCCESS(rv, rv);
 
-      nsCOMPtr<nsIAtom> nameAtom = do_GetAtom(name);
+      nsCOMPtr<nsIAtom> nameAtom = NS_Atomize(name);
       if (namespaceID == kNameSpaceID_None) {
         attrs[i].mName.SetTo(nameAtom);
       }
       else {
         nsCOMPtr<nsIAtom> prefixAtom;
         if (!prefix.IsEmpty())
-          prefixAtom = do_GetAtom(prefix);
+          prefixAtom = NS_Atomize(prefix);
 
-        nsRefPtr<NodeInfo> ni =
+        RefPtr<NodeInfo> ni =
           aNim->GetNodeInfo(nameAtom, prefixAtom,
                             namespaceID, nsIDOMNode::ATTRIBUTE_NODE);
         attrs[i].mName.SetTo(ni);
@@ -1333,9 +1304,9 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
 
       nsCOMPtr<nsIAtom> prefixAtom;
       if (!prefix.IsEmpty())
-        prefixAtom = do_GetAtom(prefix);
+        prefixAtom = NS_Atomize(prefix);
 
-      nsCOMPtr<nsIAtom> nameAtom = do_GetAtom(name);
+      nsCOMPtr<nsIAtom> nameAtom = NS_Atomize(name);
       content->SetAttr(namespaceID, nameAtom, prefixAtom, val, false);
     }
 
@@ -1358,8 +1329,8 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
     rv = aStream->ReadString(destAttribute);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIAtom> srcAtom = do_GetAtom(srcAttribute);
-    nsCOMPtr<nsIAtom> destAtom = do_GetAtom(destAttribute);
+    nsCOMPtr<nsIAtom> srcAtom = NS_Atomize(srcAttribute);
+    nsCOMPtr<nsIAtom> destAtom = NS_Atomize(destAttribute);
 
     EnsureAttributeTable();
     AddToAttributeTable(srcNamespaceID, srcAtom, destNamespaceID, destAtom, content);
@@ -1385,60 +1356,6 @@ nsXBLPrototypeBinding::ReadContentNode(nsIObjectInputStream* aStream,
 
   content.swap(*aContent);
   return NS_OK;
-}
-
-// This structure holds information about a forwarded attribute that needs to be
-// written out. This is used because we need several fields passed within the
-// enumeration closure.
-struct WriteAttributeData
-{
-  nsXBLPrototypeBinding* binding;
-  nsIObjectOutputStream* stream;
-  nsIContent* content;
-  int32_t srcNamespace;
-
-  WriteAttributeData(nsXBLPrototypeBinding* aBinding,
-                     nsIObjectOutputStream* aStream,
-                     nsIContent* aContent)
-    : binding(aBinding), stream(aStream), content(aContent)
-  { }
-};
-
-static PLDHashOperator
-WriteAttribute(nsISupports* aKey, nsXBLAttributeEntry* aEntry, void* aClosure)
-{
-  WriteAttributeData* data = static_cast<WriteAttributeData *>(aClosure);
-  nsIObjectOutputStream* stream = data->stream;
-  const int32_t srcNamespace = data->srcNamespace;
-
-  do {
-    if (aEntry->GetElement() == data->content) {
-      data->binding->WriteNamespace(stream, srcNamespace);
-      stream->WriteWStringZ(nsDependentAtomString(aEntry->GetSrcAttribute()).get());
-      data->binding->WriteNamespace(stream, aEntry->GetDstNameSpace());
-      stream->WriteWStringZ(nsDependentAtomString(aEntry->GetDstAttribute()).get());
-    }
-
-    aEntry = aEntry->GetNext();
-  } while (aEntry);
-
-  return PL_DHASH_NEXT;
-}
-
-// WriteAttributeNS is the callback to enumerate over the attribute
-// forwarding entries. Since these are stored in a hash of hashes,
-// we need to iterate over the inner hashes, calling WriteAttribute
-// to do the actual work.
-static PLDHashOperator
-WriteAttributeNS(const uint32_t &aNamespace,
-                 nsXBLPrototypeBinding::InnerAttributeTable* aXBLAttributes,
-                 void* aClosure)
-{
-  WriteAttributeData* data = static_cast<WriteAttributeData *>(aClosure);
-  data->srcNamespace = aNamespace;
-  aXBLAttributes->EnumerateRead(WriteAttribute, data);
-
-  return PL_DHASH_NEXT;
 }
 
 nsresult
@@ -1483,7 +1400,7 @@ nsXBLPrototypeBinding::WriteContentNode(nsIObjectOutputStream* aStream,
   rv = aStream->WriteWStringZ(prefixStr.get());
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = aStream->WriteWStringZ(nsDependentAtomString(aNode->Tag()).get());
+  rv = aStream->WriteWStringZ(nsDependentAtomString(aNode->NodeInfo()->NameAtom()).get());
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Write attributes
@@ -1521,8 +1438,27 @@ nsXBLPrototypeBinding::WriteContentNode(nsIObjectOutputStream* aStream,
 
   // Write out the attribute fowarding information
   if (mAttributeTable) {
-    WriteAttributeData data(this, aStream, aNode);
-    mAttributeTable->EnumerateRead(WriteAttributeNS, &data);
+    for (auto iter1 = mAttributeTable->Iter(); !iter1.Done(); iter1.Next()) {
+      int32_t srcNamespace = iter1.Key();
+      InnerAttributeTable* xblAttributes = iter1.UserData();
+
+      for (auto iter2 = xblAttributes->Iter(); !iter2.Done(); iter2.Next()) {
+        nsXBLAttributeEntry* entry = iter2.UserData();
+
+        do {
+          if (entry->GetElement() == aNode) {
+            WriteNamespace(aStream, srcNamespace);
+            aStream->WriteWStringZ(
+              nsDependentAtomString(entry->GetSrcAttribute()).get());
+            WriteNamespace(aStream, entry->GetDstNameSpace());
+            aStream->WriteWStringZ(
+              nsDependentAtomString(entry->GetDstAttribute()).get());
+          }
+
+          entry = entry->GetNext();
+        } while (entry);
+      }
+    }
   }
   rv = aStream->Write8(XBLBinding_Serialize_NoMoreAttributes);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1662,7 +1598,7 @@ nsXBLPrototypeBinding::ResolveBaseBinding()
       int32_t nameSpaceID =
         nsContentUtils::NameSpaceManager()->GetNameSpaceID(nameSpace);
 
-      nsCOMPtr<nsIAtom> tagName = do_GetAtom(display);
+      nsCOMPtr<nsIAtom> tagName = NS_Atomize(display);
       // Check the white list
       if (!CheckTagNameWhiteList(nameSpaceID, tagName)) {
         const char16_t* params[] = { display.get() };
@@ -1702,14 +1638,14 @@ nsXBLPrototypeBinding::EnsureResources()
 }
 
 void
-nsXBLPrototypeBinding::AppendStyleSheet(CSSStyleSheet* aSheet)
+nsXBLPrototypeBinding::AppendStyleSheet(StyleSheetHandle aSheet)
 {
   EnsureResources();
   mResources->AppendStyleSheet(aSheet);
 }
 
 void
-nsXBLPrototypeBinding::RemoveStyleSheet(CSSStyleSheet* aSheet)
+nsXBLPrototypeBinding::RemoveStyleSheet(StyleSheetHandle aSheet)
 {
   if (!mResources) {
     MOZ_ASSERT(false, "Trying to remove a sheet that does not exist.");
@@ -1719,13 +1655,13 @@ nsXBLPrototypeBinding::RemoveStyleSheet(CSSStyleSheet* aSheet)
   mResources->RemoveStyleSheet(aSheet);
 } 
 void
-nsXBLPrototypeBinding::InsertStyleSheetAt(size_t aIndex, CSSStyleSheet* aSheet)
+nsXBLPrototypeBinding::InsertStyleSheetAt(size_t aIndex, StyleSheetHandle aSheet)
 {
   EnsureResources();
   mResources->InsertStyleSheetAt(aIndex, aSheet);
 }
 
-CSSStyleSheet*
+StyleSheetHandle
 nsXBLPrototypeBinding::StyleSheetAt(size_t aIndex) const
 {
   MOZ_ASSERT(mResources);
@@ -1746,7 +1682,7 @@ nsXBLPrototypeBinding::HasStyleSheets() const
 
 void
 nsXBLPrototypeBinding::AppendStyleSheetsTo(
-                                      nsTArray<CSSStyleSheet*>& aResult) const
+                                      nsTArray<StyleSheetHandle>& aResult) const
 {
   if (mResources) {
     mResources->AppendStyleSheetsTo(aResult);

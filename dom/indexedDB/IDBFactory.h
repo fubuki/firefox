@@ -1,11 +1,11 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_indexeddb_idbfactory_h__
-#define mozilla_dom_indexeddb_idbfactory_h__
+#ifndef mozilla_dom_idbfactory_h__
+#define mozilla_dom_idbfactory_h__
 
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/StorageTypeBinding.h"
@@ -18,7 +18,7 @@
 #include "nsWrapperCache.h"
 
 class nsIPrincipal;
-class nsPIDOMWindow;
+class nsPIDOMWindowInner;
 struct PRThread;
 
 namespace mozilla {
@@ -35,17 +35,17 @@ class PrincipalInfo;
 namespace dom {
 
 struct IDBOpenDBOptions;
+class IDBOpenDBRequest;
 template <typename> class Optional;
 class TabChild;
 
 namespace indexedDB {
-
 class BackgroundFactoryChild;
 class FactoryRequestParams;
-class IDBOpenDBRequest;
 class LoggingInfo;
+}
 
-class IDBFactory MOZ_FINAL
+class IDBFactory final
   : public nsISupports
   , public nsWrapperCache
 {
@@ -60,16 +60,16 @@ class IDBFactory MOZ_FINAL
 
   // If this factory lives on a window then mWindow must be non-null. Otherwise
   // mOwningObject must be non-null.
-  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsCOMPtr<nsPIDOMWindowInner> mWindow;
   JS::Heap<JSObject*> mOwningObject;
 
   // This will only be set if the factory belongs to a window in a child
   // process.
-  nsRefPtr<TabChild> mTabChild;
+  RefPtr<TabChild> mTabChild;
 
   nsTArray<nsAutoPtr<PendingRequestInfo>> mPendingRequests;
 
-  BackgroundFactoryChild* mBackgroundActor;
+  indexedDB::BackgroundFactoryChild* mBackgroundActor;
 
 #ifdef DEBUG
   PRThread* mOwningThread;
@@ -82,13 +82,13 @@ class IDBFactory MOZ_FINAL
 
 public:
   static nsresult
-  CreateForWindow(nsPIDOMWindow* aWindow,
+  CreateForWindow(nsPIDOMWindowInner* aWindow,
                   IDBFactory** aFactory);
 
   static nsresult
-  CreateForChromeJS(JSContext* aCx,
-                    JS::Handle<JSObject*> aOwningObject,
-                    IDBFactory** aFactory);
+  CreateForMainThreadJS(JSContext* aCx,
+                        JS::Handle<JSObject*> aOwningObject,
+                        IDBFactory** aFactory);
 
   static nsresult
   CreateForDatastore(JSContext* aCx,
@@ -103,18 +103,23 @@ public:
                   IDBFactory** aFactory);
 
   static bool
-  AllowedForWindow(nsPIDOMWindow* aWindow);
+  AllowedForWindow(nsPIDOMWindowInner* aWindow);
 
+  static bool
+  AllowedForPrincipal(nsIPrincipal* aPrincipal,
+                      bool* aIsSystemPrincipal = nullptr);
+
+#ifdef DEBUG
+  void
+  AssertIsOnOwningThread() const;
+
+  PRThread*
+  OwningThread() const;
+#else
   void
   AssertIsOnOwningThread() const
-#ifdef DEBUG
-  ;
-#else
   { }
 #endif
-
-  void
-  SetBackgroundActor(BackgroundFactoryChild* aBackgroundActor);
 
   void
   ClearBackgroundActor()
@@ -127,7 +132,7 @@ public:
   void
   IncrementParentLoggingRequestSerialNumber();
 
-  nsPIDOMWindow*
+  nsPIDOMWindowInner*
   GetParentObject() const
   {
     return mWindow;
@@ -159,17 +164,20 @@ public:
   IsChrome() const;
 
   already_AddRefed<IDBOpenDBRequest>
-  Open(const nsAString& aName,
+  Open(JSContext* aCx,
+       const nsAString& aName,
        uint64_t aVersion,
        ErrorResult& aRv);
 
   already_AddRefed<IDBOpenDBRequest>
-  Open(const nsAString& aName,
+  Open(JSContext* aCx,
+       const nsAString& aName,
        const IDBOpenDBOptions& aOptions,
        ErrorResult& aRv);
 
   already_AddRefed<IDBOpenDBRequest>
-  DeleteDatabase(const nsAString& aName,
+  DeleteDatabase(JSContext* aCx,
+                 const nsAString& aName,
                  const IDBOpenDBOptions& aOptions,
                  ErrorResult& aRv);
 
@@ -180,19 +188,22 @@ public:
       ErrorResult& aRv);
 
   already_AddRefed<IDBOpenDBRequest>
-  OpenForPrincipal(nsIPrincipal* aPrincipal,
+  OpenForPrincipal(JSContext* aCx,
+                   nsIPrincipal* aPrincipal,
                    const nsAString& aName,
                    uint64_t aVersion,
                    ErrorResult& aRv);
 
   already_AddRefed<IDBOpenDBRequest>
-  OpenForPrincipal(nsIPrincipal* aPrincipal,
+  OpenForPrincipal(JSContext* aCx,
+                   nsIPrincipal* aPrincipal,
                    const nsAString& aName,
                    const IDBOpenDBOptions& aOptions,
                    ErrorResult& aRv);
 
   already_AddRefed<IDBOpenDBRequest>
-  DeleteForPrincipal(nsIPrincipal* aPrincipal,
+  DeleteForPrincipal(JSContext* aCx,
+                     nsIPrincipal* aPrincipal,
                      const nsAString& aName,
                      const IDBOpenDBOptions& aOptions,
                      ErrorResult& aRv);
@@ -202,7 +213,7 @@ public:
 
   // nsWrapperCache
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
 private:
   IDBFactory();
@@ -222,11 +233,12 @@ private:
                       IDBFactory** aFactory);
 
   static nsresult
-  AllowedForWindowInternal(nsPIDOMWindow* aWindow,
+  AllowedForWindowInternal(nsPIDOMWindowInner* aWindow,
                            nsIPrincipal** aPrincipal);
 
   already_AddRefed<IDBOpenDBRequest>
-  OpenInternal(nsIPrincipal* aPrincipal,
+  OpenInternal(JSContext* aCx,
+               nsIPrincipal* aPrincipal,
                const nsAString& aName,
                const Optional<uint64_t>& aVersion,
                const Optional<StorageType>& aStorageType,
@@ -235,18 +247,17 @@ private:
 
   nsresult
   BackgroundActorCreated(PBackgroundChild* aBackgroundActor,
-                         const LoggingInfo& aLoggingInfo);
+                         const indexedDB::LoggingInfo& aLoggingInfo);
 
   void
   BackgroundActorFailed();
 
   nsresult
   InitiateRequest(IDBOpenDBRequest* aRequest,
-                  const FactoryRequestParams& aParams);
+                  const indexedDB::FactoryRequestParams& aParams);
 };
 
-} // namespace indexedDB
 } // namespace dom
 } // namespace mozilla
 
-#endif // mozilla_dom_indexeddb_idbfactory_h__
+#endif // mozilla_dom_idbfactory_h__

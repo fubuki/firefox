@@ -4,9 +4,13 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+for cdm in CONFIG['MOZ_EME_MODULES']:
+    DEFINES['MOZ_%s_EME' % cdm.upper()] = True
+
 XPIDL_MODULE = 'content_geckomediaplugins'
 
 XPIDL_SOURCES += [
+    'mozIGeckoMediaPluginChromeService.idl',
     'mozIGeckoMediaPluginService.idl',
 ]
 
@@ -35,6 +39,8 @@ EXPORTS += [
     'GMPAudioHost.h',
     'GMPCallbackBase.h',
     'GMPChild.h',
+    'GMPContentChild.h',
+    'GMPContentParent.h',
     'GMPDecryptorChild.h',
     'GMPDecryptorParent.h',
     'GMPDecryptorProxy.h',
@@ -46,7 +52,10 @@ EXPORTS += [
     'GMPProcessChild.h',
     'GMPProcessParent.h',
     'GMPService.h',
+    'GMPServiceChild.h',
+    'GMPServiceParent.h',
     'GMPSharedMemManager.h',
+    'GMPStorage.h',
     'GMPStorageChild.h',
     'GMPStorageParent.h',
     'GMPTimerChild.h',
@@ -76,19 +85,26 @@ UNIFIED_SOURCES += [
     'GMPAudioDecoderParent.cpp',
     'GMPAudioHost.cpp',
     'GMPChild.cpp',
+    'GMPContentChild.cpp',
+    'GMPContentParent.cpp',
     'GMPDecryptorChild.cpp',
     'GMPDecryptorParent.cpp',
+    'GMPDiskStorage.cpp',
     'GMPEncryptedBufferDataImpl.cpp',
+    'GMPMemoryStorage.cpp',
     'GMPParent.cpp',
     'GMPPlatform.cpp',
     'GMPProcessChild.cpp',
     'GMPProcessParent.cpp',
     'GMPService.cpp',
+    'GMPServiceChild.cpp',
+    'GMPServiceParent.cpp',
     'GMPSharedMemManager.cpp',
     'GMPStorageChild.cpp',
     'GMPStorageParent.cpp',
     'GMPTimerChild.cpp',
     'GMPTimerParent.cpp',
+    'GMPUtils.cpp',
     'GMPVideoDecoderChild.cpp',
     'GMPVideoDecoderParent.cpp',
     'GMPVideoEncodedFrameImpl.cpp',
@@ -99,29 +115,31 @@ UNIFIED_SOURCES += [
     'GMPVideoPlaneImpl.cpp',
 ]
 
-if CONFIG['OS_TARGET'] == 'WINNT':
+if CONFIG['OS_TARGET'] in ('WINNT', 'Darwin'):
   DIRS += [
       'rlz',
+  ]
+
+if 'widevine' in CONFIG['MOZ_EME_MODULES']:
+  DIRS += [
+      'widevine-adapter',
   ]
 
 IPDL_SOURCES += [
   'GMPTypes.ipdlh',
   'PGMP.ipdl',
   'PGMPAudioDecoder.ipdl',
+  'PGMPContent.ipdl',
   'PGMPDecryptor.ipdl',
+  'PGMPService.ipdl',
   'PGMPStorage.ipdl',
   'PGMPTimer.ipdl',
   'PGMPVideoDecoder.ipdl',
   'PGMPVideoEncoder.ipdl',
 ]
 
-if CONFIG['GKMEDIAS_SHARED_LIBRARY']:
-    NO_VISIBILITY_FLAGS = True
-
 # comment this out to use Unsafe Shmem for more performance
 DEFINES['GMP_SAFE_SHMEM'] = True
-
-FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

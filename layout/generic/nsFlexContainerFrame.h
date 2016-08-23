@@ -5,7 +5,7 @@
  * version 2.0 (the "License"). You can obtain a copy of the License at
  * http://mozilla.org/MPL/2.0/. */
 
-/* rendering object for CSS "display: flex" */
+/* rendering object for CSS "display: flex" and "display: -webkit-box" */
 
 #ifndef nsFlexContainerFrame_h___
 #define nsFlexContainerFrame_h___
@@ -14,14 +14,33 @@
 
 namespace mozilla {
 template <class T> class LinkedList;
-}
+class LogicalPoint;
+} // namespace mozilla
 
 nsContainerFrame* NS_NewFlexContainerFrame(nsIPresShell* aPresShell,
                                            nsStyleContext* aContext);
 
-typedef nsContainerFrame nsFlexContainerFrameSuper;
 
-class nsFlexContainerFrame : public nsFlexContainerFrameSuper {
+/**
+ * This is the rendering object used for laying out elements with
+ * "display: flex" or "display: inline-flex".
+ *
+ * We also use this class for elements with "display: -webkit-box" or
+ * "display: -webkit-inline-box" (but not "-moz-box" / "-moz-inline-box" --
+ * those are rendered with old-school XUL frame classes).
+ *
+ * Note: we represent the -webkit-box family of properties (-webkit-box-orient,
+ * -webkit-box-flex, etc.) as aliases for their -moz equivalents.  And for
+ * -webkit-{inline-}box containers, nsFlexContainerFrame will honor those
+ * "legacy" properties for alignment/flexibility/etc. *instead of* honoring the
+ * modern flexbox & alignment properties.  For brevity, many comments in
+ * nsFlexContainerFrame.cpp simply refer to these properties using their
+ * "-webkit" versions, since we're mostly expecting to encounter them in that
+ * form. (Technically, the "-moz" versions of these properties *can* influence
+ * layout here as well (since that's what the -webkit versions are aliased to)
+ * -- but only inside of a "display:-webkit-{inline-}box" container.)
+ */
+class nsFlexContainerFrame : public nsContainerFrame {
 public:
   NS_DECL_FRAMEARENA_HELPERS
   NS_DECL_QUERYFRAME_TARGET(nsFlexContainerFrame)
@@ -40,29 +59,29 @@ public:
   // nsIFrame overrides
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
-                                const nsDisplayListSet& aLists) MOZ_OVERRIDE;
+                                const nsDisplayListSet& aLists) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
                       nsHTMLReflowMetrics&     aDesiredSize,
                       const nsHTMLReflowState& aReflowState,
-                      nsReflowStatus&          aStatus) MOZ_OVERRIDE;
+                      nsReflowStatus&          aStatus) override;
 
   virtual nscoord
-    GetMinISize(nsRenderingContext* aRenderingContext) MOZ_OVERRIDE;
+    GetMinISize(nsRenderingContext* aRenderingContext) override;
   virtual nscoord
-    GetPrefISize(nsRenderingContext* aRenderingContext) MOZ_OVERRIDE;
+    GetPrefISize(nsRenderingContext* aRenderingContext) override;
 
-  virtual nsIAtom* GetType() const MOZ_OVERRIDE;
+  virtual nsIAtom* GetType() const override;
 #ifdef DEBUG_FRAME_DUMP
-  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
+  virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
   // Flexbox-specific public methods
   bool IsHorizontal();
 
 protected:
   // Protected constructor & destructor
-  explicit nsFlexContainerFrame(nsStyleContext* aContext) :
-    nsFlexContainerFrameSuper(aContext)
+  explicit nsFlexContainerFrame(nsStyleContext* aContext)
+    : nsContainerFrame(aContext)
   {}
   virtual ~nsFlexContainerFrame();
 
@@ -85,7 +104,7 @@ protected:
                     const nsHTMLReflowState& aReflowState,
                     nsReflowStatus&          aStatus,
                     nscoord aContentBoxMainSize,
-                    nscoord aAvailableHeightForContent,
+                    nscoord aAvailableBSizeForContent,
                     nsTArray<StrutInfo>& aStruts,
                     const FlexboxAxisTracker& aAxisTracker);
 
@@ -150,7 +169,7 @@ protected:
   void GenerateFlexLines(nsPresContext* aPresContext,
                          const nsHTMLReflowState& aReflowState,
                          nscoord aContentBoxMainSize,
-                         nscoord aAvailableHeightForContent,
+                         nscoord aAvailableBSizeForContent,
                          const nsTArray<StrutInfo>& aStruts,
                          const FlexboxAxisTracker& aAxisTracker,
                          mozilla::LinkedList<FlexLine>& aLines);
@@ -161,7 +180,7 @@ protected:
   nscoord ComputeCrossSize(const nsHTMLReflowState& aReflowState,
                            const FlexboxAxisTracker& aAxisTracker,
                            nscoord aSumLineCrossSizes,
-                           nscoord aAvailableHeightForContent,
+                           nscoord aAvailableBSizeForContent,
                            bool* aIsDefinite,
                            nsReflowStatus& aStatus);
 
@@ -169,6 +188,45 @@ protected:
                            const FlexboxAxisTracker& aAxisTracker,
                            nsHTMLReflowState& aChildReflowState,
                            FlexItem& aItem);
+
+  /**
+   * Moves the given flex item's frame to the given LogicalPosition (modulo any
+   * relative positioning).
+   *
+   * This can be used in cases where we've already done a "measuring reflow"
+   * for the flex item at the correct size, and hence can skip its final reflow
+   * (but still need to move it to the right final position).
+   *
+   * @param aReflowState    The flex container's reflow state.
+   * @param aItem           The flex item whose frame should be moved.
+   * @param aFramePos       The position where the flex item's frame should
+   *                        be placed. (pre-relative positioning)
+   * @param aContainerSize  The flex container's size (required by some methods
+   *                        that we call, to interpret aFramePos correctly).
+   */
+  void MoveFlexItemToFinalPosition(const nsHTMLReflowState& aReflowState,
+                                   const FlexItem& aItem,
+                                   mozilla::LogicalPoint& aFramePos,
+                                   const nsSize& aContainerSize);
+  /**
+   * Helper-function to reflow a child frame, at its final position determined
+   * by flex layout.
+   *
+   * @param aPresContext    The presentation context being used in reflow.
+   * @param aAxisTracker    A FlexboxAxisTracker with the flex container's axes.
+   * @param aReflowState    The flex container's reflow state.
+   * @param aItem           The flex item to be reflowed.
+   * @param aFramePos       The position where the flex item's frame should
+   *                        be placed. (pre-relative positioning)
+   * @param aContainerSize  The flex container's size (required by some methods
+   *                        that we call, to interpret aFramePos correctly).
+   */
+  void ReflowFlexItem(nsPresContext* aPresContext,
+                      const FlexboxAxisTracker& aAxisTracker,
+                      const nsHTMLReflowState& aReflowState,
+                      const FlexItem& aItem,
+                      mozilla::LogicalPoint& aFramePos,
+                      const nsSize& aContainerSize);
 
   bool mChildrenHaveBeenReordered; // Have we ever had to reorder our kids
                                    // to satisfy their 'order' values?

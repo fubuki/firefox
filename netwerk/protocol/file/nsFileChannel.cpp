@@ -13,14 +13,23 @@
 #include "nsStreamUtils.h"
 #include "nsMimeTypes.h"
 #include "nsNetUtil.h"
+#include "nsNetCID.h"
+#include "nsIOutputStream.h"
+#include "nsIFileStreams.h"
+#include "nsFileProtocolHandler.h"
 #include "nsProxyRelease.h"
 #include "nsAutoPtr.h"
 #include "nsIContentPolicy.h"
 #include "nsContentUtils.h"
 
 #include "nsIFileURL.h"
+#include "nsIFile.h"
 #include "nsIMIMEService.h"
+#include "prio.h"
 #include <algorithm>
+
+using namespace mozilla;
+using namespace mozilla::net;
 
 //-----------------------------------------------------------------------------
 
@@ -120,9 +129,7 @@ nsFileCopyEvent::DoCopy()
 
     // Release the callback on the target thread to avoid destroying stuff on
     // the wrong thread.
-    nsIRunnable *doomed = nullptr;
-    mCallback.swap(doomed);
-    NS_ProxyRelease(mCallbackTarget, doomed);
+    NS_ProxyRelease(mCallbackTarget, mCallback.forget());
   }
 }
 
@@ -137,8 +144,8 @@ nsFileCopyEvent::Dispatch(nsIRunnable *callback,
   mCallbackTarget = target;
 
   // Build a coalescing proxy for progress events
-  nsresult rv = net_NewTransportEventSinkProxy(getter_AddRefs(mSink), sink,
-                                               target, true);
+  nsresult rv = net_NewTransportEventSinkProxy(getter_AddRefs(mSink), sink, target);
+
   if (NS_FAILED(rv))
     return rv;
 
@@ -175,16 +182,16 @@ public:
   }
 
   NS_IMETHODIMP ReadSegments(nsWriteSegmentFun fun, void *closure,
-                             uint32_t count, uint32_t *result) MOZ_OVERRIDE;
+                             uint32_t count, uint32_t *result) override;
   NS_IMETHODIMP AsyncWait(nsIInputStreamCallback *callback, uint32_t flags,
-                          uint32_t count, nsIEventTarget *target) MOZ_OVERRIDE;
+                          uint32_t count, nsIEventTarget *target) override;
 
 private:
   virtual ~nsFileUploadContentStream() {}
 
   void OnCopyComplete();
 
-  nsRefPtr<nsFileCopyEvent> mCopyEvent;
+  RefPtr<nsFileCopyEvent> mCopyEvent;
   nsCOMPtr<nsITransportEventSink> mSink;
 };
 
@@ -263,6 +270,14 @@ nsFileChannel::nsFileChannel(nsIURI *uri)
                                          getter_AddRefs(resolvedFile))) &&
       NS_SUCCEEDED(NS_NewFileURI(getter_AddRefs(targetURI), 
                    resolvedFile, nullptr))) {
+    // Make an effort to match up the query strings.
+    nsCOMPtr<nsIURL> origURL = do_QueryInterface(uri);
+    nsCOMPtr<nsIURL> targetURL = do_QueryInterface(targetURI);
+    nsAutoCString queryString;
+    if (origURL && targetURL && NS_SUCCEEDED(origURL->GetQuery(queryString))) {
+      targetURL->SetQuery(queryString);
+    }
+
     SetURI(targetURI);
     SetOriginalURI(uri);
     nsLoadFlags loadFlags = 0;
@@ -341,7 +356,7 @@ nsFileChannel::OpenContentStream(bool async, nsIInputStream **result,
     rv = NS_NewChannel(getter_AddRefs(newChannel),
                        newURI,
                        nsContentUtils::GetSystemPrincipal(),
-                       nsILoadInfo::SEC_NORMAL,
+                       nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                        nsIContentPolicy::TYPE_OTHER);
 
     if (NS_FAILED(rv))
@@ -366,7 +381,7 @@ nsFileChannel::OpenContentStream(bool async, nsIInputStream **result,
     if (NS_FAILED(rv))
       return rv;
 
-    nsRefPtr<nsFileUploadContentStream> uploadStream =
+    RefPtr<nsFileUploadContentStream> uploadStream =
         new nsFileUploadContentStream(async, fileStream, mUploadStream,
                                       mUploadLength, this);
     if (!uploadStream || !uploadStream->IsInitialized()) {
@@ -453,8 +468,9 @@ nsFileChannel::SetUploadStream(nsIInputStream *stream,
       nsresult rv = mUploadStream->Available(&avail);
       if (NS_FAILED(rv))
         return rv;
-      if (avail < INT64_MAX)
-        mUploadLength = avail;
+      // if this doesn't fit in the javascript MAX_SAFE_INTEGER
+      // pretend we don't know the size
+      mUploadLength = InScriptableRange(avail) ? avail : -1;
     }
   } else {
     mUploadLength = -1;

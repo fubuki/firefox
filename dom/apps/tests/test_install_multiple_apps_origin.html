@@ -7,6 +7,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id={778277}
   <title>Test for Bug {778277}</title>
   <script type="text/javascript" src="/MochiKit/MochiKit.js"></script>
   <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
+  <script type="text/javascript" src="common.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 </head>
 <body>
@@ -52,8 +53,6 @@ SimpleTest.waitForExplicitFinish();
   * Install 2 apps from the same origin and uninstall them.
   */
 function runTest() {
-  SpecialPowers.setAllAppsLaunchable(true);
-
   var manifestURL1 = gManifestURL + "&app=1";
   var manifestURL2 = gManifestURL + "&app=2";
 
@@ -116,7 +115,7 @@ function runTest() {
   is(request.result.length, initialAppsCount, "All apps are uninstalled.");
 }
 
-addLoadEvent(go);
+addLoadEvent(() => prepareEnv(go));
 
 </script>
 </pre>

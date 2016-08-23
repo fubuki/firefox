@@ -66,7 +66,7 @@ public:
 
   virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
                        HitTestState* aState,
-                       nsTArray<nsIFrame*> *aOutFrames) MOZ_OVERRIDE;
+                       nsTArray<nsIFrame*> *aOutFrames) override;
   NS_DISPLAY_DECL_NAME("XULTreeColSplitterTarget", TYPE_XUL_TREE_COL_SPLITTER_TARGET)
 };
 
@@ -143,12 +143,13 @@ nsTreeColFrame::AttributeChanged(int32_t aNameSpaceID,
 }
 
 void
-nsTreeColFrame::SetBounds(nsBoxLayoutState& aBoxLayoutState,
-                          const nsRect& aRect,
-                          bool aRemoveOverflowArea) {
+nsTreeColFrame::SetXULBounds(nsBoxLayoutState& aBoxLayoutState,
+                             const nsRect& aRect,
+                             bool aRemoveOverflowArea)
+{
   nscoord oldWidth = mRect.width;
 
-  nsBoxFrame::SetBounds(aBoxLayoutState, aRect, aRemoveOverflowArea);
+  nsBoxFrame::SetXULBounds(aBoxLayoutState, aRect, aRemoveOverflowArea);
   if (mRect.width != oldWidth) {
     nsITreeBoxObject* treeBoxObject = GetTreeBoxObject();
     if (treeBoxObject) {

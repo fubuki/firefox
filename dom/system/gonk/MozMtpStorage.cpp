@@ -91,24 +91,20 @@ MozMtpStorage::StorageAvailable()
   MTP_LOG("Adding Volume %s mStorageID 0x%08x mountPoint %s to MozMtpDatabase",
           mVolume->NameStr(), mStorageID, mountPoint.get());
 
-  nsRefPtr<MozMtpDatabase> db = mMozMtpServer->GetMozMtpDatabase();
+  RefPtr<MozMtpDatabase> db = mMozMtpServer->GetMozMtpDatabase();
   db->AddStorage(mStorageID, mountPoint.get(), mVolume->NameStr());
 
   MOZ_ASSERT(!mMtpStorage);
 
-  //TODO: For now we assume that the storage removable unless we're sure it's
-  //      not. Bug 1033952 will add an isRemovable attribute to the Volume
-  //      and then we'll know properly.
-
   //TODO: Figure out what to do about maxFileSize.
 
-  mMtpStorage.reset(new MtpStorage(mStorageID,         // id
-                                   mountPoint.get(),   // filePath
-                                   mVolume->NameStr(), // description
-                                   1024uLL * 1024uLL,  // reserveSpace
-                                   true,               // removable
+  mMtpStorage.reset(new MtpStorage(mStorageID,                           // id
+                                   mountPoint.get(),                     // filePath
+                                   mVolume->NameStr(),                   // description
+                                   1024uLL * 1024uLL,                    // reserveSpace
+                                   mVolume->IsHotSwappable(),            // removable
                                    2uLL * 1024uLL * 1024uLL * 1024uLL)); // maxFileSize
-  nsRefPtr<RefCountedMtpServer> server = mMozMtpServer->GetMtpServer();
+  RefPtr<RefCountedMtpServer> server = mMozMtpServer->GetMtpServer();
 
   MTP_LOG("Adding Volume %s mStorageID 0x%08x mountPoint %s to MtpServer",
           mVolume->NameStr(), mStorageID, mountPoint.get());
@@ -123,12 +119,12 @@ MozMtpStorage::StorageUnavailable()
 
   MTP_LOG("Removing mStorageID 0x%08x from MtpServer", mStorageID);
 
-  nsRefPtr<RefCountedMtpServer> server = mMozMtpServer->GetMtpServer();
+  RefPtr<RefCountedMtpServer> server = mMozMtpServer->GetMtpServer();
   server->removeStorage(mMtpStorage.get());
 
   MTP_LOG("Removing mStorageID 0x%08x from MozMtpDatabse", mStorageID);
 
-  nsRefPtr<MozMtpDatabase> db = mMozMtpServer->GetMozMtpDatabase();
+  RefPtr<MozMtpDatabase> db = mMozMtpServer->GetMozMtpDatabase();
   db->RemoveStorage(mStorageID);
 
   mMtpStorage = nullptr;

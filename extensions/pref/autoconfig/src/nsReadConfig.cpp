@@ -24,8 +24,9 @@
 #include "nsCRT.h"
 #include "nspr.h"
 #include "nsXULAppAPI.h"
+#include "nsContentUtils.h"
 
-extern PRLogModuleInfo *MCD;
+extern mozilla::LazyLogModule MCD;
 
 extern nsresult EvaluateAdminConfigScript(const char *js_buffer, size_t length,
                                           const char *filename, 
@@ -74,8 +75,6 @@ NS_IMPL_ISUPPORTS(nsReadConfig, nsIReadConfig, nsIObserver)
 nsReadConfig::nsReadConfig() :
     mRead(false)
 {
-    if (!MCD)
-      MCD = PR_NewLogModule("MCD");
 }
 
 nsresult nsReadConfig::Init()
@@ -139,7 +138,7 @@ nsresult nsReadConfig::readConfigFile()
                                   getter_Copies(lockFileName));
 
 
-    PR_LOG(MCD, PR_LOG_DEBUG, ("general.config.filename = %s\n", lockFileName.get()));
+    MOZ_LOG(MCD, LogLevel::Debug, ("general.config.filename = %s\n", lockFileName.get()));
     if (NS_FAILED(rv))
         return rv;
 
@@ -154,11 +153,6 @@ nsresult nsReadConfig::readConfigFile()
         
         // Open and evaluate function calls to set/lock/unlock prefs
         rv = openAndEvaluateJSFile("prefcalls.js", 0, false, false);
-        if (NS_FAILED(rv)) 
-            return rv;
-
-        // Evaluate platform specific directives
-        rv = openAndEvaluateJSFile("platform.js", 0, false, false);
         if (NS_FAILED(rv)) 
             return rv;
 
@@ -178,11 +172,11 @@ nsresult nsReadConfig::readConfigFile()
 
     int32_t obscureValue = 0;
     (void) defaultPrefBranch->GetIntPref("general.config.obscure_value", &obscureValue);
-    PR_LOG(MCD, PR_LOG_DEBUG, ("evaluating .cfg file %s with obscureValue %d\n", lockFileName.get(), obscureValue));
+    MOZ_LOG(MCD, LogLevel::Debug, ("evaluating .cfg file %s with obscureValue %d\n", lockFileName.get(), obscureValue));
     rv = openAndEvaluateJSFile(lockFileName.get(), obscureValue, true, true);
     if (NS_FAILED(rv))
     {
-      PR_LOG(MCD, PR_LOG_DEBUG, ("error evaluating .cfg file %s %x\n", lockFileName.get(), rv));
+      MOZ_LOG(MCD, LogLevel::Debug, ("error evaluating .cfg file %s %x\n", lockFileName.get(), rv));
       return rv;
     }
     
@@ -253,26 +247,23 @@ nsresult nsReadConfig::openAndEvaluateJSFile(const char *aFileName, int32_t obsc
             return rv;
 
     } else {
-        nsCOMPtr<nsIIOService> ioService = do_GetIOService(&rv);
-        if (NS_FAILED(rv)) 
-            return rv;
-
         nsAutoCString location("resource://gre/defaults/autoconfig/");
         location += aFileName;
 
         nsCOMPtr<nsIURI> uri;
-        rv = ioService->NewURI(location, nullptr, nullptr, getter_AddRefs(uri));
-        if (NS_FAILED(rv))
-            return rv;
+        rv = NS_NewURI(getter_AddRefs(uri), location);
+        NS_ENSURE_SUCCESS(rv, rv);
 
         nsCOMPtr<nsIChannel> channel;
-        rv = ioService->NewChannelFromURI(uri, getter_AddRefs(channel));
-        if (NS_FAILED(rv))
-            return rv;
+        rv = NS_NewChannel(getter_AddRefs(channel),
+                           uri,
+                           nsContentUtils::GetSystemPrincipal(),
+                           nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                           nsIContentPolicy::TYPE_OTHER);
+        NS_ENSURE_SUCCESS(rv, rv);
 
-        rv = channel->Open(getter_AddRefs(inStr));
-        if (NS_FAILED(rv)) 
-            return rv;
+        rv = channel->Open2(getter_AddRefs(inStr));
+        NS_ENSURE_SUCCESS(rv, rv);
     }
 
     uint64_t fs64;

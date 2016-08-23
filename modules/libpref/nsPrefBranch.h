@@ -26,7 +26,7 @@
 
 namespace mozilla {
 class PreferenceServiceReporter;
-} // namespace mozilla;
+} // namespace mozilla
 
 class nsPrefBranch;
 
@@ -175,9 +175,9 @@ class PrefCallback : public PLDHashEntryHdr {
     }
 };
 
-class nsPrefBranch : public nsIPrefBranchInternal,
-                     public nsIObserver,
-                     public nsSupportsWeakReference
+class nsPrefBranch final : public nsIPrefBranchInternal,
+                           public nsIObserver,
+                           public nsSupportsWeakReference
 {
   friend class mozilla::PreferenceServiceReporter;
 public:
@@ -200,7 +200,10 @@ protected:
   virtual ~nsPrefBranch();
 
   nsPrefBranch()    /* disallow use of this constructer */
-    { }
+    : mPrefRootLength(0)
+    , mIsDefault(false)
+    , mFreeingObserverList(false)
+  {}
 
   nsresult   GetDefaultFromPropertiesFile(const char *aPrefName, char16_t **return_buf);
   // As SetCharPref, but without any check on the length of |aValue|
@@ -213,11 +216,6 @@ protected:
   const char *getPrefName(const char *aPrefName);
   void       freeObserverList(void);
 
-  friend PLDHashOperator
-    FreeObserverFunc(PrefCallback *aKey,
-                     nsAutoPtr<PrefCallback> &aCallback,
-                     void *aArgs);
-
 private:
   int32_t               mPrefRootLength;
   nsCString             mPrefRoot;
@@ -228,8 +226,8 @@ private:
 };
 
 
-class nsPrefLocalizedString : public nsIPrefLocalizedString,
-                              public nsISupportsString
+class nsPrefLocalizedString final : public nsIPrefLocalizedString,
+                                    public nsISupportsString
 {
 public:
   nsPrefLocalizedString();
@@ -243,9 +241,9 @@ public:
 private:
   virtual ~nsPrefLocalizedString();
 
-  NS_IMETHOD GetData(char16_t**);
-  NS_IMETHOD SetData(const char16_t* aData);
-  NS_IMETHOD SetDataWithLength(uint32_t aLength, const char16_t *aData);
+  NS_IMETHOD GetData(char16_t**) override;
+  NS_IMETHOD SetData(const char16_t* aData) override;
+  NS_IMETHOD SetDataWithLength(uint32_t aLength, const char16_t *aData) override;
 
   nsCOMPtr<nsISupportsString> mUnicodeString;
 };

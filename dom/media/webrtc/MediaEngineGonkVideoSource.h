@@ -60,26 +60,31 @@ public:
       Init();
     }
 
-  virtual nsresult Allocate(const VideoTrackConstraintsN &aConstraints,
-                            const MediaEnginePrefs &aPrefs) MOZ_OVERRIDE;
-  virtual nsresult Deallocate() MOZ_OVERRIDE;
-  virtual nsresult Start(SourceMediaStream* aStream, TrackID aID) MOZ_OVERRIDE;
-  virtual nsresult Stop(SourceMediaStream* aSource, TrackID aID) MOZ_OVERRIDE;
-  virtual void NotifyPull(MediaStreamGraph* aGraph,
-                          SourceMediaStream* aSource,
-                          TrackID aId,
-                          StreamTime aDesiredTime) MOZ_OVERRIDE;
-  virtual bool SatisfiesConstraintSets(
-      const nsTArray<const dom::MediaTrackConstraintSet*>& aConstraintSets)
-  {
-    return true;
+  nsresult Allocate(const dom::MediaTrackConstraints &aConstraints,
+                    const MediaEnginePrefs &aPrefs,
+                    const nsString& aDeviceId,
+                    const nsACString& aOrigin) override;
+  nsresult Deallocate() override;
+  nsresult Start(SourceMediaStream* aStream, TrackID aID,
+                 const PrincipalHandle& aPrincipalHandle) override;
+  nsresult Stop(SourceMediaStream* aSource, TrackID aID) override;
+  nsresult Restart(const dom::MediaTrackConstraints& aConstraints,
+                   const MediaEnginePrefs &aPrefs,
+                   const nsString& aDeviceId) override;
+  void NotifyPull(MediaStreamGraph* aGraph,
+                  SourceMediaStream* aSource,
+                  TrackID aId,
+                  StreamTime aDesiredTime,
+                  const PrincipalHandle& aPrincipalHandle) override;
+  dom::MediaSourceEnum GetMediaSource() const override {
+    return dom::MediaSourceEnum::Camera;
   }
 
-  void OnHardwareStateChange(HardwareState aState, nsresult aReason) MOZ_OVERRIDE;
+  void OnHardwareStateChange(HardwareState aState, nsresult aReason) override;
   void GetRotation();
-  bool OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) MOZ_OVERRIDE;
-  void OnUserError(UserContext aContext, nsresult aError) MOZ_OVERRIDE;
-  void OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType) MOZ_OVERRIDE;
+  bool OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight) override;
+  void OnUserError(UserContext aContext, nsresult aError) override;
+  void OnTakePictureComplete(const uint8_t* aData, uint32_t aLength, const nsAString& aMimeType) override;
 
   void AllocImpl();
   void DeallocImpl();
@@ -89,7 +94,7 @@ public:
   void RotateImage(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight);
   void Notify(const mozilla::hal::ScreenConfiguration& aConfiguration);
 
-  nsresult TakePhoto(PhotoCallback* aCallback) MOZ_OVERRIDE;
+  nsresult TakePhoto(MediaEnginePhotoCallback* aCallback) override;
 
   // It sets the correct photo orientation via camera parameter according to
   // current screen orientation.
@@ -109,21 +114,20 @@ protected:
   // Initialize the needed Video engine interfaces.
   void Init();
   void Shutdown();
-  void ChooseCapability(const VideoTrackConstraintsN& aConstraints,
-                        const MediaEnginePrefs& aPrefs);
+  size_t NumCapabilities() override;
   // Initialize the recording frame (MediaBuffer) callback and Gonk camera.
   // MediaBuffer will transfers to MediaStreamGraph via AppendToTrack.
   nsresult InitDirectMediaBuffer();
 
   mozilla::ReentrantMonitor mCallbackMonitor; // Monitor for camera callback handling
   // This is only modified on MainThread (AllocImpl and DeallocImpl)
-  nsRefPtr<ICameraControl> mCameraControl;
-  nsCOMPtr<nsIDOMFile> mLastCapture;
+  RefPtr<ICameraControl> mCameraControl;
+  RefPtr<dom::File> mLastCapture;
 
   android::sp<android::GonkCameraSource> mCameraSource;
 
   // These are protected by mMonitor in parent class
-  nsTArray<nsRefPtr<PhotoCallback>> mPhotoCallbacks;
+  nsTArray<RefPtr<MediaEnginePhotoCallback>> mPhotoCallbacks;
   int mRotation;
   int mCameraAngle; // See dom/base/ScreenOrientation.h
   bool mBackCamera;

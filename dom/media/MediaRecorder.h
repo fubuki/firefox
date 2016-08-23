@@ -22,6 +22,7 @@ class ErrorResult;
 class MediaInputPort;
 struct MediaRecorderOptions;
 class MediaStream;
+class GlobalObject;
 
 namespace dom {
 
@@ -38,19 +39,21 @@ class AudioNode;
  * Also extract the encoded data and create blobs on every timeslice passed from start function or RequestData function called by UA.
  */
 
-class MediaRecorder MOZ_FINAL : public DOMEventTargetHelper,
-                                public nsIDocumentActivity
+class MediaRecorder final : public DOMEventTargetHelper,
+                            public nsIDocumentActivity
 {
   class Session;
 
 public:
-  MediaRecorder(DOMMediaStream& aSourceMediaStream, nsPIDOMWindow* aOwnerWindow);
-  MediaRecorder(AudioNode& aSrcAudioNode, uint32_t aSrcOutput, nsPIDOMWindow* aOwnerWindow);
+  MediaRecorder(DOMMediaStream& aSourceMediaStream,
+                nsPIDOMWindowInner* aOwnerWindow);
+  MediaRecorder(AudioNode& aSrcAudioNode, uint32_t aSrcOutput,
+                nsPIDOMWindowInner* aOwnerWindow);
 
   // nsWrapperCache
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  nsPIDOMWindow* GetParentObject() { return GetOwner(); }
+  nsPIDOMWindowInner* GetParentObject() { return GetOwner(); }
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(MediaRecorder,
@@ -75,6 +78,9 @@ public:
   RecordingState State() const { return mState; }
   // Return the current encoding MIME type selected by the MediaEncoder.
   void GetMimeType(nsString &aMimeType);
+
+  static bool IsTypeSupported(GlobalObject& aGlobal, const nsAString& aType);
+  static bool IsTypeSupported(const nsAString& aType);
 
   // Construct a recorder with a DOM media stream object as its source.
   static already_AddRefed<MediaRecorder>
@@ -104,6 +110,9 @@ public:
 
   NS_DECL_NSIDOCUMENTACTIVITY
 
+  uint32_t GetAudioBitrate() { return mAudioBitsPerSecond; }
+  uint32_t GetVideoBitrate() { return mVideoBitsPerSecond; }
+  uint32_t GetBitrate() { return mBitsPerSecond; }
 protected:
   virtual ~MediaRecorder();
 
@@ -114,45 +123,46 @@ protected:
   void DispatchSimpleEvent(const nsAString & aStr);
   // Creating a error event with message.
   void NotifyError(nsresult aRv);
-  // Check if the recorder's principal is the subsume of mediaStream
-  bool CheckPrincipal();
   // Set encoded MIME type.
   void SetMimeType(const nsString &aMimeType);
+  void SetOptions(const MediaRecorderOptions& aInitDict);
 
   MediaRecorder(const MediaRecorder& x) = delete; // prevent bad usage
   // Remove session pointer.
   void RemoveSession(Session* aSession);
   // Functions for Session to query input source info.
   MediaStream* GetSourceMediaStream();
-  nsIPrincipal* GetSourcePrincipal();
   // DOM wrapper for source media stream. Will be null when input is audio node.
-  nsRefPtr<DOMMediaStream> mDOMStream;
+  RefPtr<DOMMediaStream> mDOMStream;
   // Source audio node. Will be null when input is a media stream.
-  nsRefPtr<AudioNode> mAudioNode;
+  RefPtr<AudioNode> mAudioNode;
   // Pipe stream connecting non-destination source node and session track union
   // stream of recorder. Will be null when input is media stream or destination
   // node.
-  nsRefPtr<AudioNodeStream> mPipeStream;
+  RefPtr<AudioNodeStream> mPipeStream;
   // Connect source node to the pipe stream.
-  nsRefPtr<MediaInputPort> mInputPort;
+  RefPtr<MediaInputPort> mInputPort;
 
   // The current state of the MediaRecorder object.
   RecordingState mState;
   // Hold the sessions reference and clean it when the DestroyRunnable for a
   // session is running.
-  nsTArray<nsRefPtr<Session> > mSessions;
+  nsTArray<RefPtr<Session> > mSessions;
   // It specifies the container format as well as the audio and video capture formats.
   nsString mMimeType;
 
+  uint32_t mAudioBitsPerSecond;
+  uint32_t mVideoBitsPerSecond;
+  uint32_t mBitsPerSecond;
 private:
   // Register MediaRecorder into Document to listen the activity changes.
   void RegisterActivityObserver();
   void UnRegisterActivityObserver();
 
-  bool Check3gppPermission();
+  bool CheckPermission(const nsString &aType);
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif

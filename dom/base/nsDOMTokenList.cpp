@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,7 +9,6 @@
  */
 
 #include "nsDOMTokenList.h"
-
 #include "nsAttrValue.h"
 #include "nsContentUtils.h"
 #include "nsError.h"
@@ -72,6 +73,16 @@ nsDOMTokenList::IndexedGetter(uint32_t aIndex, bool& aFound, nsAString& aResult)
   }
 }
 
+void
+nsDOMTokenList::SetValue(const nsAString& aValue, mozilla::ErrorResult& rv)
+{
+  if (!mElement) {
+    return;
+  }
+
+  rv = mElement->SetAttr(kNameSpaceID_None, mAttrAtom, aValue, true);
+}
+
 nsresult
 nsDOMTokenList::CheckToken(const nsAString& aStr)
 {
@@ -132,7 +143,7 @@ nsDOMTokenList::AddInternal(const nsAttrValue* aAttr,
   }
 
   bool oneWasAdded = false;
-  nsAutoTArray<nsString, 10> addedClasses;
+  AutoTArray<nsString, 10> addedClasses;
 
   for (uint32_t i = 0, l = aTokens.Length(); i < l; ++i) {
     const nsString& aToken = aTokens[i];
@@ -173,7 +184,7 @@ nsDOMTokenList::Add(const nsTArray<nsString>& aTokens, ErrorResult& aError)
 void
 nsDOMTokenList::Add(const nsAString& aToken, mozilla::ErrorResult& aError)
 {
-  nsAutoTArray<nsString, 1> tokens;
+  AutoTArray<nsString, 1> tokens;
   tokens.AppendElement(aToken);
   Add(tokens, aError);
 }
@@ -182,7 +193,7 @@ void
 nsDOMTokenList::RemoveInternal(const nsAttrValue* aAttr,
                                const nsTArray<nsString>& aTokens)
 {
-  NS_ABORT_IF_FALSE(aAttr, "Need an attribute");
+  MOZ_ASSERT(aAttr, "Need an attribute");
 
   nsAutoString input;
   aAttr->ToString(input);
@@ -204,7 +215,7 @@ nsDOMTokenList::RemoveInternal(const nsAttrValue* aAttr,
     if (iter == end) {
       // At this point we're sure the last seen token (if any) wasn't to be
       // removed. So the trailing spaces will need to be kept.
-      NS_ABORT_IF_FALSE(!lastTokenRemoved, "How did this happen?");
+      MOZ_ASSERT(!lastTokenRemoved, "How did this happen?");
 
       output.Append(Substring(copyStart, end));
       break;
@@ -227,8 +238,8 @@ nsDOMTokenList::RemoveInternal(const nsAttrValue* aAttr,
     } else {
 
       if (lastTokenRemoved && !output.IsEmpty()) {
-        NS_ABORT_IF_FALSE(!nsContentUtils::IsHTMLWhitespace(
-          output.Last()), "Invalid last output token");
+        MOZ_ASSERT(!nsContentUtils::IsHTMLWhitespace(output.Last()),
+                   "Invalid last output token");
         output.Append(char16_t(' '));
       }
       lastTokenRemoved = false;
@@ -259,7 +270,7 @@ nsDOMTokenList::Remove(const nsTArray<nsString>& aTokens, ErrorResult& aError)
 void
 nsDOMTokenList::Remove(const nsAString& aToken, mozilla::ErrorResult& aError)
 {
-  nsAutoTArray<nsString, 1> tokens;
+  AutoTArray<nsString, 1> tokens;
   tokens.AppendElement(aToken);
   Remove(tokens, aError);
 }
@@ -279,7 +290,7 @@ nsDOMTokenList::Toggle(const nsAString& aToken,
   const bool forceOff = aForce.WasPassed() && !aForce.Value();
 
   bool isPresent = attr && attr->Contains(aToken);
-  nsAutoTArray<nsString, 1> tokens;
+  AutoTArray<nsString, 1> tokens;
   (*tokens.AppendElement()).Rebind(aToken.Data(), aToken.Length());
 
   if (isPresent) {
@@ -309,8 +320,8 @@ nsDOMTokenList::Stringify(nsAString& aResult)
 }
 
 JSObject*
-nsDOMTokenList::WrapObject(JSContext *cx)
+nsDOMTokenList::WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto)
 {
-  return DOMTokenListBinding::Wrap(cx, this);
+  return DOMTokenListBinding::Wrap(cx, this, aGivenProto);
 }
 

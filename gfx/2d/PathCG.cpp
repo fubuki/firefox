@@ -20,12 +20,19 @@ PathBuilderCG::~PathBuilderCG()
 void
 PathBuilderCG::MoveTo(const Point &aPoint)
 {
+  if (!aPoint.IsFinite()) {
+    return;
+  }
   CGPathMoveToPoint(mCGPath, nullptr, aPoint.x, aPoint.y);
 }
 
 void
 PathBuilderCG::LineTo(const Point &aPoint)
 {
+  if (!aPoint.IsFinite()) {
+    return;
+  }
+
   if (CGPathIsEmpty(mCGPath))
     MoveTo(aPoint);
   else
@@ -37,6 +44,9 @@ PathBuilderCG::BezierTo(const Point &aCP1,
                          const Point &aCP2,
                          const Point &aCP3)
 {
+  if (!aCP1.IsFinite() || !aCP2.IsFinite() || !aCP3.IsFinite()) {
+    return;
+  }
 
   if (CGPathIsEmpty(mCGPath))
     MoveTo(aCP1);
@@ -49,13 +59,17 @@ PathBuilderCG::BezierTo(const Point &aCP1,
 
 void
 PathBuilderCG::QuadraticBezierTo(const Point &aCP1,
-                                  const Point &aCP2)
+                                 const Point &aCP2)
 {
+  if (!aCP1.IsFinite() || !aCP2.IsFinite()) {
+    return;
+  }
+
   if (CGPathIsEmpty(mCGPath))
     MoveTo(aCP1);
   CGPathAddQuadCurveToPoint(mCGPath, nullptr,
-                              aCP1.x, aCP1.y,
-                              aCP2.x, aCP2.y);
+                            aCP1.x, aCP1.y,
+                            aCP2.x, aCP2.y);
 }
 
 void
@@ -69,6 +83,11 @@ void
 PathBuilderCG::Arc(const Point &aOrigin, Float aRadius, Float aStartAngle,
                  Float aEndAngle, bool aAntiClockwise)
 {
+  if (!aOrigin.IsFinite() || !IsFinite(aRadius) ||
+      !IsFinite(aStartAngle) || !IsFinite(aEndAngle)) {
+    return;
+  }
+
   // Disabled for now due to a CG bug when using CGPathAddArc with stroke
   // dashing and rotation transforms that are multiples of 90 degrees. See:
   // https://bugzilla.mozilla.org/show_bug.cgi?id=949661#c8
@@ -108,22 +127,22 @@ PathBuilderCG::EnsureActive(const Point &aPoint)
 {
 }
 
-TemporaryRef<Path>
+already_AddRefed<Path>
 PathBuilderCG::Finish()
 {
-  return new PathCG(mCGPath, mFillRule);
+  return MakeAndAddRef<PathCG>(mCGPath, mFillRule);
 }
 
-TemporaryRef<PathBuilder>
+already_AddRefed<PathBuilder>
 PathCG::CopyToBuilder(FillRule aFillRule) const
 {
   CGMutablePathRef path = CGPathCreateMutableCopy(mPath);
-  return new PathBuilderCG(path, aFillRule);
+  return MakeAndAddRef<PathBuilderCG>(path, aFillRule);
 }
 
 
 
-TemporaryRef<PathBuilder>
+already_AddRefed<PathBuilder>
 PathCG::TransformedCopyToBuilder(const Matrix &aTransform, FillRule aFillRule) const
 {
   // 10.7 adds CGPathCreateMutableCopyByTransformingPath it might be faster than doing
@@ -178,7 +197,7 @@ PathCG::TransformedCopyToBuilder(const Matrix &aTransform, FillRule aFillRule) c
   ta.transform = GfxMatrixToCGAffineTransform(aTransform);
 
   CGPathApply(mPath, &ta, TransformApplier::TranformCGPathApplierFunc);
-  return new PathBuilderCG(ta.path, aFillRule);
+  return MakeAndAddRef<PathBuilderCG>(ta.path, aFillRule);
 }
 
 static void
@@ -339,6 +358,6 @@ PathCG::GetStrokedBounds(const StrokeOptions &aStrokeOptions,
 }
 
 
-}
+} // namespace gfx
 
-}
+} // namespace mozilla

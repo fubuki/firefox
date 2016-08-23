@@ -6,6 +6,7 @@
 
 #include "nsDOMCSSValueList.h"
 #include "mozilla/dom/CSSValueListBinding.h"
+#include "mozilla/Move.h"
 #include "nsAutoPtr.h"
 
 using namespace mozilla;
@@ -33,15 +34,16 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(nsDOMCSSValueList, mCSSValues)
 
 JSObject*
-nsDOMCSSValueList::WrapObject(JSContext *cx)
+nsDOMCSSValueList::WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto)
 {
-  return dom::CSSValueListBinding::Wrap(cx, this);
+  return dom::CSSValueListBinding::Wrap(cx, this, aGivenProto);
 }
 
 void
-nsDOMCSSValueList::AppendCSSValue(CSSValue* aValue)
+nsDOMCSSValueList::AppendCSSValue(already_AddRefed<CSSValue> aValue)
 {
-  mCSSValues.AppendElement(aValue);
+  RefPtr<CSSValue> val = aValue;
+  mCSSValues.AppendElement(Move(val));
 }
 
 // nsIDOMCSSValue

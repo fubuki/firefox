@@ -3,7 +3,7 @@
 
 "use strict";
 
-let Cu = Components.utils;
+var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/PromiseWorker.jsm", this);
 Cu.import("resource://gre/modules/Timer.jsm", this);
@@ -11,9 +11,9 @@ Cu.import("resource://gre/modules/Timer.jsm", this);
 // Worker must be loaded from a chrome:// uri, not a file://
 // uri, so we first need to load it.
 
-let WORKER_SOURCE_URI = "chrome://promiseworker/content/worker.js";
+var WORKER_SOURCE_URI = "chrome://promiseworker/content/worker.js";
 do_load_manifest("data/chrome.manifest");
-let worker = new BasePromiseWorker(WORKER_SOURCE_URI);
+var worker = new BasePromiseWorker(WORKER_SOURCE_URI);
 worker.log = function(...args) {
   do_print("Controller: " + args.join(" "));
 };
@@ -55,7 +55,9 @@ add_task(function* test_rejected_promise_args() {
   try {
     yield worker.post("bounce", message);
     do_throw("I shound have thrown an error by now");
-  } catch (ex if ex == error) {
+  } catch (ex) {
+    if (ex != error)
+      throw ex;
     do_print("I threw the right error");
   }
 });
@@ -66,12 +68,12 @@ add_task(function* test_transfer_args() {
   for (let i = 0; i < 4; ++i) {
     array[i] = i;
   }
-  Assert.equal(array.buffer.byteLength, 4, "The buffer is not neutered yet");
+  Assert.equal(array.buffer.byteLength, 4, "The buffer is not detached yet");
 
   let result = (yield worker.post("bounce", [array.buffer], [], [array.buffer]))[0];
 
   // Check that the buffer has been sent
-  Assert.equal(array.buffer.byteLength, 0, "The buffer has been neutered");
+  Assert.equal(array.buffer.byteLength, 0, "The buffer has been detached");
 
   // Check that the result is correct
   Assert.equal(result.byteLength, 4, "The result has the right size");
@@ -87,13 +89,13 @@ add_task(function* test_transfer_with_meta() {
   for (let i = 0; i < 4; ++i) {
     array[i] = i;
   }
-  Assert.equal(array.buffer.byteLength, 4, "The buffer is not neutered yet");
+  Assert.equal(array.buffer.byteLength, 4, "The buffer is not detached yet");
 
   let message = new BasePromiseWorker.Meta(array, {transfers: [array.buffer]});
   let result = (yield worker.post("bounce", [message]))[0];
 
   // Check that the buffer has been sent
-  Assert.equal(array.buffer.byteLength, 0, "The buffer has been neutered");
+  Assert.equal(array.buffer.byteLength, 0, "The buffer has been detached");
 
   // Check that the result is correct
   Assert.equal(result.toString(), "[object Uint8Array]", "The result appears to be a Typed Array");

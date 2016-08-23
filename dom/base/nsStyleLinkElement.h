@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * 
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -24,6 +24,7 @@ class nsIDocument;
 class nsIURI;
 
 namespace mozilla {
+class CSSStyleSheet;
 namespace dom {
 class ShadowRoot;
 } // namespace dom
@@ -35,23 +36,32 @@ public:
   nsStyleLinkElement();
   virtual ~nsStyleLinkElement();
 
-  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) MOZ_OVERRIDE = 0;
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override = 0;
 
-  mozilla::CSSStyleSheet* GetSheet() const { return mStyleSheet; }
+  mozilla::CSSStyleSheet* GetSheet() const
+  {
+    // XXXheycam Return nullptr for ServoStyleSheets until we have a way of
+    // exposing them to script.
+    NS_ASSERTION(!mStyleSheet || mStyleSheet->IsGecko(),
+                 "stylo: ServoStyleSheets can't be exposed to script yet");
+    return mStyleSheet && mStyleSheet->IsGecko() ? mStyleSheet->AsGecko() :
+                                                   nullptr;
+  }
 
   // nsIStyleSheetLinkingElement  
-  NS_IMETHOD SetStyleSheet(mozilla::CSSStyleSheet* aStyleSheet) MOZ_OVERRIDE;
-  NS_IMETHOD_(mozilla::CSSStyleSheet*) GetStyleSheet() MOZ_OVERRIDE;
-  NS_IMETHOD InitStyleLinkElement(bool aDontLoadStyle) MOZ_OVERRIDE;
+  NS_IMETHOD SetStyleSheet(mozilla::StyleSheetHandle aStyleSheet) override;
+  NS_IMETHOD_(mozilla::StyleSheetHandle) GetStyleSheet() override;
+  NS_IMETHOD InitStyleLinkElement(bool aDontLoadStyle) override;
   NS_IMETHOD UpdateStyleSheet(nsICSSLoaderObserver* aObserver,
                               bool* aWillNotify,
                               bool* aIsAlternate,
-                              bool aForceReload) MOZ_OVERRIDE;
-  NS_IMETHOD SetEnableUpdates(bool aEnableUpdates) MOZ_OVERRIDE;
-  NS_IMETHOD GetCharset(nsAString& aCharset) MOZ_OVERRIDE;
+                              bool aForceReload) override;
+  NS_IMETHOD SetEnableUpdates(bool aEnableUpdates) override;
+  NS_IMETHOD GetCharset(nsAString& aCharset) override;
 
-  virtual void OverrideBaseURI(nsIURI* aNewBaseURI) MOZ_OVERRIDE;
-  virtual void SetLineNumber(uint32_t aLineNumber) MOZ_OVERRIDE;
+  virtual void OverrideBaseURI(nsIURI* aNewBaseURI) override;
+  virtual void SetLineNumber(uint32_t aLineNumber) override;
+  virtual uint32_t GetLineNumber() override;
 
   enum RelValue {
     ePREFETCH =     0x00000001,
@@ -59,7 +69,8 @@ public:
     eSTYLESHEET =   0x00000004,
     eNEXT =         0x00000008,
     eALTERNATE =    0x00000010,
-    eHTMLIMPORT =   0x00000020
+    eHTMLIMPORT =   0x00000020,
+    ePRECONNECT =   0x00000040
   };
 
   // The return value is a bitwise or of 0 or more RelValues.
@@ -68,7 +79,7 @@ public:
   static uint32_t ParseLinkTypes(const nsAString& aTypes,
                                  nsIPrincipal* aPrincipal);
 
-  static bool IsImportEnabled(nsIPrincipal* aPrincipal);
+  static bool IsImportEnabled();
   
   void UpdateStyleSheetInternal()
   {
@@ -126,7 +137,7 @@ private:
                               bool* aIsAlternate,
                               bool aForceUpdate);
 
-  nsRefPtr<mozilla::CSSStyleSheet> mStyleSheet;
+  mozilla::StyleSheetHandle::RefPtr mStyleSheet;
 protected:
   bool mDontLoadStyle;
   bool mUpdatesEnabled;

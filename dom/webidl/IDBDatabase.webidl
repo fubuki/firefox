@@ -10,7 +10,7 @@
  * liability, trademark and document use rules apply.
  */
 
-[Exposed=(Window,Worker)]
+[Exposed=(Window,Worker,System)]
 interface IDBDatabase : EventTarget {
     readonly    attribute DOMString          name;
     readonly    attribute unsigned long long version;
@@ -23,15 +23,9 @@ interface IDBDatabase : EventTarget {
     [Throws]
     void           deleteObjectStore (DOMString name);
 
-    // This should be:
-    // IDBTransaction transaction ((DOMString or sequence<DOMString>) storeNames, optional IDBTransactionMode mode = "readonly");
-    // but unions are not currently supported.
-
     [Throws]
-    IDBTransaction transaction (DOMString storeName, optional IDBTransactionMode mode = "readonly");
-
-    [Throws]
-    IDBTransaction transaction (sequence<DOMString> storeNames, optional IDBTransactionMode mode = "readonly");
+    IDBTransaction transaction ((DOMString or sequence<DOMString>) storeNames,
+                                optional IDBTransactionMode mode = "readonly");
 
     void           close ();
 
@@ -41,7 +35,7 @@ interface IDBDatabase : EventTarget {
 };
 
 partial interface IDBDatabase {
-    [Func="mozilla::dom::indexedDB::IndexedDatabaseManager::ExperimentalFeaturesEnabled"]
+    [Func="mozilla::dom::IndexedDatabaseManager::ExperimentalFeaturesEnabled"]
     readonly    attribute StorageType        storage;
 
     [Exposed=Window, Throws]

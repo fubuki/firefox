@@ -39,8 +39,8 @@ protected:
  * methods this class assumes silent or notreached.
  */
 #define NS_DECL_ASYNCSTATEMENTCALLBACK \
-  NS_IMETHOD HandleResult(mozIStorageResultSet *); \
-  NS_IMETHOD HandleCompletion(uint16_t);
+  NS_IMETHOD HandleResult(mozIStorageResultSet *) override; \
+  NS_IMETHOD HandleCompletion(uint16_t) override;
 
 /**
  * Utils to bind a specified URI (or URL) to a statement or binding params, at
@@ -196,7 +196,7 @@ public:
   {
     mStatementCache.FinalizeStatements();
     // Release the owner back on the calling thread.
-    (void)NS_ProxyRelease(mCallingThread, mOwner);
+    NS_ProxyRelease(mCallingThread, mOwner.forget());
     return NS_OK;
   }
 

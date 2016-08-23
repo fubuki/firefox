@@ -8,9 +8,11 @@
 #define mozilla_dom_SpeechSynthesis_h
 
 #include "nsCOMPtr.h"
-#include "nsString.h"
-#include "nsWrapperCache.h"
+#include "nsIObserver.h"
 #include "nsRefPtrHashtable.h"
+#include "nsString.h"
+#include "nsWeakReference.h"
+#include "nsWrapperCache.h"
 #include "js/TypeDecls.h"
 
 #include "SpeechSynthesisUtterance.h"
@@ -23,24 +25,26 @@ namespace dom {
 
 class nsSpeechTask;
 
-class SpeechSynthesis MOZ_FINAL : public nsISupports,
-                                  public nsWrapperCache
+class SpeechSynthesis final : public DOMEventTargetHelper
+                            , public nsIObserver
+                            , public nsSupportsWeakReference
 {
 public:
-  explicit SpeechSynthesis(nsPIDOMWindow* aParent);
+  explicit SpeechSynthesis(nsPIDOMWindowInner* aParent);
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(SpeechSynthesis)
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(SpeechSynthesis, DOMEventTargetHelper)
+  NS_DECL_NSIOBSERVER
 
-  nsIDOMWindow* GetParentObject() const;
-
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   bool Pending() const;
 
   bool Speaking() const;
 
   bool Paused() const;
+
+  bool HasEmptyQueue() const;
 
   void Speak(SpeechSynthesisUtterance& aUtterance);
 
@@ -52,23 +56,30 @@ public:
 
   void OnEnd(const nsSpeechTask* aTask);
 
-  void GetVoices(nsTArray< nsRefPtr<SpeechSynthesisVoice> >& aResult);
+  void GetVoices(nsTArray< RefPtr<SpeechSynthesisVoice> >& aResult);
+
+  void ForceEnd();
+
+  IMPL_EVENT_HANDLER(voiceschanged)
 
 private:
   virtual ~SpeechSynthesis();
 
   void AdvanceQueue();
 
-  nsCOMPtr<nsPIDOMWindow> mParent;
+  bool HasVoices() const;
 
-  nsTArray<nsRefPtr<SpeechSynthesisUtterance> > mSpeechQueue;
+  nsTArray<RefPtr<SpeechSynthesisUtterance> > mSpeechQueue;
 
-  nsRefPtr<nsSpeechTask> mCurrentTask;
+  RefPtr<nsSpeechTask> mCurrentTask;
 
   nsRefPtrHashtable<nsStringHashKey, SpeechSynthesisVoice> mVoiceCache;
+
+  bool mHoldQueue;
+
+  uint64_t mInnerID;
 };
 
 } // namespace dom
 } // namespace mozilla
-
 #endif

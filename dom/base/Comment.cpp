@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -34,7 +35,7 @@ Comment::IsNodeOfType(uint32_t aFlags) const
 nsGenericDOMDataNode*
 Comment::CloneDataNode(mozilla::dom::NodeInfo *aNodeInfo, bool aCloneText) const
 {
-  nsRefPtr<mozilla::dom::NodeInfo> ni = aNodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> ni = aNodeInfo;
   Comment *it = new Comment(ni.forget());
   if (it && aCloneText) {
     it->mText = mText;
@@ -64,7 +65,7 @@ Comment::List(FILE* out, int32_t aIndent) const
 Comment::Constructor(const GlobalObject& aGlobal,
                      const nsAString& aData, ErrorResult& aRv)
 {
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal.GetAsSupports());
   if (!window || !window->GetDoc()) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -74,9 +75,9 @@ Comment::Constructor(const GlobalObject& aGlobal,
 }
 
 JSObject*
-Comment::WrapNode(JSContext *aCx)
+Comment::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return CommentBinding::Wrap(aCx, this);
+  return CommentBinding::Wrap(aCx, this, aGivenProto);
 }
 
 } // namespace dom

@@ -28,14 +28,12 @@ public:
                     nsIPrintSettings* aPS,
                     bool aIsPrintPreview);
     NS_IMETHOD BeginDocument(const nsAString& aTitle,
-                             char16_t* aPrintToFileName,
+                             const nsAString& aPrintToFileName,
                              int32_t aStartPage,
                              int32_t aEndPage);
     NS_IMETHOD EndDocument();
     NS_IMETHOD BeginPage() { return NS_OK; }
     NS_IMETHOD EndPage() { return NS_OK; }
-
-    NS_IMETHOD GetPath (const char** aPath);
 
 protected:
     virtual ~nsDeviceContextSpecQt();

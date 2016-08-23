@@ -11,7 +11,6 @@
 
 #include "base/command_line.h"
 #include "base/string_util.h"
-#include "chrome/common/chrome_switches.h"
 #include "nsDebugImpl.h"
 
 #if defined(XP_MACOSX)
@@ -35,16 +34,6 @@ using mozilla::ipc::IOThreadChild;
 #ifdef OS_WIN
 #include "nsSetDllDirectory.h"
 #include <algorithm>
-
-namespace {
-
-std::size_t caseInsensitiveFind(std::string aHaystack, std::string aNeedle) {
-    std::transform(aHaystack.begin(), aHaystack.end(), aHaystack.begin(), ::tolower);
-    std::transform(aNeedle.begin(), aNeedle.end(), aNeedle.begin(), ::tolower);
-    return aHaystack.find(aNeedle);
-}
-
-}
 #endif
 
 namespace mozilla {
@@ -109,14 +98,14 @@ PluginProcessChild::Init()
     // (after the binary name) here is indeed the plugin module path.
     // Keep in sync with dom/plugins/PluginModuleParent.
     std::vector<std::string> values = CommandLine::ForCurrentProcess()->argv();
-    NS_ABORT_IF_FALSE(values.size() >= 2, "not enough args");
+    MOZ_ASSERT(values.size() >= 2, "not enough args");
 
     pluginFilename = UnmungePluginDsoPath(values[1]);
 
 #elif defined(OS_WIN)
     std::vector<std::wstring> values =
         CommandLine::ForCurrentProcess()->GetLooseValues();
-    NS_ABORT_IF_FALSE(values.size() >= 1, "not enough loose args");
+    MOZ_ASSERT(values.size() >= 1, "not enough loose args");
 
     if (ShouldProtectPluginCurrentDirectory(values[0].c_str())) {
         SanitizeEnvironmentVariables();
@@ -140,7 +129,7 @@ PluginProcessChild::Init()
       return false;
     }
 
-    bool retval = mPlugin.InitForChrome(pluginFilename, ParentHandle(),
+    bool retval = mPlugin.InitForChrome(pluginFilename, ParentPid(),
                                         IOThreadChild::message_loop(),
                                         IOThreadChild::channel());
 #if defined(XP_MACOSX)

@@ -129,6 +129,7 @@ OpusTrackEncoder::OpusTrackEncoder()
   , mEncoder(nullptr)
   , mLookahead(0)
   , mResampler(nullptr)
+  , mOutputTimeStamp(0)
 {
 }
 
@@ -187,7 +188,12 @@ OpusTrackEncoder::Init(int aChannels, int aSamplingRate)
   mEncoder = opus_encoder_create(GetOutputSampleRate(), mChannels,
                                  OPUS_APPLICATION_AUDIO, &error);
 
+
   mInitialized = (error == OPUS_OK);
+
+  if (mAudioBitrate) {
+    opus_encoder_ctl(mEncoder, OPUS_SET_BITRATE(static_cast<int>(mAudioBitrate)));
+  }
 
   mReentrantMonitor.NotifyAll();
 
@@ -223,7 +229,9 @@ OpusTrackEncoder::GetMetadata()
     return nullptr;
   }
 
-  nsRefPtr<OpusMetadata> meta = new OpusMetadata();
+  RefPtr<OpusMetadata> meta = new OpusMetadata();
+  meta->mChannels = mChannels;
+  meta->mSamplingFrequency = mSamplingRate;
 
   mLookahead = 0;
   int error = opus_encoder_ctl(mEncoder, OPUS_GET_LOOKAHEAD(&mLookahead));
@@ -308,7 +316,7 @@ OpusTrackEncoder::GetEncodedTrack(EncodedFrameContainer& aData)
   }
 
   // Start encoding data.
-  nsAutoTArray<AudioDataValue, 9600> pcm;
+  AutoTArray<AudioDataValue, 9600> pcm;
   pcm.SetLength(GetPacketDuration() * mChannels);
   AudioSegment::ChunkIterator iter(mSourceSegment);
   int frameCopied = 0;
@@ -335,11 +343,11 @@ OpusTrackEncoder::GetEncodedTrack(EncodedFrameContainer& aData)
     iter.Next();
   }
 
-  nsRefPtr<EncodedFrame> audiodata = new EncodedFrame();
+  RefPtr<EncodedFrame> audiodata = new EncodedFrame();
   audiodata->SetFrameType(EncodedFrame::OPUS_AUDIO_FRAME);
   int framesInPCM = frameCopied;
   if (mResampler) {
-    nsAutoTArray<AudioDataValue, 9600> resamplingDest;
+    AutoTArray<AudioDataValue, 9600> resamplingDest;
     // We want to consume all the input data, so we slightly oversize the
     // resampled data buffer so we can fit the output data in. We cannot really
     // predict the output frame count at each call.
@@ -432,8 +440,11 @@ OpusTrackEncoder::GetEncodedTrack(EncodedFrameContainer& aData)
   }
 
   audiodata->SwapInFrameData(frameData);
+  mOutputTimeStamp += FramesToUsecs(GetPacketDuration(), kOpusSamplingRate).value();
+  audiodata->SetTimeStamp(mOutputTimeStamp);
+  LOG("[Opus] mOutputTimeStamp %lld.",mOutputTimeStamp);
   aData.AppendEncodedFrame(audiodata);
   return result >= 0 ? NS_OK : NS_ERROR_FAILURE;
 }
 
-}
+} // namespace mozilla

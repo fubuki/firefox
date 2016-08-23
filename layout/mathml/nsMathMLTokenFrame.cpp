@@ -7,7 +7,7 @@
 #include "nsPresContext.h"
 #include "nsContentUtils.h"
 #include "nsTextFrame.h"
-#include "RestyleManager.h"
+#include "mozilla/RestyleManager.h"
 #include <algorithm>
 
 using namespace mozilla;
@@ -37,7 +37,7 @@ eMathMLFrameType
 nsMathMLTokenFrame::GetMathMLFrameType()
 {
   // treat everything other than <mi> as ordinary...
-  if (mContent->Tag() != nsGkAtoms::mi_) {
+  if (!mContent->IsMathMLElement(nsGkAtoms::mi_)) {
     return eMathMLFrameType_Ordinary;
   }
 
@@ -64,9 +64,9 @@ nsMathMLTokenFrame::MarkTextFramesAsTokenMathML()
   // - to force them to trim their leading and trailing whitespaces.
   // - Indicate which frames are suitable for mathvariant
   // - flag single character <mi> frames for special italic treatment
-  for (nsIFrame* childFrame = GetFirstPrincipalChild(); childFrame;
+  for (nsIFrame* childFrame = PrincipalChildList().FirstChild(); childFrame;
        childFrame = childFrame->GetNextSibling()) {
-    for (nsIFrame* childFrame2 = childFrame->GetFirstPrincipalChild();
+    for (nsIFrame* childFrame2 = childFrame->PrincipalChildList().FirstChild();
          childFrame2; childFrame2 = childFrame2->GetNextSibling()) {
       if (childFrame2->GetType() == nsGkAtoms::textFrame) {
         childFrame2->AddStateBits(TEXT_IS_IN_TOKEN_MATHML);
@@ -75,11 +75,9 @@ nsMathMLTokenFrame::MarkTextFramesAsTokenMathML()
       }
     }
   }
-  if (mContent->Tag() == nsGkAtoms::mi_ && childCount == 1) {
+  if (mContent->IsMathMLElement(nsGkAtoms::mi_) && childCount == 1) {
     nsAutoString data;
-    if (!nsContentUtils::GetNodeTextContent(mContent, false, data)) {
-      NS_RUNTIMEABORT("OOM");
-    }
+    nsContentUtils::GetNodeTextContent(mContent, false, data);
 
     data.CompressWhitespace();
     int32_t length = data.Length();
@@ -126,13 +124,15 @@ nsMathMLTokenFrame::Reflow(nsPresContext*          aPresContext,
                            const nsHTMLReflowState& aReflowState,
                            nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
+  mPresentationData.flags &= ~NS_MATHML_ERROR;
+
   // initializations needed for empty markup like <mtag></mtag>
   aDesiredSize.ClearSize();
   aDesiredSize.SetBlockStartAscent(0);
   aDesiredSize.mBoundingMetrics = nsBoundingMetrics();
 
-  nsIFrame* childFrame = GetFirstPrincipalChild();
-  while (childFrame) {
+  for (nsIFrame* childFrame : PrincipalChildList()) {
     // ask our children to compute their bounding metrics
     nsHTMLReflowMetrics childDesiredSize(aReflowState.GetWritingMode(),
                                          aDesiredSize.mFlags
@@ -147,12 +147,10 @@ nsMathMLTokenFrame::Reflow(nsPresContext*          aPresContext,
     //NS_ASSERTION(NS_FRAME_IS_COMPLETE(aStatus), "bad status");
     SaveReflowAndBoundingMetricsFor(childFrame, childDesiredSize,
                                     childDesiredSize.mBoundingMetrics);
-
-    childFrame = childFrame->GetNextSibling();
   }
 
   // place and size children
-  FinalizeReflow(*aReflowState.rendContext, aDesiredSize);
+  FinalizeReflow(aReflowState.rendContext->GetDrawTarget(), aDesiredSize);
 
   aStatus = NS_FRAME_COMPLETE;
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
@@ -162,13 +160,12 @@ nsMathMLTokenFrame::Reflow(nsPresContext*          aPresContext,
 // pass, it is not computed here because our children may be text frames
 // that do not implement the GetBoundingMetrics() interface.
 /* virtual */ nsresult
-nsMathMLTokenFrame::Place(nsRenderingContext& aRenderingContext,
+nsMathMLTokenFrame::Place(DrawTarget*          aDrawTarget,
                           bool                 aPlaceOrigin,
                           nsHTMLReflowMetrics& aDesiredSize)
 {
   mBoundingMetrics = nsBoundingMetrics();
-  for (nsIFrame* childFrame = GetFirstPrincipalChild(); childFrame;
-       childFrame = childFrame->GetNextSibling()) {
+  for (nsIFrame* childFrame :PrincipalChildList()) {
     nsHTMLReflowMetrics childSize(aDesiredSize.GetWritingMode());
     GetReflowAndBoundingMetricsFor(childFrame, childSize,
                                    childSize.mBoundingMetrics, nullptr);
@@ -176,10 +173,8 @@ nsMathMLTokenFrame::Place(nsRenderingContext& aRenderingContext,
     mBoundingMetrics += childSize.mBoundingMetrics;
   }
 
-  nsRefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
-                                        nsLayoutUtils::
-                                        FontSizeInflationFor(this));
+  RefPtr<nsFontMetrics> fm =
+    nsLayoutUtils::GetInflatedFontMetricsForFrame(this);
   nscoord ascent = fm->MaxAscent();
   nscoord descent = fm->MaxDescent();
 
@@ -191,8 +186,7 @@ nsMathMLTokenFrame::Place(nsRenderingContext& aRenderingContext,
 
   if (aPlaceOrigin) {
     nscoord dy, dx = 0;
-    for (nsIFrame* childFrame = GetFirstPrincipalChild(); childFrame;
-         childFrame = childFrame->GetNextSibling()) {
+    for (nsIFrame* childFrame : PrincipalChildList()) {
       nsHTMLReflowMetrics childSize(aDesiredSize.GetWritingMode());
       GetReflowAndBoundingMetricsFor(childFrame, childSize,
                                      childSize.mBoundingMetrics);

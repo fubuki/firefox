@@ -43,16 +43,17 @@ class SharedMemory {
 
   // Create a new SharedMemory object from an existing, open
   // shared memory file.
-  SharedMemory(SharedMemoryHandle handle, bool read_only);
-
-  // Create a new SharedMemory object from an existing, open
-  // shared memory file that was created by a remote process and not shared
-  // to the current process.
-  SharedMemory(SharedMemoryHandle handle, bool read_only,
-      base::ProcessHandle process);
+  SharedMemory(SharedMemoryHandle init_handle, bool read_only)
+    : SharedMemory() {
+    SetHandle(init_handle, read_only);
+  }
 
   // Destructor.  Will close any open files.
   ~SharedMemory();
+
+  // Initialize a new SharedMemory object from an existing, open
+  // shared memory file.
+  bool SetHandle(SharedMemoryHandle handle, bool read_only);
 
   // Return true iff the given handle is valid (i.e. not the distingished
   // invalid value; NULL for a HANDLE and -1 for a file descriptor)
@@ -116,7 +117,7 @@ class SharedMemory {
 
   // Closes the open shared memory segment.
   // It is safe to call Close repeatedly.
-  void Close();
+  void Close(bool unmap_view = true);
 
   // Share the shared memory to another process.  Attempts
   // to create a platform-specific new_handle which can be
@@ -124,9 +125,9 @@ class SharedMemory {
   // file.  new_handle is an ouput parameter to receive
   // the handle for use in the remote process.
   // Returns true on success, false otherwise.
-  bool ShareToProcess(base::ProcessHandle process,
+  bool ShareToProcess(base::ProcessId target_pid,
                       SharedMemoryHandle* new_handle) {
-    return ShareToProcessCommon(process, new_handle, false);
+    return ShareToProcessCommon(target_pid, new_handle, false);
   }
 
   // Logically equivalent to:
@@ -135,9 +136,9 @@ class SharedMemory {
   //   return ok;
   // Note that the memory is unmapped by calling this method, regardless of the
   // return value.
-  bool GiveToProcess(ProcessHandle process,
+  bool GiveToProcess(ProcessId target_pid,
                      SharedMemoryHandle* new_handle) {
-    return ShareToProcessCommon(process, new_handle, true);
+    return ShareToProcessCommon(target_pid, new_handle, true);
   }
 
   // Lock the shared memory.
@@ -162,7 +163,7 @@ class SharedMemory {
   void LockOrUnlockCommon(int function);
 
 #endif
-  bool ShareToProcessCommon(ProcessHandle process,
+  bool ShareToProcessCommon(ProcessId target_pid,
                             SharedMemoryHandle* new_handle,
                             bool close_self);
 

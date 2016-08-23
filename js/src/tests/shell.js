@@ -3,13 +3,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// Explicitly set the default version.
-// See https://bugzilla.mozilla.org/show_bug.cgi?id=522760#c11
-if (typeof version != 'undefined')
-{
-  version(0);
-}
-
 var STATUS = "STATUS: ";
 var VERBOSE = false;
 var SECT_PREFIX = 'Section ';
@@ -85,7 +78,16 @@ function TestCase(n, d, e, a)
   this.reason = '';
   this.bugnumber = typeof(BUGNUMER) != 'undefined' ? BUGNUMBER : '';
   this.type = (typeof window == 'undefined' ? 'shell' : 'browser');
-  gTestcases[gTc++] = this;
+  ({}).constructor.defineProperty(
+    gTestcases,
+    gTc++,
+    {
+      value: this,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    }
+  );
 }
 
 gFailureExpected = false;
@@ -380,6 +382,40 @@ function enterFunc (funcName)
 }
 
 /*
+ * An xorshift pseudo-random number generator see:
+ * https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
+ * This generator will always produce a value, n, where
+ * 0 <= n <= 255
+ */
+function *XorShiftGenerator(seed, size) {
+    let x = seed;
+    for (let i = 0; i < size; i++) {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        yield x % 256;
+    }
+}
+
+/*
+ * Yield every permutation of the elements in some iterable.
+ */
+function *Permutations(items) {
+    if (items.length == 0) {
+        yield [];
+    } else {
+        let swap;
+        for (let i = 0; i < items.length; i++) {
+            swap = items[0];
+            items[0] = items[i];
+            items[i] = swap;
+            for (let e of Permutations(items.slice(1, items.length)))
+                yield [items[0]].concat(e);
+        }
+    }
+}
+
+/*
  * Pops the top funcName off the call stack.  funcName is optional, and can be
  * used to check push-pop balance.
  */
@@ -535,8 +571,6 @@ function BigO(data)
     }
     return deriv;
   }
-
-  return 0;
 }
 
 function compareSource(expect, actual, summary)
@@ -857,6 +891,23 @@ function assertThrows(f) {
         throw new Error("Assertion failed: " + f + " did not throw as expected");
 }
 
+
+function assertThrowsInstanceOf(f, ctor, msg) {
+  var fullmsg;
+  try {
+    f();
+  } catch (exc) {
+    if (exc instanceof ctor)
+      return;
+    fullmsg = "Assertion failed: expected exception " + ctor.name + ", got " + exc;
+  }
+  if (fullmsg === undefined)
+    fullmsg = "Assertion failed: expected exception " + ctor.name + ", no exception thrown";
+  if (msg !== undefined)
+    fullmsg += " - " + msg;
+  throw new Error(fullmsg);
+};
+
 /*
  * Some tests need to know if we are in Rhino as opposed to SpiderMonkey
  */
@@ -876,6 +927,3 @@ function OptLevel( i ) {
   cx.setOptimizationLevel(i);
 }
 /* end of Rhino functions */
-
-var JS_HAS_SYMBOLS = typeof Symbol === "function";
-var std_iterator = JS_HAS_SYMBOLS ? Symbol.iterator : "@@iterator";

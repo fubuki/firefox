@@ -6,5 +6,6 @@
 
 SharedLibrary('nptestjava')
 
-relative_path = '..'
+relative_path = 'javaplugin'
+cocoa_name = 'JavaTest'
 include('../testplugin.mozbuild')

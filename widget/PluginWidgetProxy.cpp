@@ -35,10 +35,11 @@ NS_IMPL_ISUPPORTS_INHERITED(PluginWidgetProxy, PuppetWidget, nsIWidget)
 PluginWidgetProxy::PluginWidgetProxy(dom::TabChild* aTabChild,
                                      mozilla::plugins::PluginWidgetChild* aActor) :
   PuppetWidget(aTabChild),
-  mActor(aActor)
+  mActor(aActor),
+  mCachedPluginPort(0)
 {
   // See ChannelDestroyed() in the header
-  mActor->mWidget = this;
+  mActor->SetWidget(this);
 }
 
 PluginWidgetProxy::~PluginWidgetProxy()
@@ -47,26 +48,27 @@ PluginWidgetProxy::~PluginWidgetProxy()
 }
 
 NS_IMETHODIMP
-PluginWidgetProxy::Create(nsIWidget*        aParent,
-                          nsNativeWidget    aNativeParent,
-                          const nsIntRect&  aRect,
-                          nsDeviceContext*  aContext,
+PluginWidgetProxy::Create(nsIWidget* aParent,
+                          nsNativeWidget aNativeParent,
+                          const LayoutDeviceIntRect& aRect,
                           nsWidgetInitData* aInitData)
 {
   ENSURE_CHANNEL;
   PWLOG("PluginWidgetProxy::Create()\n");
 
-  if (!mActor->SendCreate()) {
+  nsresult rv = NS_ERROR_UNEXPECTED;
+  mActor->SendCreate(&rv);
+  if (NS_FAILED(rv)) {
     NS_WARNING("failed to create chrome widget, plugins won't paint.");
+    return rv;
   }
 
-  BaseCreate(aParent, aRect, aContext, aInitData);
+  BaseCreate(aParent, aInitData);
+  mParent = aParent;
 
   mBounds = aRect;
   mEnabled = true;
   mVisible = true;
-
-  mActor->SendResize(mBounds);
 
   return NS_OK;
 }
@@ -74,8 +76,6 @@ PluginWidgetProxy::Create(nsIWidget*        aParent,
 NS_IMETHODIMP
 PluginWidgetProxy::SetParent(nsIWidget* aNewParent)
 {
-  mParent = aNewParent;
-
   nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
   nsIWidget* parent = GetParent();
   if (parent) {
@@ -84,6 +84,7 @@ PluginWidgetProxy::SetParent(nsIWidget* aNewParent)
   if (aNewParent) {
     aNewParent->AddChild(this);
   }
+  mParent = aNewParent;
   return NS_OK;
 }
 
@@ -99,37 +100,31 @@ PluginWidgetProxy::Destroy()
   PWLOG("PluginWidgetProxy::Destroy()\n");
 
   if (mActor) {
-    mActor->SendShow(false);
-    mActor->SendDestroy();
-    mActor->mWidget = nullptr;
-    mActor->Send__delete__(mActor);
+    // Communicate that the layout widget has been torn down before the sub
+    // protocol.
+    mActor->ProxyShutdown();
     mActor = nullptr;
   }
 
   return PuppetWidget::Destroy();
 }
 
-NS_IMETHODIMP
-PluginWidgetProxy::Show(bool aState)
+void
+PluginWidgetProxy::GetWindowClipRegion(nsTArray<LayoutDeviceIntRect>* aRects)
 {
-  ENSURE_CHANNEL;
-  mActor->SendShow(aState);
-  mVisible = aState;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-PluginWidgetProxy::Invalidate(const nsIntRect& aRect)
-{
-  ENSURE_CHANNEL;
-  mActor->SendInvalidate(aRect);
-  return NS_OK;
+  if (mClipRects && mClipRectCount) {
+    aRects->AppendElements(mClipRects.get(), mClipRectCount);
+  }
 }
 
 void*
 PluginWidgetProxy::GetNativeData(uint32_t aDataType)
 {
   if (!mActor) {
+    return nullptr;
+  }
+  auto tab = static_cast<mozilla::dom::TabChild*>(mActor->Manager());
+  if (tab && tab->IsDestroyed()) {
     return nullptr;
   }
   switch (aDataType) {
@@ -141,48 +136,38 @@ PluginWidgetProxy::GetNativeData(uint32_t aDataType)
       NS_WARNING("PluginWidgetProxy::GetNativeData received request for unsupported data type.");
       return nullptr;
   }
-  uintptr_t value = 0;
-  mActor->SendGetNativePluginPort(&value);
-  PWLOG("PluginWidgetProxy::GetNativeData %p\n", (void*)value);
-  return (void*)value;
+  // The parent side window handle or xid never changes so we can
+  // cache this for our lifetime.
+  if (mCachedPluginPort) {
+    return (void*)mCachedPluginPort;
+  }
+  mActor->SendGetNativePluginPort(&mCachedPluginPort);
+  PWLOG("PluginWidgetProxy::GetNativeData %p\n", (void*)mCachedPluginPort);
+  return (void*)mCachedPluginPort;
 }
 
-NS_IMETHODIMP
-PluginWidgetProxy::Resize(double aWidth, double aHeight, bool aRepaint)
+#if defined(XP_WIN)
+void
+PluginWidgetProxy::SetNativeData(uint32_t aDataType, uintptr_t aVal)
 {
-  ENSURE_CHANNEL;
-  PWLOG("PluginWidgetProxy::Resize(%0.2f, %0.2f, %d)\n", aWidth, aHeight, aRepaint);
-  nsIntRect oldBounds = mBounds;
-  mBounds.SizeTo(nsIntSize(NSToIntRound(aWidth), NSToIntRound(aHeight)));
-  mActor->SendResize(mBounds);
-  if (!oldBounds.IsEqualEdges(mBounds) && mAttachedWidgetListener) {
-    mAttachedWidgetListener->WindowResized(this, mBounds.width, mBounds.height);
+  if (!mActor) {
+    return;
   }
-  return NS_OK;
-}
 
-NS_IMETHODIMP
-PluginWidgetProxy::Resize(double aX, double aY, double aWidth,
-                          double aHeight, bool aRepaint)
-{
-  nsresult rv = Move(aX, aY);
-  if (NS_FAILED(rv)) {
-    return rv;
+  auto tab = static_cast<mozilla::dom::TabChild*>(mActor->Manager());
+  if (tab && tab->IsDestroyed()) {
+    return;
   }
-  return Resize(aWidth, aHeight, aRepaint);
-}
 
-NS_IMETHODIMP
-PluginWidgetProxy::Move(double aX, double aY)
-{
-  ENSURE_CHANNEL;
-  PWLOG("PluginWidgetProxy::Move(%0.2f, %0.2f)\n", aX, aY);
-  mActor->SendMove(aX, aY);
-  if (mAttachedWidgetListener) {
-    mAttachedWidgetListener->WindowMoved(this, aX, aY);
+  switch (aDataType) {
+    case NS_NATIVE_CHILD_WINDOW:
+      mActor->SendSetNativeChildWindow(aVal);
+      break;
+    default:
+      NS_ERROR("SetNativeData called with unsupported data type.");
   }
-  return NS_OK;
 }
+#endif
 
 NS_IMETHODIMP
 PluginWidgetProxy::SetFocus(bool aRaise)
@@ -193,15 +178,5 @@ PluginWidgetProxy::SetFocus(bool aRaise)
   return NS_OK;
 }
 
-nsresult
-PluginWidgetProxy::SetWindowClipRegion(const nsTArray<nsIntRect>& aRects,
-                                       bool aIntersectWithExisting)
-{
-  ENSURE_CHANNEL;
-  mActor->SendSetWindowClipRegion(aRects, aIntersectWithExisting);
-  nsBaseWidget::SetWindowClipRegion(aRects, aIntersectWithExisting);
-  return NS_OK;
-}
-
-}  // namespace widget
-}  // namespace mozilla
+} // namespace widget
+} // namespace mozilla

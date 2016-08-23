@@ -1,120 +1,62 @@
-/* vim: set shiftwidth=2 tabstop=8 autoindent cindent expandtab: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AnimationTimeline.h"
-#include "mozilla/dom/AnimationTimelineBinding.h"
-#include "AnimationUtils.h"
-#include "nsContentUtils.h"
-#include "nsIPresShell.h"
-#include "nsPresContext.h"
-#include "nsRefreshDriver.h"
-#include "nsDOMNavigationTiming.h"
+#include "mozilla/AnimationComparator.h"
+#include "mozilla/dom/Animation.h"
 
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(AnimationTimeline, mDocument)
+NS_IMPL_CYCLE_COLLECTION_CLASS(AnimationTimeline)
 
-NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(AnimationTimeline, AddRef)
-NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(AnimationTimeline, Release)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(AnimationTimeline)
+  tmp->mAnimationOrder.clear();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mWindow, mAnimations)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-JSObject*
-AnimationTimeline::WrapObject(JSContext* aCx)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(AnimationTimeline)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWindow, mAnimations)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(AnimationTimeline)
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(AnimationTimeline)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(AnimationTimeline)
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(AnimationTimeline)
+  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
+
+void
+AnimationTimeline::NotifyAnimationUpdated(Animation& aAnimation)
 {
-  return AnimationTimelineBinding::Wrap(aCx, this);
+  if (mAnimations.Contains(&aAnimation)) {
+    return;
+  }
+
+  if (aAnimation.GetTimeline() && aAnimation.GetTimeline() != this) {
+    aAnimation.GetTimeline()->RemoveAnimation(&aAnimation);
+  }
+
+  mAnimations.PutEntry(&aAnimation);
+  mAnimationOrder.insertBack(&aAnimation);
 }
 
-Nullable<TimeDuration>
-AnimationTimeline::GetCurrentTime() const
+void
+AnimationTimeline::RemoveAnimation(Animation* aAnimation)
 {
-  return ToTimelineTime(GetCurrentTimeStamp());
-}
-
-Nullable<double>
-AnimationTimeline::GetCurrentTimeAsDouble() const
-{
-  return AnimationUtils::TimeDurationToDouble(GetCurrentTime());
-}
-
-TimeStamp
-AnimationTimeline::GetCurrentTimeStamp() const
-{
-  nsRefreshDriver* refreshDriver = GetRefreshDriver();
-  TimeStamp refreshTime = refreshDriver
-                          ? refreshDriver->MostRecentRefresh()
-                          : TimeStamp();
-
-  // Always return the same object to benefit from return-value optimization.
-  TimeStamp result = !refreshTime.IsNull()
-                     ? refreshTime
-                     : mLastRefreshDriverTime;
-
-  // If we don't have a refresh driver and we've never had one use the
-  // timeline's zero time.
-  if (result.IsNull()) {
-    nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
-    if (timing) {
-      result = timing->GetNavigationStartTimeStamp();
-      // Also, let this time represent the current refresh time. This way
-      // we'll save it as the last refresh time and skip looking up
-      // navigation timing each time.
-      refreshTime = result;
-    }
+  MOZ_ASSERT(!aAnimation->GetTimeline() || aAnimation->GetTimeline() == this);
+  if (aAnimation->isInList()) {
+    aAnimation->remove();
   }
-
-  if (!refreshTime.IsNull()) {
-    mLastRefreshDriverTime = refreshTime;
-  }
-
-  return result;
-}
-
-Nullable<TimeDuration>
-AnimationTimeline::ToTimelineTime(const TimeStamp& aTimeStamp) const
-{
-  Nullable<TimeDuration> result; // Initializes to null
-  if (aTimeStamp.IsNull()) {
-    return result;
-  }
-
-  nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
-  if (MOZ_UNLIKELY(!timing)) {
-    return result;
-  }
-
-  result.SetValue(aTimeStamp - timing->GetNavigationStartTimeStamp());
-  return result;
-}
-
-TimeStamp
-AnimationTimeline::ToTimeStamp(const TimeDuration& aTimeDuration) const
-{
-  TimeStamp result;
-  nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
-  if (MOZ_UNLIKELY(!timing)) {
-    return result;
-  }
-
-  result = timing->GetNavigationStartTimeStamp() + aTimeDuration;
-  return result;
-}
-
-nsRefreshDriver*
-AnimationTimeline::GetRefreshDriver() const
-{
-  nsIPresShell* presShell = mDocument->GetShell();
-  if (MOZ_UNLIKELY(!presShell)) {
-    return nullptr;
-  }
-
-  nsPresContext* presContext = presShell->GetPresContext();
-  if (MOZ_UNLIKELY(!presContext)) {
-    return nullptr;
-  }
-
-  return presContext->RefreshDriver();
+  mAnimations.RemoveEntry(aAnimation);
 }
 
 } // namespace dom

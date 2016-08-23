@@ -6,7 +6,6 @@ new WeakMap();
 new WeakMap(undefined);
 new WeakMap(null);
 
-// FIXME: bug 1062075
-// assertThrowsInstanceOf(() => WeakMap(), TypeError);
-// assertThrowsInstanceOf(() => WeakMap(undefined), TypeError);
-// assertThrowsInstanceOf(() => WeakMap(null), TypeError);
+assertThrowsInstanceOf(() => WeakMap(), TypeError);
+assertThrowsInstanceOf(() => WeakMap(undefined), TypeError);
+assertThrowsInstanceOf(() => WeakMap(null), TypeError);

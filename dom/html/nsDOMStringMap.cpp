@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,7 +38,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(nsDOMStringMap)
   NS_IMPL_CYCLE_COLLECTION_TRACE_PRESERVED_WRAPPER
   if (tmp->PreservingWrapper()) {
-    NS_IMPL_CYCLE_COLLECTION_TRACE_JSVAL_MEMBER_CALLBACK(mExpandoAndGeneration.expando);
+    NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mExpandoAndGeneration.expando)
   }
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
@@ -70,9 +70,9 @@ nsDOMStringMap::~nsDOMStringMap()
 
 /* virtual */
 JSObject*
-nsDOMStringMap::WrapObject(JSContext *cx)
+nsDOMStringMap::WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto)
 {
-  return DOMStringMapBinding::Wrap(cx, this);
+  return DOMStringMapBinding::Wrap(cx, this, aGivenProto);
 }
 
 void
@@ -112,7 +112,7 @@ nsDOMStringMap::NamedSetter(const nsAString& aProp,
     return;
   }
 
-  nsCOMPtr<nsIAtom> attrAtom = do_GetAtom(attr);
+  nsCOMPtr<nsIAtom> attrAtom = NS_Atomize(attr);
   MOZ_ASSERT(attrAtom, "Should be infallible");
 
   res = mElement->SetAttr(kNameSpaceID_None, attrAtom, aValue, true);
@@ -136,7 +136,7 @@ nsDOMStringMap::NamedDeleter(const nsAString& aProp, bool& found)
     return;
   }
 
-  nsCOMPtr<nsIAtom> attrAtom = do_GetAtom(attr);
+  nsCOMPtr<nsIAtom> attrAtom = NS_Atomize(attr);
   MOZ_ASSERT(attrAtom, "Should be infallible");
 
   found = mElement->HasAttr(kNameSpaceID_None, attrAtom);
@@ -259,7 +259,8 @@ bool nsDOMStringMap::AttrToDataProp(const nsAString& aAttr,
 void
 nsDOMStringMap::AttributeChanged(nsIDocument *aDocument, Element* aElement,
                                  int32_t aNameSpaceID, nsIAtom* aAttribute,
-                                 int32_t aModType)
+                                 int32_t aModType,
+                                 const nsAttrValue* aOldValue)
 {
   if ((aModType == nsIDOMMutationEvent::ADDITION ||
        aModType == nsIDOMMutationEvent::REMOVAL) &&

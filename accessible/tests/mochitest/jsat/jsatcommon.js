@@ -19,17 +19,6 @@ Components.utils.import("resource://gre/modules/accessibility/Utils.jsm");
 Components.utils.import("resource://gre/modules/accessibility/EventManager.jsm");
 Components.utils.import("resource://gre/modules/accessibility/Gestures.jsm");
 
-const dwellThreshold = GestureSettings.dwellThreshold;
-const swipeMaxDuration = GestureSettings.swipeMaxDuration;
-const maxConsecutiveGestureDelay = GestureSettings.maxConsecutiveGestureDelay;
-
-// https://bugzilla.mozilla.org/show_bug.cgi?id=1001945 - sometimes
-// SimpleTest.executeSoon timeout is bigger than the timer settings in
-// GestureSettings that causes intermittents.
-GestureSettings.dwellThreshold = dwellThreshold * 10;
-GestureSettings.swipeMaxDuration = swipeMaxDuration * 10;
-GestureSettings.maxConsecutiveGestureDelay = maxConsecutiveGestureDelay * 10;
-
 var AccessFuTest = {
 
   addFunc: function AccessFuTest_addFunc(aFunc) {
@@ -111,9 +100,13 @@ var AccessFuTest = {
     Logger.test = false;
     Logger.logLevel = Logger.INFO;
     // Reset Gesture Settings.
-    GestureSettings.dwellThreshold = dwellThreshold;
-    GestureSettings.swipeMaxDuration = swipeMaxDuration;
-    GestureSettings.maxConsecutiveGestureDelay = maxConsecutiveGestureDelay;
+    GestureSettings.dwellThreshold = this.dwellThreshold =
+      this.originalDwellThreshold;
+    GestureSettings.swipeMaxDuration = this.swipeMaxDuration =
+      this.originalSwipeMaxDuration;
+    GestureSettings.maxGestureResolveTimeout =
+      this.maxGestureResolveTimeout =
+      this.originalMaxGestureResolveTimeout;
     // Finish through idle callback to let AccessFu._disable complete.
     SimpleTest.executeSoon(function () {
       AccessFu.detach();
@@ -160,13 +153,27 @@ var AccessFuTest = {
       ['dom.mozSettings.enabled', true]];
     prefs.push.apply(prefs, aAdditionalPrefs);
 
+    this.originalDwellThreshold = GestureSettings.dwellThreshold;
+    this.originalSwipeMaxDuration = GestureSettings.swipeMaxDuration;
+    this.originalMaxGestureResolveTimeout =
+      GestureSettings.maxGestureResolveTimeout;
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=1001945 - sometimes
+    // SimpleTest.executeSoon timeout is bigger than the timer settings in
+    // GestureSettings that causes intermittents.
+    this.dwellThreshold = GestureSettings.dwellThreshold =
+      GestureSettings.dwellThreshold * 10;
+    this.swipeMaxDuration = GestureSettings.swipeMaxDuration =
+      GestureSettings.swipeMaxDuration * 10;
+    this.maxGestureResolveTimeout = GestureSettings.maxGestureResolveTimeout =
+      GestureSettings.maxGestureResolveTimeout * 10;
+
     SpecialPowers.pushPrefEnv({ 'set': prefs }, function () {
       if (AccessFuTest._waitForExplicitFinish) {
         // Run all test functions asynchronously.
         AccessFuTest.nextTest();
       } else {
         // Run all test functions synchronously.
-        [testFunc() for (testFunc of gTestFuncs)]; // jshint ignore:line
+        gTestFuncs.forEach(testFunc => testFunc());
         AccessFuTest.finish();
       }
     });
@@ -389,6 +396,20 @@ var ContentMessages = {
         adjustRange: true
       }
     }
+  },
+
+  androidScrollForward: function adjustUp() {
+    return {
+      name: 'AccessFu:AndroidScroll',
+      json: { origin: 'top', direction: 'forward' }
+    };
+  },
+
+  androidScrollBackward: function adjustDown() {
+    return {
+      name: 'AccessFu:AndroidScroll',
+      json: { origin: 'top', direction: 'backward' }
+    };
   },
 
   focusSelector: function focusSelector(aSelector, aBlur) {
@@ -617,10 +638,31 @@ function ExpectedCheckAction(aChecked, aOptions) {
 
 ExpectedCheckAction.prototype = Object.create(ExpectedPresent.prototype);
 
+function ExpectedSwitchAction(aSwitched, aOptions) {
+  ExpectedPresent.call(this, {
+    eventType: 'action',
+    data: [{ string: aSwitched ? 'onAction' : 'offAction' }]
+  }, [{
+    eventType: AndroidEvent.VIEW_CLICKED,
+    checked: aSwitched
+  }], aOptions);
+}
+
+ExpectedSwitchAction.prototype = Object.create(ExpectedPresent.prototype);
+
+function ExpectedNameChange(aName, aOptions) {
+  ExpectedPresent.call(this, {
+    eventType: 'name-change',
+    data: aName
+  }, null, aOptions);
+}
+
+ExpectedNameChange.prototype = Object.create(ExpectedPresent.prototype);
+
 function ExpectedValueChange(aValue, aOptions) {
   ExpectedPresent.call(this, {
     eventType: 'value-change',
-    data: [aValue]
+    data: aValue
   }, null, aOptions);
 }
 

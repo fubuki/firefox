@@ -1,9 +1,9 @@
 "use strict";
 
-let gTestTab;
-let gContentAPI;
-let gContentWindow;
-let handleDialog;
+var gTestTab;
+var gContentAPI;
+var gContentWindow;
+var handleDialog;
 
 // Modified from toolkit/components/passwordmgr/test/prompt_common.js
 var didDialog;
@@ -74,15 +74,13 @@ function getDialogDoc() {
   return null;
 }
 
-Components.utils.import("resource:///modules/UITour.jsm");
-
 function test() {
   UITourTest();
 }
 
 
-let tests = [
-  taskify(function* test_modal_dialog_while_opening_tooltip(done) {
+var tests = [
+  taskify(function* test_modal_dialog_while_opening_tooltip() {
     let panelShown;
     let popup;
 

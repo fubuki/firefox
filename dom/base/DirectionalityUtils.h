@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -10,8 +10,6 @@
 #include "nscore.h"
 
 class nsIContent;
-class nsIDocument;
-class nsINode;
 class nsAString;
 class nsAttrValue;
 class nsTextNode;
@@ -91,24 +89,22 @@ bool TextNodeWillChangeDirection(nsIContent* aTextNode, Directionality* aOldDir,
  * After the contents of a text node have changed, change the directionality
  * of any elements whose directionality is determined by that node
  */
-void TextNodeChangedDirection(nsIContent* aTextNode, Directionality aOldDir,
+void TextNodeChangedDirection(nsTextNode* aTextNode, Directionality aOldDir,
                               bool aNotify);
 
 /**
  * When a text node is appended to an element, find any ancestors with dir=auto
  * whose directionality will be determined by the text node
  */
-void SetDirectionFromNewTextNode(nsIContent* aTextNode);
+void SetDirectionFromNewTextNode(nsTextNode* aTextNode);
 
 /**
  * When a text node is removed from a document, find any ancestors whose
  * directionality it determined and redetermine their directionality
  *
  * @param aTextNode the text node
- * @param aNullParent whether the the parent is also being removed
- *        (passed from UnbindFromTree)
  */
-void ResetDirectionSetByTextNode(nsTextNode* aTextNode, bool aNullParent);
+void ResetDirectionSetByTextNode(nsTextNode* aTextNode);
 
 /**
  * Set the directionality of an element according to the directionality of the

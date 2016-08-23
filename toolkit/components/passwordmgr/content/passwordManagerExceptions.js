@@ -1,13 +1,16 @@
-// -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
-
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*** =================== REJECTED SIGNONS CODE =================== ***/
 
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
+
 function RejectsStartup() {
   LoadRejects();
+
+  let treecols = document.getElementsByTagName("treecols")[0];
+  treecols.addEventListener("click", HandleTreeColumnClick.bind(null, RejectColumnSort));
 }
 
 var rejectsTreeView = {
@@ -88,11 +91,10 @@ function FinalizeRejectDeletions() {
 }
 
 function HandleRejectKeyPress(e) {
-  if (e.keyCode == KeyEvent.DOM_VK_DELETE
-#ifdef XP_MACOSX
-      || e.keyCode == KeyEvent.DOM_VK_BACK_SPACE
-#endif
-     ) {
+  if (e.keyCode == KeyEvent.DOM_VK_DELETE ||
+      (AppConstants.platform == "macosx" &&
+       e.keyCode == KeyEvent.DOM_VK_BACK_SPACE))
+  {
     DeleteReject();
   }
 }

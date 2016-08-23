@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,14 +21,13 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsScriptLoader.h"
 #include "nsIURI.h"
-#include "nsNetUtil.h"
 #include "nsIContentViewer.h"
 #include "mozilla/dom/NodeInfo.h"
 #include "nsToken.h"
 #include "nsIAppShell.h"
 #include "nsCRT.h"
 #include "prtime.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsNodeUtils.h"
 #include "nsIContent.h"
 #include "mozilla/dom/Element.h"
@@ -134,20 +133,20 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLContentSink, nsContentSink)
 
   // nsIContentSink
-  NS_IMETHOD WillParse(void) MOZ_OVERRIDE;
-  NS_IMETHOD WillBuildModel(nsDTDMode aDTDMode) MOZ_OVERRIDE;
-  NS_IMETHOD DidBuildModel(bool aTerminated) MOZ_OVERRIDE;
-  NS_IMETHOD WillInterrupt(void) MOZ_OVERRIDE;
-  NS_IMETHOD WillResume(void) MOZ_OVERRIDE;
-  NS_IMETHOD SetParser(nsParserBase* aParser) MOZ_OVERRIDE;
-  virtual void FlushPendingNotifications(mozFlushType aType) MOZ_OVERRIDE;
-  NS_IMETHOD SetDocumentCharset(nsACString& aCharset) MOZ_OVERRIDE;
-  virtual nsISupports *GetTarget() MOZ_OVERRIDE;
-  virtual bool IsScriptExecuting() MOZ_OVERRIDE;
+  NS_IMETHOD WillParse(void) override;
+  NS_IMETHOD WillBuildModel(nsDTDMode aDTDMode) override;
+  NS_IMETHOD DidBuildModel(bool aTerminated) override;
+  NS_IMETHOD WillInterrupt(void) override;
+  NS_IMETHOD WillResume(void) override;
+  NS_IMETHOD SetParser(nsParserBase* aParser) override;
+  virtual void FlushPendingNotifications(mozFlushType aType) override;
+  NS_IMETHOD SetDocumentCharset(nsACString& aCharset) override;
+  virtual nsISupports *GetTarget() override;
+  virtual bool IsScriptExecuting() override;
 
   // nsIHTMLContentSink
-  NS_IMETHOD OpenContainer(ElementType aNodeType) MOZ_OVERRIDE;
-  NS_IMETHOD CloseContainer(ElementType aTag) MOZ_OVERRIDE;
+  NS_IMETHOD OpenContainer(ElementType aNodeType) override;
+  NS_IMETHOD CloseContainer(ElementType aTag) override;
 
 protected:
   virtual ~HTMLContentSink();
@@ -157,11 +156,11 @@ protected:
   // The maximum length of a text run
   int32_t mMaxTextRun;
 
-  nsRefPtr<nsGenericHTMLElement> mRoot;
-  nsRefPtr<nsGenericHTMLElement> mBody;
-  nsRefPtr<nsGenericHTMLElement> mHead;
+  RefPtr<nsGenericHTMLElement> mRoot;
+  RefPtr<nsGenericHTMLElement> mBody;
+  RefPtr<nsGenericHTMLElement> mHead;
 
-  nsAutoTArray<SinkContext*, 8> mContextStack;
+  AutoTArray<SinkContext*, 8> mContextStack;
   SinkContext* mCurrentContext;
   SinkContext* mHeadContext;
 
@@ -175,7 +174,7 @@ protected:
 
   mozilla::dom::NodeInfo* mNodeInfoCache[NS_HTML_TAG_MAX + 1];
 
-  nsresult FlushTags() MOZ_OVERRIDE;
+  nsresult FlushTags() override;
 
   // Routines for tags that require special handling
   nsresult CloseHTML();
@@ -185,7 +184,7 @@ protected:
   void CloseHeadContext();
 
   // nsContentSink overrides
-  void UpdateChildCounts() MOZ_OVERRIDE;
+  void UpdateChildCounts() override;
 
   void NotifyInsert(nsIContent* aContent,
                     nsIContent* aChildContent,
@@ -243,7 +242,7 @@ NS_NewHTMLElement(Element** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& 
 {
   *aResult = nullptr;
 
-  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo = aNodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> nodeInfo = aNodeInfo;
 
   nsIParserService* parserService = nsContentUtils::GetParserService();
   if (!parserService)
@@ -290,7 +289,7 @@ CreateHTMLElement(uint32_t aNodeType,
   NS_ASSERTION(cb != NS_NewHTMLNOTUSEDElement,
                "Don't know how to construct tag element!");
 
-  nsRefPtr<nsGenericHTMLElement> result = cb(Move(aNodeInfo), aFromParser);
+  RefPtr<nsGenericHTMLElement> result = cb(Move(aNodeInfo), aFromParser);
 
   return result.forget();
 }
@@ -395,14 +394,14 @@ SinkContext::OpenBody()
     }
   }
 
-    nsRefPtr<mozilla::dom::NodeInfo> nodeInfo =
+    RefPtr<mozilla::dom::NodeInfo> nodeInfo =
       mSink->mNodeInfoManager->GetNodeInfo(nsGkAtoms::body, nullptr,
                                            kNameSpaceID_XHTML,
                                            nsIDOMNode::ELEMENT_NODE);
   NS_ENSURE_TRUE(nodeInfo, NS_ERROR_UNEXPECTED);
 
   // Make the content object
-  nsRefPtr<nsGenericHTMLElement> body =
+  RefPtr<nsGenericHTMLElement> body =
     NS_NewHTMLBodyElement(nodeInfo.forget(), FROM_PARSER_NETWORK);
   if (!body) {
     return NS_ERROR_OUT_OF_MEMORY;
@@ -624,7 +623,7 @@ NS_NewHTMLContentSink(nsIHTMLContentSink** aResult,
 {
   NS_ENSURE_ARG_POINTER(aResult);
 
-  nsRefPtr<HTMLContentSink> it = new HTMLContentSink();
+  RefPtr<HTMLContentSink> it = new HTMLContentSink();
 
   nsresult rv = it->Init(aDoc, aURI, aContainer, aChannel);
 
@@ -737,7 +736,7 @@ HTMLContentSink::Init(nsIDocument* aDoc,
   // large pages.  See bugzilla bug 77540.
   mMaxTextRun = Preferences::GetInt("content.maxtextrun", 8191);
 
-  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::html, nullptr,
                                            kNameSpaceID_XHTML,
                                            nsIDOMNode::ELEMENT_NODE);

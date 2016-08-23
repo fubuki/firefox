@@ -24,10 +24,8 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     LOCAL_INCLUDES += ['win']
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
     osdir = 'win'
-elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
-    osdir = 'android'
-elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
-    osdir = 'gonk'
+elif CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gonk', 'uikit'):
+    osdir = CONFIG['MOZ_WIDGET_TOOLKIT']
 else:
     osdir = 'unix'
 
@@ -36,6 +34,7 @@ EXPORTS += [
 ]
 
 EXPORTS += [
+    'ContentHandlerService.h',
     'nsExternalHelperAppService.h',
 ]
 
@@ -51,8 +50,10 @@ EXPORTS.mozilla.dom += [
 ]
 
 UNIFIED_SOURCES += [
+    'ContentHandlerService.cpp',
     'ExternalHelperAppChild.cpp',
     'ExternalHelperAppParent.cpp',
+    'HandlerServiceParent.cpp',
     'nsExternalHelperAppService.cpp',
     'nsExternalProtocolHandler.cpp',
     'nsLocalHandlerApp.cpp',
@@ -65,13 +66,19 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         'mac/nsMIMEInfoMac.mm',
         'mac/nsOSHelperAppService.mm',
     ]
+elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'uikit':
+    UNIFIED_SOURCES += [
+        'uikit/nsLocalHandlerAppUIKit.mm',
+        'uikit/nsMIMEInfoUIKit.mm',
+        'uikit/nsOSHelperAppService.mm',
+    ]
 else:
     # These files can't be built in unified mode because they redefine LOG.
     SOURCES += [
         osdir + '/nsOSHelperAppService.cpp',
     ]
 
-if CONFIG['MOZ_ENABLE_GTK']:
+if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
     UNIFIED_SOURCES += [
         'unix/nsGNOMERegistry.cpp',
         'unix/nsMIMEInfoUnix.cpp',
@@ -115,9 +122,8 @@ EXTRA_COMPONENTS += [
 
 IPDL_SOURCES += [
     'PExternalHelperApp.ipdl',
+    'PHandlerService.ipdl',
 ]
-
-FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -126,7 +132,7 @@ FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/dom/base',
     '/dom/ipc',
-    '/netwerk/base/src',
+    '/netwerk/base',
     '/netwerk/protocol/http',
 ]
 

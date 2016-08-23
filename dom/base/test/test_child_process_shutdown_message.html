@@ -117,42 +117,36 @@ function expectFrameProcessShutdown(iframe, frameMM, processMM, callback) {
 }
 
 function setUp() {
-  SpecialPowers.setBoolPref("dom.mozBrowserFramesEnabled", true);
-  SpecialPowers.setBoolPref("dom.ipc.browser_frames.oop_by_default", true);
   SpecialPowers.addPermission("browser", true, window.document);
   SpecialPowers.addPermission("embed-apps", true, window.document);
-
-  // TODO: remove in bug 820712
-  SpecialPowers.setBoolPref("network.disable.ipc.security", true);
-
-  runNextTest();
+  // TODO: remove network.disable.ipc.security in bug 820712
+  SpecialPowers.pushPrefEnv({
+    "set": [['dom.mozBrowserFramesEnabled', true],
+            ['dom.ipc.browser_frames.oop_by_default', true],
+            ['network.disable.ipc.security', true]]}, runNextTest);
 }
 
-function makeKillTest(isApp) function testKill() {
-  loadBrowser(isApp, function (iframe) {
-    // We want to make sure we get notified on both the frame and
-    // process message managers.
-    let frameMM = SpecialPowers.getBrowserFrameMessageManager(iframe);
-    prepareProcess(frameMM, function (processMM) {
-      // Let's kill the content process by asking for a permission
-      // that it doesn't have.
-      ok(!processMM.assertPermission("frobnaz"),
-         "Content child should not have this permission");
-      expectFrameProcessShutdown(iframe, frameMM, processMM, function () {
-        iframe.parentNode.removeChild(iframe);
-        runNextTest();
+function makeKillTest(isApp) {
+  return function testKill() {
+    loadBrowser(isApp, function (iframe) {
+      // We want to make sure we get notified on both the frame and
+      // process message managers.
+      let frameMM = SpecialPowers.getBrowserFrameMessageManager(iframe);
+      prepareProcess(frameMM, function (processMM) {
+        // Let's kill the content process by asking for a permission
+        // that it doesn't have.
+        ok(!processMM.assertPermission("frobnaz"),
+           "Content child should not have this permission");
+        expectFrameProcessShutdown(iframe, frameMM, processMM, function () {
+          iframe.parentNode.removeChild(iframe);
+          runNextTest();
+        });
       });
     });
-  });
+  };
 }
 
 function tearDown() {
-  SpecialPowers.clearUserPref("dom.mozBrowserFramesEnabled");
-  SpecialPowers.clearUserPref("dom.ipc.browser_frames.oop_by_default");
-
-  // TODO: remove in bug 820712
-  SpecialPowers.clearUserPref("network.disable.ipc.security");
-
   SimpleTest.finish();
 }
 

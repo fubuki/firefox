@@ -40,7 +40,7 @@ using namespace mozilla::dom;
 namespace mozilla {
 namespace system {
 
-class SettingsServiceCallback MOZ_FINAL : public nsISettingsServiceCallback
+class SettingsServiceCallback final : public nsISettingsServiceCallback
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -61,11 +61,14 @@ public:
     ERR("SettingsCallback::HandleError: %s\n", NS_LossyConvertUTF16toASCII(aName).get());
     return NS_OK;
   }
+
+protected:
+  ~SettingsServiceCallback() {}
 };
 
 NS_IMPL_ISUPPORTS(SettingsServiceCallback, nsISettingsServiceCallback)
 
-class CheckVolumeSettingsCallback MOZ_FINAL : public nsISettingsServiceCallback
+class CheckVolumeSettingsCallback final : public nsISettingsServiceCallback
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -87,6 +90,10 @@ public:
     ERR("CheckVolumeSettingsCallback::HandleError: %s\n", NS_LossyConvertUTF16toASCII(aName).get());
     return NS_OK;
   }
+
+protected:
+  ~CheckVolumeSettingsCallback() {}
+
 private:
   nsCString mVolumeName;
 };
@@ -202,8 +209,8 @@ public:
     settingsService->CreateLock(nullptr, getter_AddRefs(lock));
     // lock may be null if this gets called during shutdown.
     if (lock) {
-      mozilla::AutoSafeJSContext cx;
-      JS::Rooted<JS::Value> value(cx, JS::Int32Value(mStatus));
+      JS::Rooted<JS::Value> value(nsContentUtils::RootingCx(),
+				  JS::Int32Value(mStatus));
       lock->Set(UMS_STATUS, value, nullptr, nullptr);
     }
     return NS_OK;
@@ -273,5 +280,5 @@ AutoMounterSetting::Observe(nsISupports* aSubject,
   return NS_OK;
 }
 
-}   // namespace system
-}   // namespace mozilla
+} // namespace system
+} // namespace mozilla

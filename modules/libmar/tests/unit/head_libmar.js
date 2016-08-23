@@ -1,14 +1,13 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
 
-const isWindows = ("@mozilla.org/windows-registry-key;1" in Components.classes);
-const refMARPrefix = (isWindows ? "win_" : "");
-const BIN_SUFFIX = (isWindows ? ".exe" : "");
+const refMARPrefix = (mozinfo.os == "win" ? "win_" : "");
+const BIN_SUFFIX = mozinfo.bin_suffix;
 
-let tempDir = do_get_tempdir();
+var tempDir = do_get_tempdir();
 
 /**
  * Compares binary data of 2 arrays and throws if they aren't the same.
@@ -103,13 +102,13 @@ function createMAR(outMAR, dataDir, files) {
 
   // Ensure on non Windows platforms we encode the same permissions
   // as the refernence MARs contain.  On Windows this is also safe.
-  // The reference MAR files have permissions of 0664, so in case
+  // The reference MAR files have permissions of 0o664, so in case
   // someone is running these tests locally with another permission
-  // (perhaps 0777), make sure that we encode them as 0664.
+  // (perhaps 0o777), make sure that we encode them as 0o664.
   for (filePath of files) {
     let f = dataDir.clone();
     f.append(filePath);
-    f.permissions = 0664;
+    f.permissions = 0o664;
   }
 
   // Setup the command line arguments to create the MAR.

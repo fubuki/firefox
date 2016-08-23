@@ -17,14 +17,19 @@
 #include "AudioContext.h"
 #include "AudioBuffer.h"
 #include "nsAutoPtr.h"
+#include "nsContentUtils.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScriptError.h"
 #include "nsMimeTypes.h"
 #include "VideoUtils.h"
 #include "WebAudioUtils.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/Telemetry.h"
+#include "nsPrintfCString.h"
 
 namespace mozilla {
+
+extern LazyLogModule gMediaDecoderLog;
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(WebAudioDecodeJob)
 
@@ -50,7 +55,7 @@ NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(WebAudioDecodeJob, Release)
 
 using namespace dom;
 
-class ReportResultTask : public nsRunnable
+class ReportResultTask final : public nsRunnable
 {
 public:
   ReportResultTask(WebAudioDecodeJob& aDecodeJob,
@@ -82,13 +87,14 @@ private:
   WebAudioDecodeJob::ErrorCode mErrorCode;
 };
 
-MOZ_BEGIN_ENUM_CLASS(PhaseEnum, int)
+enum class PhaseEnum : int
+{
   Decode,
   AllocateBuffer,
   Done
-MOZ_END_ENUM_CLASS(PhaseEnum)
+};
 
-class MediaDecodeTask : public nsRunnable
+class MediaDecodeTask final : public nsRunnable
 {
 public:
   MediaDecodeTask(const char* aContentType, uint8_t* aBuffer,
@@ -99,16 +105,10 @@ public:
     , mLength(aLength)
     , mDecodeJob(aDecodeJob)
     , mPhase(PhaseEnum::Decode)
+    , mFirstFrameDecoded(false)
   {
     MOZ_ASSERT(aBuffer);
     MOZ_ASSERT(NS_IsMainThread());
-
-    nsCOMPtr<nsPIDOMWindow> pWindow = do_QueryInterface(mDecodeJob.mContext->GetParentObject());
-    nsCOMPtr<nsIScriptObjectPrincipal> scriptPrincipal =
-      do_QueryInterface(pWindow);
-    if (scriptPrincipal) {
-      mPrincipal = scriptPrincipal->GetPrincipal();
-    }
   }
 
   NS_IMETHOD Run();
@@ -131,8 +131,10 @@ private:
   }
 
   void Decode();
+  void OnMetadataRead(MetadataHolder* aMetadata);
+  void OnMetadataNotRead(ReadMetadataFailureReason aReason);
   void RequestSample();
-  void SampleDecoded(AudioData* aData);
+  void SampleDecoded(MediaData* aData);
   void SampleNotDecoded(MediaDecoderReader::NotDecodedReason aReason);
   void FinishDecode();
   void AllocateBuffer();
@@ -143,7 +145,6 @@ private:
     MOZ_ASSERT(NS_IsMainThread());
     // MediaDecoderReader expects that BufferDecoder is alive.
     // Destruct MediaDecoderReader first.
-    mDecoderReader->BreakCycles();
     mDecoderReader = nullptr;
     mBufferDecoder = nullptr;
     JS_free(nullptr, mBuffer);
@@ -155,11 +156,11 @@ private:
   uint32_t mLength;
   WebAudioDecodeJob& mDecodeJob;
   PhaseEnum mPhase;
-  nsCOMPtr<nsIPrincipal> mPrincipal;
-  nsRefPtr<BufferDecoder> mBufferDecoder;
-  nsRefPtr<MediaDecoderReader> mDecoderReader;
+  RefPtr<BufferDecoder> mBufferDecoder;
+  RefPtr<MediaDecoderReader> mDecoderReader;
   MediaInfo mMediaInfo;
-  MediaQueue<AudioData> mAudioQueue;
+  MediaQueue<MediaData> mAudioQueue;
+  bool mFirstFrameDecoded;
 };
 
 NS_IMETHODIMP
@@ -186,9 +187,16 @@ MediaDecodeTask::CreateReader()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsRefPtr<BufferMediaResource> resource =
+
+  nsCOMPtr<nsIPrincipal> principal;
+  nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mDecodeJob.mContext->GetParentObject());
+  if (sop) {
+    principal = sop->GetPrincipal();
+  }
+
+  RefPtr<BufferMediaResource> resource =
     new BufferMediaResource(static_cast<uint8_t*> (mBuffer),
-                            mLength, mPrincipal, mContentType);
+                            mLength, principal, mContentType);
 
   MOZ_ASSERT(!mBufferDecoder);
   mBufferDecoder = new BufferDecoder(resource);
@@ -202,19 +210,16 @@ MediaDecodeTask::CreateReader()
     return false;
   }
 
-  nsresult rv = mDecoderReader->Init(nullptr);
+  nsresult rv = mDecoderReader->Init();
   if (NS_FAILED(rv)) {
-    return false;
-  }
-
-  if (!mDecoderReader->EnsureTaskQueue()) {
     return false;
   }
 
   return true;
 }
 
-class AutoResampler {
+class AutoResampler final
+{
 public:
   AutoResampler()
     : mResampler(nullptr)
@@ -244,43 +249,71 @@ MediaDecodeTask::Decode()
 {
   MOZ_ASSERT(!NS_IsMainThread());
 
-  mBufferDecoder->BeginDecoding(mDecoderReader->GetTaskQueue());
+  mBufferDecoder->BeginDecoding(mDecoderReader->OwnerThread());
 
   // Tell the decoder reader that we are not going to play the data directly,
   // and that we should not reject files with more channels than the audio
-  // bakend support.
+  // backend support.
   mDecoderReader->SetIgnoreAudioOutputFormat();
 
-  nsAutoPtr<MetadataTags> tags;
-  nsresult rv = mDecoderReader->ReadMetadata(&mMediaInfo, getter_Transfers(tags));
-  if (NS_FAILED(rv)) {
-    mDecoderReader->Shutdown();
-    ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
-    return;
-  }
+  mDecoderReader->AsyncReadMetadata()->Then(mDecoderReader->OwnerThread(), __func__, this,
+                                       &MediaDecodeTask::OnMetadataRead,
+                                       &MediaDecodeTask::OnMetadataNotRead);
+}
 
-  if (!mDecoderReader->HasAudio()) {
+void
+MediaDecodeTask::OnMetadataRead(MetadataHolder* aMetadata)
+{
+  mMediaInfo = aMetadata->mInfo;
+  if (!mMediaInfo.HasAudio()) {
     mDecoderReader->Shutdown();
     ReportFailureOnMainThread(WebAudioDecodeJob::NoAudio);
     return;
   }
 
+  nsCString codec;
+  if (!mMediaInfo.mAudio.GetAsAudioInfo()->mMimeType.IsEmpty()) {
+    codec = nsPrintfCString("webaudio; %s", mMediaInfo.mAudio.GetAsAudioInfo()->mMimeType.get());
+  } else {
+    codec = nsPrintfCString("webaudio;resource; %s", mContentType.get());
+  }
+
+  nsCOMPtr<nsIRunnable> task = NS_NewRunnableFunction([codec]() -> void {
+    MOZ_ASSERT(!codec.IsEmpty());
+    MOZ_LOG(gMediaDecoderLog,
+            LogLevel::Debug,
+            ("Telemetry (WebAudio) MEDIA_CODEC_USED= '%s'", codec.get()));
+    Telemetry::Accumulate(Telemetry::ID::MEDIA_CODEC_USED, codec);
+  });
+  AbstractThread::MainThread()->Dispatch(task.forget());
+
   RequestSample();
+}
+
+void
+MediaDecodeTask::OnMetadataNotRead(ReadMetadataFailureReason aReason)
+{
+  mDecoderReader->Shutdown();
+  ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
 }
 
 void
 MediaDecodeTask::RequestSample()
 {
-  mDecoderReader->RequestAudioData()->Then(mDecoderReader->GetTaskQueue(), __func__, this,
+  mDecoderReader->RequestAudioData()->Then(mDecoderReader->OwnerThread(), __func__, this,
                                            &MediaDecodeTask::SampleDecoded,
                                            &MediaDecodeTask::SampleNotDecoded);
 }
 
 void
-MediaDecodeTask::SampleDecoded(AudioData* aData)
+MediaDecodeTask::SampleDecoded(MediaData* aData)
 {
   MOZ_ASSERT(!NS_IsMainThread());
   mAudioQueue.Push(aData);
+  if (!mFirstFrameDecoded) {
+    mDecoderReader->ReadUpdatedMetadata(&mMediaInfo);
+    mFirstFrameDecoded = true;
+  }
   RequestSample();
 }
 
@@ -333,26 +366,16 @@ MediaDecodeTask::FinishDecode()
   // Allocate the channel buffers.  Note that if we end up resampling, we may
   // write fewer bytes than mResampledFrames to the output buffer, in which
   // case mWriteIndex will tell us how many valid samples we have.
-  static const fallible_t fallible = fallible_t();
-  bool memoryAllocationSuccess = true;
-  if (!mDecodeJob.mChannelBuffers.SetLength(channelCount)) {
-    memoryAllocationSuccess = false;
-  } else {
-    for (uint32_t i = 0; i < channelCount; ++i) {
-      mDecodeJob.mChannelBuffers[i] = new(fallible) float[resampledFrames];
-      if (!mDecodeJob.mChannelBuffers[i]) {
-        memoryAllocationSuccess = false;
-        break;
-      }
-    }
-  }
-  if (!memoryAllocationSuccess) {
+  mDecodeJob.mBuffer = ThreadSharedFloatArrayBufferList::
+    Create(channelCount, resampledFrames, fallible);
+  if (!mDecodeJob.mBuffer) {
     ReportFailureOnMainThread(WebAudioDecodeJob::UnknownError);
     return;
   }
 
-  nsRefPtr<AudioData> audioData;
-  while ((audioData = mAudioQueue.PopFront())) {
+  RefPtr<MediaData> mediaData;
+  while ((mediaData = mAudioQueue.PopFront())) {
+    RefPtr<AudioData> audioData = mediaData->As<AudioData>();
     audioData->EnsureAudioBuffer(); // could lead to a copy :(
     AudioDataValue* bufferData = static_cast<AudioDataValue*>
       (audioData->mAudioBuffer->Data());
@@ -363,11 +386,12 @@ MediaDecodeTask::FinishDecode()
       for (uint32_t i = 0; i < audioData->mChannels; ++i) {
         uint32_t inSamples = audioData->mFrames;
         uint32_t outSamples = maxOutSamples;
+        float* outData =
+          mDecodeJob.mBuffer->GetDataForWrite(i) + mDecodeJob.mWriteIndex;
 
         WebAudioUtils::SpeexResamplerProcess(
             resampler, i, &bufferData[i * audioData->mFrames], &inSamples,
-            mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-            &outSamples);
+            outData, &outSamples);
 
         if (i == audioData->mChannels - 1) {
           mDecodeJob.mWriteIndex += outSamples;
@@ -377,9 +401,10 @@ MediaDecodeTask::FinishDecode()
       }
     } else {
       for (uint32_t i = 0; i < audioData->mChannels; ++i) {
+        float* outData =
+          mDecodeJob.mBuffer->GetDataForWrite(i) + mDecodeJob.mWriteIndex;
         ConvertAudioSamples(&bufferData[i * audioData->mFrames],
-                            mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-                            audioData->mFrames);
+                            outData, audioData->mFrames);
 
         if (i == audioData->mChannels - 1) {
           mDecodeJob.mWriteIndex += audioData->mFrames;
@@ -394,11 +419,12 @@ MediaDecodeTask::FinishDecode()
     for (uint32_t i = 0; i < channelCount; ++i) {
       uint32_t inSamples = inputLatency;
       uint32_t outSamples = maxOutSamples;
+      float* outData =
+        mDecodeJob.mBuffer->GetDataForWrite(i) + mDecodeJob.mWriteIndex;
 
       WebAudioUtils::SpeexResamplerProcess(
           resampler, i, (AudioDataValue*)nullptr, &inSamples,
-          mDecodeJob.mChannelBuffers[i] + mDecodeJob.mWriteIndex,
-          &outSamples);
+          outData, &outSamples);
 
       if (i == channelCount - 1) {
         mDecodeJob.mWriteIndex += outSamples;
@@ -443,25 +469,13 @@ WebAudioDecodeJob::AllocateBuffer()
   MOZ_ASSERT(!mOutput);
   MOZ_ASSERT(NS_IsMainThread());
 
-  AutoJSAPI jsapi;
-  if (NS_WARN_IF(!jsapi.Init(mContext->GetOwner()))) {
-    return false;
-  }
-  JSContext* cx = jsapi.cx();
-
   // Now create the AudioBuffer
   ErrorResult rv;
-  mOutput = AudioBuffer::Create(mContext, mChannelBuffers.Length(),
-                                mWriteIndex, mContext->SampleRate(), cx, rv);
-  if (rv.Failed()) {
-    return false;
-  }
-
-  for (uint32_t i = 0; i < mChannelBuffers.Length(); ++i) {
-    mOutput->SetRawChannelContents(i, mChannelBuffers[i]);
-  }
-
-  return true;
+  uint32_t channelCount = mBuffer->GetChannels();
+  mOutput = AudioBuffer::Create(mContext, channelCount,
+                                mWriteIndex, mContext->SampleRate(),
+                                mBuffer.forget(), rv);
+  return !rv.Failed();
 }
 
 void
@@ -490,7 +504,12 @@ AsyncDecodeWebAudio(const char* aContentType, uint8_t* aBuffer,
                            WebAudioDecodeJob::UnknownError);
     NS_DispatchToMainThread(event);
   } else {
-    task->Reader()->GetTaskQueue()->Dispatch(task);
+    // If we did this without a temporary:
+    //   task->Reader()->OwnerThread()->Dispatch(task.forget())
+    // we might evaluate the task.forget() before calling Reader(). Enforce
+    // a non-crashy order-of-operations.
+    TaskQueue* taskQueue = task->Reader()->OwnerThread();
+    taskQueue->Dispatch(task.forget());
   }
 }
 
@@ -523,15 +542,17 @@ WebAudioDecodeJob::OnSuccess(ErrorCode aErrorCode)
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aErrorCode == NoError);
 
-  // Ignore errors in calling the callback, since there is not much that we can
-  // do about it here.
-  ErrorResult rv;
   if (mSuccessCallback) {
+    ErrorResult rv;
     mSuccessCallback->Call(*mOutput, rv);
+    // Ignore errors in calling the callback, since there is not much that we can
+    // do about it here.
+    rv.SuppressException();
   }
   mPromise->MaybeResolve(mOutput);
 
   mContext->RemoveFromDecodeQueue(this);
+
 }
 
 void
@@ -542,7 +563,7 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
   const char* errorMessage;
   switch (aErrorCode) {
   case NoError:
-    MOZ_ASSERT(false, "Who passed NoError to OnFailure?");
+    MOZ_FALLTHROUGH_ASSERT("Who passed NoError to OnFailure?");
     // Fall through to get some sort of a sane error message if this actually
     // happens at runtime.
   case UnknownError:
@@ -559,9 +580,8 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
     break;
   }
 
-  nsCOMPtr<nsPIDOMWindow> pWindow = do_QueryInterface(mContext->GetParentObject());
   nsIDocument* doc = nullptr;
-  if (pWindow) {
+  if (nsPIDOMWindowInner* pWindow = mContext->GetParentObject()) {
     doc = pWindow->GetExtantDoc();
   }
   nsContentUtils::ReportToConsole(nsIScriptError::errorFlag,
@@ -573,8 +593,7 @@ WebAudioDecodeJob::OnFailure(ErrorCode aErrorCode)
   // Ignore errors in calling the callback, since there is not much that we can
   // do about it here.
   if (mFailureCallback) {
-    ErrorResult rv;
-    mFailureCallback->Call(rv);
+    mFailureCallback->Call();
   }
 
   mPromise->MaybeReject(NS_ERROR_DOM_ENCODING_NOT_SUPPORTED_ERR);
@@ -586,7 +605,7 @@ size_t
 WebAudioDecodeJob::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   size_t amount = 0;
-  amount += mContentType.SizeOfExcludingThisMustBeUnshared(aMallocSizeOf);
+  amount += mContentType.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
   if (mSuccessCallback) {
     amount += mSuccessCallback->SizeOfIncludingThis(aMallocSizeOf);
   }
@@ -596,9 +615,8 @@ WebAudioDecodeJob::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
   if (mOutput) {
     amount += mOutput->SizeOfIncludingThis(aMallocSizeOf);
   }
-  amount += mChannelBuffers.SizeOfExcludingThis(aMallocSizeOf);
-  for (uint32_t i = 0; i < mChannelBuffers.Length(); ++i) {
-    amount += mChannelBuffers[i].SizeOfExcludingThis(aMallocSizeOf);
+  if (mBuffer) {
+    amount += mBuffer->SizeOfIncludingThis(aMallocSizeOf);
   }
   return amount;
 }
@@ -609,5 +627,5 @@ WebAudioDecodeJob::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
 
-}
+} // namespace mozilla
 

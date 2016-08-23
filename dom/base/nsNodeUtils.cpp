@@ -1,11 +1,12 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=99: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsNodeUtils.h"
 #include "nsContentUtils.h"
+#include "nsCSSPseudoElements.h"
 #include "nsINode.h"
 #include "nsIContent.h"
 #include "mozilla/dom/Element.h"
@@ -13,7 +14,7 @@
 #include "nsIDocument.h"
 #include "mozilla/EventListenerManager.h"
 #include "nsIXPConnect.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsIDOMAttr.h"
 #include "nsCOMArray.h"
 #include "nsPIDOMWindow.h"
@@ -23,8 +24,11 @@
 #endif
 #include "nsBindingManager.h"
 #include "nsGenericHTMLElement.h"
+#include "mozilla/Assertions.h"
+#include "mozilla/dom/Animation.h"
 #include "mozilla/dom/HTMLImageElement.h"
 #include "mozilla/dom/HTMLMediaElement.h"
+#include "mozilla/dom/KeyframeEffect.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsObjectLoadingContent.h"
 #include "nsDOMMutationObserver.h"
@@ -70,6 +74,34 @@ using mozilla::AutoJSContext;
   }                                                               \
   PR_END_MACRO
 
+#define IMPL_ANIMATION_NOTIFICATION(func_, content_, params_)     \
+  PR_BEGIN_MACRO                                                  \
+  bool needsEnterLeave = doc->MayHaveDOMMutationObservers();      \
+  if (needsEnterLeave) {                                          \
+    nsDOMMutationObserver::EnterMutationHandling();               \
+  }                                                               \
+  nsINode* node = content_;                                       \
+  do {                                                            \
+    nsINode::nsSlots* slots = node->GetExistingSlots();           \
+    if (slots && !slots->mMutationObservers.IsEmpty()) {          \
+      /* No need to explicitly notify the first observer first    \
+         since that'll happen anyway. */                          \
+      NS_OBSERVER_ARRAY_NOTIFY_OBSERVERS_WITH_QI(                 \
+        slots->mMutationObservers, nsIMutationObserver,           \
+        nsIAnimationObserver, func_, params_);                    \
+    }                                                             \
+    ShadowRoot* shadow = ShadowRoot::FromNode(node);              \
+    if (shadow) {                                                 \
+      node = shadow->GetPoolHost();                               \
+    } else {                                                      \
+      node = node->GetParentNode();                               \
+    }                                                             \
+  } while (node);                                                 \
+  if (needsEnterLeave) {                                          \
+    nsDOMMutationObserver::LeaveMutationHandling();               \
+  }                                                               \
+  PR_END_MACRO
+
 void
 nsNodeUtils::CharacterDataWillChange(nsIContent* aContent,
                                      CharacterDataChangeInfo* aInfo)
@@ -92,24 +124,26 @@ void
 nsNodeUtils::AttributeWillChange(Element* aElement,
                                  int32_t aNameSpaceID,
                                  nsIAtom* aAttribute,
-                                 int32_t aModType)
+                                 int32_t aModType,
+                                 const nsAttrValue* aNewValue)
 {
   nsIDocument* doc = aElement->OwnerDoc();
   IMPL_MUTATION_NOTIFICATION(AttributeWillChange, aElement,
                              (doc, aElement, aNameSpaceID, aAttribute,
-                              aModType));
+                              aModType, aNewValue));
 }
 
 void
 nsNodeUtils::AttributeChanged(Element* aElement,
                               int32_t aNameSpaceID,
                               nsIAtom* aAttribute,
-                              int32_t aModType)
+                              int32_t aModType,
+                              const nsAttrValue* aOldValue)
 {
   nsIDocument* doc = aElement->OwnerDoc();
   IMPL_MUTATION_NOTIFICATION(AttributeChanged, aElement,
                              (doc, aElement, aNameSpaceID, aAttribute,
-                              aModType));
+                              aModType, aOldValue));
 }
 
 void
@@ -132,6 +166,15 @@ nsNodeUtils::ContentAppended(nsIContent* aContainer,
   IMPL_MUTATION_NOTIFICATION(ContentAppended, aContainer,
                              (doc, aContainer, aFirstNewContent,
                               aNewIndexInContainer));
+}
+
+void
+nsNodeUtils::NativeAnonymousChildListChange(nsIContent* aContent,
+                                            bool aIsRemove)
+{
+  nsIDocument* doc = aContent->OwnerDoc();
+  IMPL_MUTATION_NOTIFICATION(NativeAnonymousChildListChange, aContent,
+                            (doc, aContent, aIsRemove));
 }
 
 void
@@ -184,6 +227,61 @@ nsNodeUtils::ContentRemoved(nsINode* aContainer,
                               aPreviousSibling));
 }
 
+Maybe<NonOwningAnimationTarget>
+nsNodeUtils::GetTargetForAnimation(const Animation* aAnimation)
+{
+  KeyframeEffectReadOnly* effect = aAnimation->GetEffect();
+  return effect ? effect->GetTarget() : Nothing();
+}
+
+void
+nsNodeUtils::AnimationMutated(Animation* aAnimation,
+                              AnimationMutationType aMutatedType)
+{
+  Maybe<NonOwningAnimationTarget> target = GetTargetForAnimation(aAnimation);
+  if (!target) {
+    return;
+  }
+
+  // A pseudo element and its parent element use the same owner doc.
+  nsIDocument* doc = target->mElement->OwnerDoc();
+  if (doc->MayHaveAnimationObservers()) {
+    // we use the its parent element as the subject in DOM Mutation Observer.
+    Element* elem = target->mElement;
+    switch (aMutatedType) {
+      case AnimationMutationType::Added:
+        IMPL_ANIMATION_NOTIFICATION(AnimationAdded, elem, (aAnimation));
+        break;
+      case AnimationMutationType::Changed:
+        IMPL_ANIMATION_NOTIFICATION(AnimationChanged, elem, (aAnimation));
+        break;
+      case AnimationMutationType::Removed:
+        IMPL_ANIMATION_NOTIFICATION(AnimationRemoved, elem, (aAnimation));
+        break;
+      default:
+        MOZ_ASSERT_UNREACHABLE("unexpected mutation type");
+    }
+  }
+}
+
+void
+nsNodeUtils::AnimationAdded(Animation* aAnimation)
+{
+  AnimationMutated(aAnimation, AnimationMutationType::Added);
+}
+
+void
+nsNodeUtils::AnimationChanged(Animation* aAnimation)
+{
+  AnimationMutated(aAnimation, AnimationMutationType::Changed);
+}
+
+void
+nsNodeUtils::AnimationRemoved(Animation* aAnimation)
+{
+  AnimationMutated(aAnimation, AnimationMutationType::Removed);
+}
+
 void
 nsNodeUtils::LastRelease(nsINode* aNode)
 {
@@ -223,7 +321,7 @@ nsNodeUtils::LastRelease(nsINode* aNode)
       static_cast<nsGenericHTMLFormElement*>(aNode)->ClearForm(true);
     }
 
-    if (aNode->IsElement() && aNode->AsElement()->IsHTML(nsGkAtoms::img) &&
+    if (aNode->IsHTMLElement(nsGkAtoms::img) &&
         aNode->HasFlag(ADDED_TO_FORM)) {
       HTMLImageElement* imageElem = static_cast<HTMLImageElement*>(aNode);
       imageElem->ClearForm(true);
@@ -261,7 +359,8 @@ nsNodeUtils::LastRelease(nsINode* aNode)
     // attached
     if (aNode->HasFlag(NODE_FORCE_XBL_BINDINGS) &&
         ownerDoc->BindingManager()) {
-      ownerDoc->BindingManager()->RemovedFromDocument(elem, ownerDoc);
+      ownerDoc->BindingManager()->RemovedFromDocument(elem, ownerDoc,
+                                                      nsBindingManager::eRunDtor);
     }
   }
 
@@ -332,7 +431,7 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
 
   // aNode.
   NodeInfo *nodeInfo = aNode->mNodeInfo;
-  nsRefPtr<NodeInfo> newNodeInfo;
+  RefPtr<NodeInfo> newNodeInfo;
   if (nodeInfoManager) {
 
     // Don't allow importing/adopting nodes from non-privileged "scriptable"
@@ -418,8 +517,7 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
         newDoc->RegisterActivityObserver(aNode->AsElement());
       }
 
-      nsPIDOMWindow* window = newDoc->GetInnerWindow();
-      if (window) {
+      if (nsPIDOMWindowInner* window = newDoc->GetInnerWindow()) {
         EventListenerManager* elm = aNode->GetExistingListenerManager();
         if (elm) {
           window->SetMutationListeners(elm->MutationListenerBits());
@@ -428,9 +526,6 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
           }
           if (elm->MayHaveTouchEventListener()) {
             window->SetHasTouchEventListeners();
-          }
-          if (elm->MayHaveScrollWheelEventListener()) {
-            window->SetHasScrollWheelEventListeners();
           }
           if (elm->MayHaveMouseEnterLeaveEventListener()) {
             window->SetHasMouseEnterLeaveEventListeners();
@@ -459,6 +554,10 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
       newDoc->SetMayHaveDOMMutationObservers();
     }
 
+    if (oldDoc != newDoc && oldDoc->MayHaveAnimationObservers()) {
+      newDoc->SetMayHaveAnimationObservers();
+    }
+
     if (elem) {
       elem->RecompileScriptEventListeners();
     }
@@ -466,17 +565,9 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
     if (aReparentScope) {
       JS::Rooted<JSObject*> wrapper(cx);
       if ((wrapper = aNode->GetWrapper())) {
-        if (IsDOMObject(wrapper)) {
-          JSAutoCompartment ac(cx, wrapper);
-          rv = ReparentWrapper(cx, wrapper);
-        } else {
-          nsIXPConnect *xpc = nsContentUtils::XPConnect();
-          if (xpc) {
-            rv = xpc->ReparentWrappedNativeIfFound(cx, wrapper, aReparentScope, aNode);
-          } else {
-            rv = NS_ERROR_FAILURE;
-          }
-        }
+        MOZ_ASSERT(IsDOMObject(wrapper));
+        JSAutoCompartment ac(cx, wrapper);
+        rv = ReparentWrapper(cx, wrapper);
         if (NS_FAILED(rv)) {
           aNode->mNodeInfo.swap(nodeInfo);
 
@@ -534,8 +625,7 @@ nsNodeUtils::CloneAndAdopt(nsINode *aNode, bool aClone, bool aDeep,
   // cloning, so kids of the new node aren't confused about whether they're
   // in a document.
 #ifdef MOZ_XUL
-  if (aClone && !aParent && aNode->IsElement() &&
-      aNode->AsElement()->IsXUL()) {
+  if (aClone && !aParent && aNode->IsXULElement()) {
     if (!aNode->OwnerDoc()->IsLoadedAsInteractiveData()) {
       clone->SetFlags(NODE_FORCE_XBL_BINDINGS);
     }
@@ -572,7 +662,7 @@ nsNodeUtils::UnlinkUserData(nsINode *aNode)
 bool
 nsNodeUtils::IsTemplateElement(const nsINode *aNode)
 {
-  return aNode->IsElement() && aNode->AsElement()->IsHTML(nsGkAtoms::_template);
+  return aNode->IsHTMLElement(nsGkAtoms::_template);
 }
 
 nsIContent*

@@ -12,6 +12,7 @@
 #include "BorrowedContext.h"
 #include "FilterNodeSoftware.h"
 #include "mozilla/Scoped.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
 
 #include "cairo.h"
@@ -24,7 +25,9 @@
 
 #ifdef CAIRO_HAS_QUARTZ_SURFACE
 #include "cairo-quartz.h"
+#ifdef MOZ_WIDGET_COCOA
 #include <ApplicationServices/ApplicationServices.h>
+#endif
 #endif
 
 #ifdef CAIRO_HAS_XLIB_SURFACE
@@ -35,6 +38,9 @@
 #ifdef CAIRO_HAS_WIN32_SURFACE
 #include "cairo-win32.h"
 #endif
+
+#define PIXMAN_DONT_DEFINE_STDINT
+#include "pixman.h"
 
 #include <algorithm>
 
@@ -210,6 +216,8 @@ CopyToImageSurface(unsigned char *aData,
                    int32_t aStride,
                    SurfaceFormat aFormat)
 {
+  MOZ_ASSERT(aData);
+
   cairo_surface_t* surf = cairo_image_surface_create(GfxFormatToCairoFormat(aFormat),
                                                      aRect.width,
                                                      aRect.height);
@@ -218,6 +226,7 @@ CopyToImageSurface(unsigned char *aData,
   // investigation hasn't been done to determine the underlying cause.  We
   // will just handle the failure to allocate the surface to avoid a crash.
   if (cairo_surface_status(surf)) {
+    gfxWarning() << "Invalid surface DTC " << cairo_surface_status(surf);
     return nullptr;
   }
 
@@ -262,6 +271,10 @@ cairo_surface_t* CreateSubImageForData(unsigned char* aData,
                                        int aStride,
                                        SurfaceFormat aFormat)
 {
+  if (!aData) {
+    gfxWarning() << "DrawTargetCairo.CreateSubImageForData null aData";
+    return nullptr;
+  }
   unsigned char *data = aData +
                         aRect.y * aStride +
                         aRect.x * BytesPerPixel(aFormat);
@@ -324,6 +337,10 @@ GetCairoSurfaceForSourceSurface(SourceSurface *aSurface,
                                 bool aExistingOnly = false,
                                 const IntRect& aSubImage = IntRect())
 {
+  if (!aSurface) {
+    return nullptr;
+  }
+
   IntRect subimage = IntRect(IntPoint(), aSurface->GetSize());
   if (!aSubImage.IsEmpty()) {
     MOZ_ASSERT(!aExistingOnly);
@@ -374,8 +391,8 @@ GetCairoSurfaceForSourceSurface(SourceSurface *aSurface,
   // covers the details of how to run into it, but the full detailed
   // investigation hasn't been done to determine the underlying cause.  We
   // will just handle the failure to allocate the surface to avoid a crash.
-  if (cairo_surface_status(surf)) {
-    if (cairo_surface_status(surf) == CAIRO_STATUS_INVALID_STRIDE) {
+  if (!surf || cairo_surface_status(surf)) {
+    if (surf && (cairo_surface_status(surf) == CAIRO_STATUS_INVALID_STRIDE)) {
       // If we failed because of an invalid stride then copy into
       // a new surface with a stride that cairo chooses. No need to
       // set user data since we're not dependent on the original
@@ -407,6 +424,8 @@ class AutoClearDeviceOffset
 public:
   explicit AutoClearDeviceOffset(SourceSurface* aSurface)
     : mSurface(nullptr)
+    , mX(0)
+    , mY(0)
   {
     Init(aSurface);
   }
@@ -449,6 +468,17 @@ private:
   double mY;
 };
 
+static inline void
+CairoPatternAddGradientStop(cairo_pattern_t* aPattern,
+                            const GradientStop &aStop,
+                            Float aNudge = 0)
+{
+  cairo_pattern_add_color_stop_rgba(aPattern, aStop.offset + aNudge,
+                                    aStop.color.r, aStop.color.g, aStop.color.b,
+                                    aStop.color.a);
+
+}
+
 // Never returns nullptr. As such, you must always pass in Cairo-compatible
 // patterns, most notably gradients with a GradientStopCairo.
 // The pattern returned must have cairo_pattern_destroy() called on it by the
@@ -457,7 +487,9 @@ private:
 // lifetime of the cairo_pattern_t returned must not exceed the lifetime of the
 // Pattern passed in.
 static cairo_pattern_t*
-GfxPatternToCairoPattern(const Pattern& aPattern, Float aAlpha)
+GfxPatternToCairoPattern(const Pattern& aPattern,
+                         Float aAlpha,
+                         const Matrix& aTransform)
 {
   cairo_pattern_t* pat;
   const Matrix* matrix = nullptr;
@@ -505,10 +537,7 @@ GfxPatternToCairoPattern(const Pattern& aPattern, Float aAlpha)
 
       const std::vector<GradientStop>& stops = cairoStops->GetStops();
       for (size_t i = 0; i < stops.size(); ++i) {
-        const GradientStop& stop = stops[i];
-        cairo_pattern_add_color_stop_rgba(pat, stop.offset, stop.color.r,
-                                          stop.color.g, stop.color.b,
-                                          stop.color.a);
+        CairoPatternAddGradientStop(pat, stops[i]);
       }
 
       break;
@@ -528,10 +557,7 @@ GfxPatternToCairoPattern(const Pattern& aPattern, Float aAlpha)
 
       const std::vector<GradientStop>& stops = cairoStops->GetStops();
       for (size_t i = 0; i < stops.size(); ++i) {
-        const GradientStop& stop = stops[i];
-        cairo_pattern_add_color_stop_rgba(pat, stop.offset, stop.color.r,
-                                          stop.color.g, stop.color.b,
-                                          stop.color.a);
+        CairoPatternAddGradientStop(pat, stops[i]);
       }
 
       break;
@@ -573,6 +599,7 @@ NeedIntermediateSurface(const Pattern& aPattern, const DrawOptions& aOptions)
 DrawTargetCairo::DrawTargetCairo()
   : mContext(nullptr)
   , mSurface(nullptr)
+  , mTransformSingular(false)
   , mLockedBits(nullptr)
 {
 }
@@ -582,8 +609,16 @@ DrawTargetCairo::~DrawTargetCairo()
   cairo_destroy(mContext);
   if (mSurface) {
     cairo_surface_destroy(mSurface);
+    mSurface = nullptr;
   }
   MOZ_ASSERT(!mLockedBits);
+}
+
+bool
+DrawTargetCairo::IsValid() const
+{
+  return mSurface && !cairo_surface_status(mSurface) &&
+         mContext && !cairo_surface_status(cairo_get_group_target(mContext));
 }
 
 DrawTargetType
@@ -614,8 +649,7 @@ DrawTargetCairo::GetType() const
 
     case CAIRO_SURFACE_TYPE_SKIA:
     case CAIRO_SURFACE_TYPE_QT:
-      MOZ_ASSERT(false, "Can't determine actual DrawTargetType for DrawTargetCairo - assuming SOFTWARE_RASTER");
-      // fallthrough
+      MOZ_FALLTHROUGH_ASSERT("Can't determine actual DrawTargetType for DrawTargetCairo - assuming SOFTWARE_RASTER");
     case CAIRO_SURFACE_TYPE_IMAGE:
     case CAIRO_SURFACE_TYPE_XLIB:
     case CAIRO_SURFACE_TYPE_XCB:
@@ -627,13 +661,10 @@ DrawTargetCairo::GetType() const
     case CAIRO_SURFACE_TYPE_RECORDING:
     case CAIRO_SURFACE_TYPE_DRM:
     case CAIRO_SURFACE_TYPE_SUBSURFACE:
-#ifdef CAIRO_HAS_D2D_SURFACE
-    case CAIRO_SURFACE_TYPE_D2D:
-#endif
     case CAIRO_SURFACE_TYPE_TEE: // included to silence warning about unhandled enum value
       return DrawTargetType::SOFTWARE_RASTER;
     default:
-      MOZ_CRASH("Unsupported cairo surface type");
+      MOZ_CRASH("GFX: Unsupported cairo surface type");
     }
   }
   MOZ_ASSERT(false, "Could not determine DrawTargetType for DrawTargetCairo");
@@ -646,11 +677,33 @@ DrawTargetCairo::GetSize()
   return mSize;
 }
 
-TemporaryRef<SourceSurface>
+SurfaceFormat
+GfxFormatForCairoSurface(cairo_surface_t* surface)
+{
+  cairo_surface_type_t type = cairo_surface_get_type(surface);
+  if (type == CAIRO_SURFACE_TYPE_IMAGE) {
+    return CairoFormatToGfxFormat(cairo_image_surface_get_format(surface));
+  }
+#ifdef CAIRO_HAS_XLIB_SURFACE
+  // xlib is currently the only Cairo backend that creates 16bpp surfaces
+  if (type == CAIRO_SURFACE_TYPE_XLIB &&
+      cairo_xlib_surface_get_depth(surface) == 16) {
+    return SurfaceFormat::R5G6B5_UINT16;
+  }
+#endif
+  return CairoContentToGfxFormat(cairo_surface_get_content(surface));
+}
+
+already_AddRefed<SourceSurface>
 DrawTargetCairo::Snapshot()
 {
+  if (!IsValid()) {
+    gfxCriticalNote << "DrawTargetCairo::Snapshot with bad surface " << cairo_surface_status(mSurface);
+    return nullptr;
+  }
   if (mSnapshot) {
-    return mSnapshot;
+    RefPtr<SourceSurface> snapshot(mSnapshot);
+    return snapshot.forget();
   }
 
   IntSize size = GetSize();
@@ -659,21 +712,47 @@ DrawTargetCairo::Snapshot()
                                      size,
                                      GfxFormatForCairoSurface(mSurface),
                                      this);
-  return mSnapshot;
+  RefPtr<SourceSurface> snapshot(mSnapshot);
+  return snapshot.forget();
 }
 
 bool
 DrawTargetCairo::LockBits(uint8_t** aData, IntSize* aSize,
-                          int32_t* aStride, SurfaceFormat* aFormat)
+                          int32_t* aStride, SurfaceFormat* aFormat,
+                          IntPoint* aOrigin)
 {
-  if (cairo_surface_get_type(mSurface) == CAIRO_SURFACE_TYPE_IMAGE) {
-    WillChange();
+  cairo_surface_t* target = cairo_get_group_target(mContext);
+  cairo_surface_t* surf = target;
+#ifdef CAIRO_HAS_WIN32_SURFACE
+  if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_WIN32) {
+    cairo_surface_t* imgsurf = cairo_win32_surface_get_image(surf);
+    if (imgsurf) {
+      surf = imgsurf;
+    }
+  }
+#endif
+  if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_IMAGE) {
+    PointDouble offset;
+    cairo_surface_get_device_offset(target, &offset.x, &offset.y);
+    // verify the device offset can be converted to integers suitable for a bounds rect
+    IntPoint origin(int32_t(-offset.x), int32_t(-offset.y));
+    if (-PointDouble(origin) != offset ||
+        (!aOrigin && origin != IntPoint())) {
+      return false;
+    }
 
-    mLockedBits = cairo_image_surface_get_data(mSurface);
+    WillChange();
+    Flush();
+
+    mLockedBits = cairo_image_surface_get_data(surf);
     *aData = mLockedBits;
-    *aSize = GetSize();
-    *aStride = cairo_image_surface_get_stride(mSurface);
-    *aFormat = GetFormat();
+    *aSize = IntSize(cairo_image_surface_get_width(surf),
+                     cairo_image_surface_get_height(surf));
+    *aStride = cairo_image_surface_get_stride(surf);
+    *aFormat = CairoFormatToGfxFormat(cairo_image_surface_get_format(surf));
+    if (aOrigin) {
+      *aOrigin = origin;
+    }
     return true;
   }
 
@@ -685,12 +764,22 @@ DrawTargetCairo::ReleaseBits(uint8_t* aData)
 {
   MOZ_ASSERT(mLockedBits == aData);
   mLockedBits = nullptr;
+  cairo_surface_t* surf = cairo_get_group_target(mContext);
+#ifdef CAIRO_HAS_WIN32_SURFACE
+  if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_WIN32) {
+    cairo_surface_t* imgsurf = cairo_win32_surface_get_image(surf);
+    if (imgsurf) {
+      cairo_surface_mark_dirty(imgsurf);
+    }
+  }
+#endif
+  cairo_surface_mark_dirty(surf);
 }
 
 void
 DrawTargetCairo::Flush()
 {
-  cairo_surface_t* surf = cairo_get_target(mContext);
+  cairo_surface_t* surf = cairo_get_group_target(mContext);
   cairo_surface_flush(surf);
 }
 
@@ -712,6 +801,27 @@ DrawTargetCairo::GetDummySurface()
   return mDummySurface;
 }
 
+static void
+PaintWithAlpha(cairo_t* aContext, const DrawOptions& aOptions)
+{
+  if (aOptions.mCompositionOp == CompositionOp::OP_SOURCE) {
+    // Cairo treats the source operator like a lerp when alpha is < 1.
+    // Approximate the desired operator by: out = 0; out += src*alpha;
+    if (aOptions.mAlpha == 1) {
+      cairo_set_operator(aContext, CAIRO_OPERATOR_SOURCE);
+      cairo_paint(aContext);
+    } else {
+      cairo_set_operator(aContext, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(aContext);
+      cairo_set_operator(aContext, CAIRO_OPERATOR_ADD);
+      cairo_paint_with_alpha(aContext, aOptions.mAlpha);
+    }
+  } else {
+    cairo_set_operator(aContext, GfxOpToCairoOp(aOptions.mCompositionOp));
+    cairo_paint_with_alpha(aContext, aOptions.mAlpha);
+  }
+}
+
 void
 DrawTargetCairo::DrawSurface(SourceSurface *aSurface,
                              const Rect &aDest,
@@ -719,6 +829,15 @@ DrawTargetCairo::DrawSurface(SourceSurface *aSurface,
                              const DrawSurfaceOptions &aSurfOptions,
                              const DrawOptions &aOptions)
 {
+  if (mTransformSingular || aDest.IsEmpty()) {
+    return;
+  }
+
+  if (!IsValid() || !aSurface) {
+    gfxCriticalNote << "DrawSurface with bad surface " << cairo_surface_status(cairo_get_group_target(mContext));
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
   AutoClearDeviceOffset clear(aSurface);
 
@@ -760,9 +879,7 @@ DrawTargetCairo::DrawSurface(SourceSurface *aSurface,
     cairo_set_source(mContext, pat);
   }
 
-  cairo_set_operator(mContext, GfxOpToCairoOp(aOptions.mCompositionOp));
-
-  cairo_paint_with_alpha(mContext, aOptions.mAlpha);
+  PaintWithAlpha(mContext, aOptions);
 
   cairo_pattern_destroy(pat);
 }
@@ -863,7 +980,7 @@ DrawTargetCairo::DrawPattern(const Pattern& aPattern,
 
   AutoClearDeviceOffset clear(aPattern);
 
-  cairo_pattern_t* pat = GfxPatternToCairoPattern(aPattern, aOptions.mAlpha);
+  cairo_pattern_t* pat = GfxPatternToCairoPattern(aPattern, aOptions.mAlpha, GetTransform());
   if (!pat) {
     return;
   }
@@ -894,8 +1011,7 @@ DrawTargetCairo::DrawPattern(const Pattern& aPattern,
     cairo_pop_group_to_source(mContext);
 
     // Now draw the content using the desired operator
-    cairo_set_operator(mContext, GfxOpToCairoOp(aOptions.mCompositionOp));
-    cairo_paint_with_alpha(mContext, aOptions.mAlpha);
+    PaintWithAlpha(mContext, aOptions);
   } else {
     cairo_set_operator(mContext, GfxOpToCairoOp(aOptions.mCompositionOp));
 
@@ -915,6 +1031,10 @@ DrawTargetCairo::FillRect(const Rect &aRect,
                           const Pattern &aPattern,
                           const DrawOptions &aOptions)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
 
   bool restoreTransform = false;
@@ -969,7 +1089,7 @@ DrawTargetCairo::CopySurfaceInternal(cairo_surface_t* aSurface,
                                      const IntPoint &aDest)
 {
   if (cairo_surface_status(aSurface)) {
-    gfxWarning() << "Invalid surface";
+    gfxWarning() << "Invalid surface" << cairo_surface_status(aSurface);
     return;
   }
 
@@ -990,6 +1110,10 @@ DrawTargetCairo::CopySurface(SourceSurface *aSurface,
                              const IntRect &aSource,
                              const IntPoint &aDest)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
   AutoClearDeviceOffset clear(aSurface);
 
@@ -1012,6 +1136,10 @@ void
 DrawTargetCairo::CopyRect(const IntRect &aSource,
                           const IntPoint &aDest)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
 
   IntRect source = aSource;
@@ -1044,12 +1172,16 @@ DrawTargetCairo::CopyRect(const IntRect &aSource,
 void
 DrawTargetCairo::ClearRect(const Rect& aRect)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
 
   if (!mContext || aRect.Width() <= 0 || aRect.Height() <= 0 ||
       !IsFinite(aRect.X()) || !IsFinite(aRect.Width()) ||
       !IsFinite(aRect.Y()) || !IsFinite(aRect.Height())) {
-    gfxCriticalError(CriticalLog::DefaultOptions(false)) << "ClearRect with invalid argument " << gfx::hexa(mContext) << " with " << aRect.Width() << "x" << aRect.Height() << " [" << aRect.X() << ", " << aRect.Y() << "]";
+    gfxCriticalNote << "ClearRect with invalid argument " << gfx::hexa(mContext) << " with " << aRect.Width() << "x" << aRect.Height() << " [" << aRect.X() << ", " << aRect.Y() << "]";
   }
 
   cairo_set_antialias(mContext, CAIRO_ANTIALIAS_NONE);
@@ -1066,6 +1198,10 @@ DrawTargetCairo::StrokeRect(const Rect &aRect,
                             const StrokeOptions &aStrokeOptions /* = StrokeOptions() */,
                             const DrawOptions &aOptions /* = DrawOptions() */)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
 
   cairo_new_path(mContext);
@@ -1081,6 +1217,10 @@ DrawTargetCairo::StrokeLine(const Point &aStart,
                             const StrokeOptions &aStrokeOptions /* = StrokeOptions() */,
                             const DrawOptions &aOptions /* = DrawOptions() */)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
 
   cairo_new_path(mContext);
@@ -1096,6 +1236,10 @@ DrawTargetCairo::Stroke(const Path *aPath,
                         const StrokeOptions &aStrokeOptions /* = StrokeOptions() */,
                         const DrawOptions &aOptions /* = DrawOptions() */)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext, aPath);
 
   if (aPath->GetBackendType() != BackendType::CAIRO)
@@ -1112,6 +1256,10 @@ DrawTargetCairo::Fill(const Path *aPath,
                       const Pattern &aPattern,
                       const DrawOptions &aOptions /* = DrawOptions() */)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext, aPath);
 
   if (aPath->GetBackendType() != BackendType::CAIRO)
@@ -1123,12 +1271,24 @@ DrawTargetCairo::Fill(const Path *aPath,
   DrawPattern(aPattern, StrokeOptions(), aOptions, DRAW_FILL);
 }
 
+bool
+DrawTargetCairo::IsCurrentGroupOpaque()
+{
+  cairo_surface_t* surf = cairo_get_group_target(mContext);
+
+  if (!surf) {
+    return false;
+  }
+
+  return cairo_surface_get_content(surf) == CAIRO_CONTENT_COLOR;
+}
+
 void
 DrawTargetCairo::SetPermitSubpixelAA(bool aPermitSubpixelAA)
 {
   DrawTarget::SetPermitSubpixelAA(aPermitSubpixelAA);
 #ifdef MOZ_TREE_CAIRO
-  cairo_surface_set_subpixel_antialiasing(mSurface,
+  cairo_surface_set_subpixel_antialiasing(cairo_get_group_target(mContext),
     aPermitSubpixelAA ? CAIRO_SUBPIXEL_ANTIALIASING_ENABLED : CAIRO_SUBPIXEL_ANTIALIASING_DISABLED);
 #endif
 }
@@ -1140,13 +1300,27 @@ DrawTargetCairo::FillGlyphs(ScaledFont *aFont,
                             const DrawOptions &aOptions,
                             const GlyphRenderingOptions*)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
+  if (!IsValid()) {
+    gfxDebug() << "FillGlyphs bad surface " << cairo_surface_status(cairo_get_group_target(mContext));
+    return;
+  }
+
+  if (!aFont) {
+    gfxDevCrash(LogReason::InvalidFont) << "Invalid scaled font";
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
   AutoClearDeviceOffset clear(aPattern);
 
   ScaledFontBase* scaledFont = static_cast<ScaledFontBase*>(aFont);
   cairo_set_scaled_font(mContext, scaledFont->GetCairoScaledFont());
 
-  cairo_pattern_t* pat = GfxPatternToCairoPattern(aPattern, aOptions.mAlpha);
+  cairo_pattern_t* pat = GfxPatternToCairoPattern(aPattern, aOptions.mAlpha, GetTransform());
   if (!pat)
     return;
 
@@ -1163,7 +1337,8 @@ DrawTargetCairo::FillGlyphs(ScaledFont *aFont,
   // allocation in ~99% of cases.
   Vector<cairo_glyph_t, 1024 / sizeof(cairo_glyph_t)> glyphs;
   if (!glyphs.resizeUninitialized(aBuffer.mNumGlyphs)) {
-    MOZ_CRASH("glyphs allocation failed");
+    gfxDevCrash(LogReason::GlyphAllocFailedCairo) << "glyphs allocation failed";
+    return;
   }
   for (uint32_t i = 0; i < aBuffer.mNumGlyphs; ++i) {
     glyphs[i].index = aBuffer.mGlyphs[i].mIndex;
@@ -1172,6 +1347,10 @@ DrawTargetCairo::FillGlyphs(ScaledFont *aFont,
   }
 
   cairo_show_glyphs(mContext, &glyphs[0], aBuffer.mNumGlyphs);
+
+  if (cairo_surface_status(cairo_get_group_target(mContext))) {
+    gfxDebug() << "Ending FillGlyphs with a bad surface " << cairo_surface_status(cairo_get_group_target(mContext));
+  }
 }
 
 void
@@ -1179,18 +1358,22 @@ DrawTargetCairo::Mask(const Pattern &aSource,
                       const Pattern &aMask,
                       const DrawOptions &aOptions /* = DrawOptions() */)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
   AutoClearDeviceOffset clearSource(aSource);
   AutoClearDeviceOffset clearMask(aMask);
 
   cairo_set_antialias(mContext, GfxAntialiasToCairoAntialias(aOptions.mAntialiasMode));
 
-  cairo_pattern_t* source = GfxPatternToCairoPattern(aSource, aOptions.mAlpha);
+  cairo_pattern_t* source = GfxPatternToCairoPattern(aSource, aOptions.mAlpha, GetTransform());
   if (!source) {
     return;
   }
 
-  cairo_pattern_t* mask = GfxPatternToCairoPattern(aMask, aOptions.mAlpha);
+  cairo_pattern_t* mask = GfxPatternToCairoPattern(aMask, aOptions.mAlpha, GetTransform());
   if (!mask) {
     cairo_pattern_destroy(source);
     return;
@@ -1204,6 +1387,7 @@ DrawTargetCairo::Mask(const Pattern &aSource,
   }
 
   cairo_set_source(mContext, source);
+  cairo_set_operator(mContext, GfxOpToCairoOp(aOptions.mCompositionOp));
   cairo_mask(mContext, mask);
 
   cairo_pattern_destroy(mask);
@@ -1216,6 +1400,10 @@ DrawTargetCairo::MaskSurface(const Pattern &aSource,
                              Point aOffset,
                              const DrawOptions &aOptions)
 {
+  if (mTransformSingular) {
+    return;
+  }
+
   AutoPrepareForDrawing prep(this, mContext);
   AutoClearDeviceOffset clearSource(aSource);
   AutoClearDeviceOffset clearMask(aMask);
@@ -1226,7 +1414,7 @@ DrawTargetCairo::MaskSurface(const Pattern &aSource,
 
   cairo_set_antialias(mContext, GfxAntialiasToCairoAntialias(aOptions.mAntialiasMode));
 
-  cairo_pattern_t* pat = GfxPatternToCairoPattern(aSource, aOptions.mAlpha);
+  cairo_pattern_t* pat = GfxPatternToCairoPattern(aSource, aOptions.mAlpha, GetTransform());
   if (!pat) {
     return;
   }
@@ -1282,7 +1470,13 @@ DrawTargetCairo::PushClip(const Path *aPath)
   cairo_save(mContext);
 
   PathCairo* path = const_cast<PathCairo*>(static_cast<const PathCairo*>(aPath));
-  path->SetPathOnContext(mContext);
+
+  if (mTransformSingular) {
+    cairo_new_path(mContext);
+    cairo_rectangle(mContext, 0, 0, 0, 0);
+  } else {
+    path->SetPathOnContext(mContext);
+  }
   cairo_clip_preserve(mContext);
 }
 
@@ -1293,7 +1487,11 @@ DrawTargetCairo::PushClipRect(const Rect& aRect)
   cairo_save(mContext);
 
   cairo_new_path(mContext);
-  cairo_rectangle(mContext, aRect.X(), aRect.Y(), aRect.Width(), aRect.Height());
+  if (mTransformSingular) {
+    cairo_rectangle(mContext, 0, 0, 0, 0);
+  } else {
+    cairo_rectangle(mContext, aRect.X(), aRect.Y(), aRect.Width(), aRect.Height());
+  }
   cairo_clip_preserve(mContext);
 }
 
@@ -1310,15 +1508,93 @@ DrawTargetCairo::PopClip()
   cairo_restore(mContext);
 
   cairo_set_matrix(mContext, &mat);
+}
+ 
+void
+DrawTargetCairo::PushLayer(bool aOpaque, Float aOpacity, SourceSurface* aMask,
+                          const Matrix& aMaskTransform, const IntRect& aBounds,
+                          bool aCopyBackground)
+{
+  cairo_content_t content = CAIRO_CONTENT_COLOR_ALPHA;
 
-  MOZ_ASSERT(cairo_status(mContext) || GetTransform() == Matrix(mat.xx, mat.yx, mat.xy, mat.yy, mat.x0, mat.y0),
-             "Transforms are out of sync");
+  if (mFormat == SurfaceFormat::A8) {
+    content = CAIRO_CONTENT_ALPHA;
+  } else if (aOpaque) {
+    content = CAIRO_CONTENT_COLOR;
+  }
+
+  if (aCopyBackground) {
+    cairo_surface_t* source = cairo_get_group_target(mContext);
+    cairo_push_group_with_content(mContext, content);
+    cairo_surface_t* dest = cairo_get_group_target(mContext);
+    cairo_t* ctx = cairo_create(dest);
+    cairo_set_source_surface(ctx, source, 0, 0);
+    cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(ctx);
+    cairo_destroy(ctx);
+  } else {
+    cairo_push_group_with_content(mContext, content);
+  }
+
+  PushedLayer layer(aOpacity, mPermitSubpixelAA);
+
+  if (aMask) {
+    cairo_surface_t* surf = GetCairoSurfaceForSourceSurface(aMask);
+    if (surf) {
+      layer.mMaskPattern = cairo_pattern_create_for_surface(surf);
+      cairo_matrix_t mat;
+      GfxMatrixToCairoMatrix(aMaskTransform, mat);
+      cairo_matrix_invert(&mat);
+      cairo_pattern_set_matrix(layer.mMaskPattern, &mat);
+      cairo_surface_destroy(surf);
+    } else {
+      gfxCriticalError() << "Failed to get cairo surface for mask surface!";
+    }
+  }
+
+  mPushedLayers.push_back(layer);
+
+  SetPermitSubpixelAA(aOpaque);
 }
 
-TemporaryRef<PathBuilder>
+void
+DrawTargetCairo::PopLayer()
+{
+  MOZ_ASSERT(mPushedLayers.size());
+
+  cairo_set_operator(mContext, CAIRO_OPERATOR_OVER);
+
+  cairo_pop_group_to_source(mContext);
+
+  PushedLayer layer = mPushedLayers.back();
+  mPushedLayers.pop_back();
+
+  if (!layer.mMaskPattern) {
+    cairo_paint_with_alpha(mContext, layer.mOpacity);
+  } else {
+    if (layer.mOpacity != Float(1.0)) {
+      cairo_push_group_with_content(mContext, CAIRO_CONTENT_COLOR_ALPHA);
+
+      // Now draw the content using the desired operator
+      cairo_paint_with_alpha(mContext, layer.mOpacity);
+
+      cairo_pop_group_to_source(mContext);
+    }
+    cairo_mask(mContext, layer.mMaskPattern);
+  }
+
+  cairo_matrix_t mat;
+  GfxMatrixToCairoMatrix(mTransform, mat);
+  cairo_set_matrix(mContext, &mat);
+
+  cairo_pattern_destroy(layer.mMaskPattern);
+  SetPermitSubpixelAA(layer.mWasPermittingSubpixelAA);
+}
+
+already_AddRefed<PathBuilder>
 DrawTargetCairo::CreatePathBuilder(FillRule aFillRule /* = FillRule::FILL_WINDING */) const
 {
-  return new PathBuilderCairo(aFillRule);
+  return MakeAndAddRef<PathBuilderCairo>(aFillRule);
 }
 
 void
@@ -1334,27 +1610,35 @@ DrawTargetCairo::ClearSurfaceForUnboundedSource(const CompositionOp &aOperator)
 }
 
 
-TemporaryRef<GradientStops>
+already_AddRefed<GradientStops>
 DrawTargetCairo::CreateGradientStops(GradientStop *aStops, uint32_t aNumStops,
                                      ExtendMode aExtendMode) const
 {
-  return new GradientStopsCairo(aStops, aNumStops, aExtendMode);
+  return MakeAndAddRef<GradientStopsCairo>(aStops, aNumStops, aExtendMode);
 }
 
-TemporaryRef<FilterNode>
+already_AddRefed<FilterNode>
 DrawTargetCairo::CreateFilter(FilterType aType)
 {
   return FilterNodeSoftware::Create(aType);
 }
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 DrawTargetCairo::CreateSourceSurfaceFromData(unsigned char *aData,
                                              const IntSize &aSize,
                                              int32_t aStride,
                                              SurfaceFormat aFormat) const
 {
+  if (!aData) {
+    gfxWarning() << "DrawTargetCairo::CreateSourceSurfaceFromData null aData";
+    return nullptr;
+  }
+
   cairo_surface_t* surf = CopyToImageSurface(aData, IntRect(IntPoint(), aSize),
                                              aStride, aFormat);
+  if (!surf) {
+    return nullptr;
+  }
 
   RefPtr<SourceSurfaceCairo> source_surf = new SourceSurfaceCairo(surf, aSize, aFormat);
   cairo_surface_destroy(surf);
@@ -1381,24 +1665,25 @@ DestroyPixmap(void *data)
 }
 #endif
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
 {
+  RefPtr<SourceSurface> surface(aSurface);
 #ifdef CAIRO_HAS_XLIB_SURFACE
   cairo_surface_type_t ctype = cairo_surface_get_type(mSurface);
   if (aSurface->GetType() == SurfaceType::CAIRO &&
       cairo_surface_get_type(
         static_cast<SourceSurfaceCairo*>(aSurface)->GetSurface()) == ctype) {
-    return aSurface;
+    return surface.forget();
   }
 
   if (ctype != CAIRO_SURFACE_TYPE_XLIB) {
-    return aSurface;
+    return surface.forget();
   }
 
   IntSize size = aSurface->GetSize();
   if (!size.width || !size.height) {
-    return aSurface;
+    return surface.forget();
   }
 
   // Although the dimension parameters in the xCreatePixmapReq wire protocol are
@@ -1408,7 +1693,7 @@ DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
 
   if (size.width > XLIB_IMAGE_SIDE_SIZE_LIMIT ||
       size.height > XLIB_IMAGE_SIDE_SIZE_LIMIT) {
-    return aSurface;
+    return surface.forget();
   }
 
   SurfaceFormat format = aSurface->GetFormat();
@@ -1416,46 +1701,45 @@ DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
   Display *dpy = DisplayOfScreen(screen);
   XRenderPictFormat* xrenderFormat = nullptr;
   switch (format) {
-  case SurfaceFormat::B8G8R8A8:
+  case SurfaceFormat::A8R8G8B8_UINT32:
     xrenderFormat = XRenderFindStandardFormat(dpy, PictStandardARGB32);
     break;
-  case SurfaceFormat::B8G8R8X8:
+  case SurfaceFormat::X8R8G8B8_UINT32:
     xrenderFormat = XRenderFindStandardFormat(dpy, PictStandardRGB24);
     break;
   case SurfaceFormat::A8:
     xrenderFormat = XRenderFindStandardFormat(dpy, PictStandardA8);
     break;
   default:
-    return aSurface;
+    return surface.forget();
   }
   if (!xrenderFormat) {
-    return aSurface;
+    return surface.forget();
   }
 
   Drawable pixmap = XCreatePixmap(dpy, RootWindowOfScreen(screen),
                                   size.width, size.height,
                                   xrenderFormat->depth);
   if (!pixmap) {
-    return aSurface;
+    return surface.forget();
   }
 
-  ScopedDeletePtr<DestroyPixmapClosure> closure(
-    new DestroyPixmapClosure(pixmap, screen));
+  auto closure = MakeUnique<DestroyPixmapClosure>(pixmap, screen);
 
   ScopedCairoSurface csurf(
     cairo_xlib_surface_create_with_xrender_format(dpy, pixmap,
                                                   screen, xrenderFormat,
                                                   size.width, size.height));
   if (!csurf || cairo_surface_status(csurf)) {
-    return aSurface;
+    return surface.forget();
   }
 
   cairo_surface_set_user_data(csurf, &gDestroyPixmapKey,
-                              closure.forget(), DestroyPixmap);
+                              closure.release(), DestroyPixmap);
 
   RefPtr<DrawTargetCairo> dt = new DrawTargetCairo();
   if (!dt->Init(csurf, size, &format)) {
-    return aSurface;
+    return surface.forget();
   }
 
   dt->CopySurface(aSurface,
@@ -1463,34 +1747,40 @@ DrawTargetCairo::OptimizeSourceSurface(SourceSurface *aSurface) const
                   IntPoint(0, 0));
   dt->Flush();
 
-  return new SourceSurfaceCairo(csurf, size, format);
+  surface = new SourceSurfaceCairo(csurf, size, format);
 #endif
 
-  return aSurface;
+  return surface.forget();
 }
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 DrawTargetCairo::CreateSourceSurfaceFromNativeSurface(const NativeSurface &aSurface) const
 {
-  if (aSurface.mType == NativeSurfaceType::CAIRO_SURFACE) {
-    if (aSurface.mSize.width <= 0 ||
-        aSurface.mSize.height <= 0) {
-      gfxWarning() << "Can't create a SourceSurface without a valid size";
-      return nullptr;
-    }
-    cairo_surface_t* surf = static_cast<cairo_surface_t*>(aSurface.mSurface);
-    return new SourceSurfaceCairo(surf, aSurface.mSize, aSurface.mFormat);
-  }
-
   return nullptr;
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 DrawTargetCairo::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFormat) const
 {
-  cairo_surface_t* similar = cairo_surface_create_similar(mSurface,
-                                                          GfxFormatToCairoContent(aFormat),
-                                                          aSize.width, aSize.height);
+  if (cairo_surface_status(cairo_get_group_target(mContext))) {
+    RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
+    if (target->Init(aSize, aFormat)) {
+      return target.forget();
+    }
+  }
+
+  cairo_surface_t* similar;
+#ifdef CAIRO_HAS_WIN32_SURFACE
+  if (cairo_surface_get_type(mSurface) == CAIRO_SURFACE_TYPE_WIN32) {
+    similar = cairo_win32_surface_create_with_dib(GfxFormatToCairoFormat(aFormat),
+                                                  aSize.width, aSize.height);
+  } else
+#endif
+  {
+    similar = cairo_surface_create_similar(mSurface,
+                                           GfxFormatToCairoContent(aFormat),
+                                           aSize.width, aSize.height);
+  }
 
   if (!cairo_surface_status(similar)) {
     RefPtr<DrawTargetCairo> target = new DrawTargetCairo();
@@ -1499,7 +1789,7 @@ DrawTargetCairo::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFo
     }
   }
 
-  gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to create similar cairo surface! Size: " << aSize << " Status: " << cairo_surface_status(similar);
+  gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to create similar cairo surface! Size: " << aSize << " Status: " << cairo_surface_status(similar) << cairo_surface_status(cairo_get_group_target(mContext)) << " format " << (int)aFormat;
 
   return nullptr;
 }
@@ -1508,7 +1798,7 @@ bool
 DrawTargetCairo::InitAlreadyReferenced(cairo_surface_t* aSurface, const IntSize& aSize, SurfaceFormat* aFormat)
 {
   if (cairo_surface_status(aSurface)) {
-    gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize)))
+    gfxCriticalNote
       << "Attempt to create DrawTarget for invalid surface. "
       << aSize << " Cairo Status: " << cairo_surface_status(aSurface);
     cairo_surface_destroy(aSurface);
@@ -1527,7 +1817,7 @@ DrawTargetCairo::InitAlreadyReferenced(cairo_surface_t* aSurface, const IntSize&
   cairo_rectangle(mContext, 0, 0, mSize.width, mSize.height);
   cairo_clip(mContext);
 
-  if (mFormat == SurfaceFormat::B8G8R8A8 ||
+  if (mFormat == SurfaceFormat::A8R8G8B8_UINT32 ||
       mFormat == SurfaceFormat::R8G8B8A8) {
     SetPermitSubpixelAA(false);
   } else {
@@ -1537,7 +1827,7 @@ DrawTargetCairo::InitAlreadyReferenced(cairo_surface_t* aSurface, const IntSize&
   return true;
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 DrawTargetCairo::CreateShadowDrawTarget(const IntSize &aSize, SurfaceFormat aFormat,
                                         float aSigma) const
 {
@@ -1585,6 +1875,244 @@ DrawTargetCairo::CreateShadowDrawTarget(const IntSize &aSize, SurfaceFormat aFor
   return nullptr;
 }
 
+static inline pixman_format_code_t
+GfxFormatToPixmanFormat(SurfaceFormat aFormat)
+{
+  switch (aFormat) {
+  case SurfaceFormat::A8R8G8B8_UINT32:
+    return PIXMAN_a8r8g8b8;
+  case SurfaceFormat::X8R8G8B8_UINT32:
+    return PIXMAN_x8r8g8b8;
+  case SurfaceFormat::R5G6B5_UINT16:
+    return PIXMAN_r5g6b5;
+  case SurfaceFormat::A8:
+    return PIXMAN_a8;
+  default:
+    // Allow both BGRA and ARGB formats to be passed through unmodified,
+    // even though even though we are actually rendering to A8R8G8B8_UINT32.
+    if (aFormat == SurfaceFormat::B8G8R8A8 ||
+        aFormat == SurfaceFormat::A8R8G8B8) {
+      return PIXMAN_a8r8g8b8;
+    }
+    return (pixman_format_code_t)0;
+  }
+}
+
+static inline bool
+GfxMatrixToPixmanTransform(const Matrix4x4 &aMatrix, pixman_transform* aResult)
+{
+  pixman_f_transform fTransform = {{
+    { aMatrix._11, aMatrix._21, aMatrix._41 },
+    { aMatrix._12, aMatrix._22, aMatrix._42 },
+    { aMatrix._14, aMatrix._24, aMatrix._44 }
+  }};
+  return pixman_transform_from_pixman_f_transform(aResult, &fTransform);
+}
+
+#ifndef USE_SKIA
+bool
+DrawTarget::Draw3DTransformedSurface(SourceSurface* aSurface, const Matrix4x4& aMatrix)
+{
+  // Composite the 3D transform with the DT's transform.
+  Matrix4x4 fullMat = aMatrix * Matrix4x4::From2D(mTransform);
+  // Transform the surface bounds and clip to this DT.
+  IntRect xformBounds =
+    RoundedOut(
+      fullMat.TransformAndClipBounds(Rect(Point(0, 0), Size(aSurface->GetSize())),
+                                     Rect(Point(0, 0), Size(GetSize()))));
+  if (xformBounds.IsEmpty()) {
+    return true;
+  }
+  // Offset the matrix by the transformed origin.
+  fullMat.PostTranslate(-xformBounds.x, -xformBounds.y, 0);
+  // Invert the matrix into a pattern matrix for pixman.
+  if (!fullMat.Invert()) {
+    return false;
+  }
+  pixman_transform xform;
+  if (!GfxMatrixToPixmanTransform(fullMat, &xform)) {
+    return false;
+  }
+
+  // Read in the source data.
+  RefPtr<DataSourceSurface> srcSurf = aSurface->GetDataSurface();
+  pixman_format_code_t srcFormat = GfxFormatToPixmanFormat(srcSurf->GetFormat());
+  if (!srcFormat) {
+    return false;
+  }
+  DataSourceSurface::ScopedMap srcMap(srcSurf, DataSourceSurface::READ);
+  if (!srcMap.IsMapped()) {
+    return false;
+  }
+
+  // Set up an intermediate destination surface only the size of the transformed bounds.
+  // Try to pass through the source's format unmodified in both the BGRA and ARGB cases.
+  RefPtr<DataSourceSurface> dstSurf =
+    Factory::CreateDataSourceSurface(xformBounds.Size(),
+                                     srcFormat == PIXMAN_a8r8g8b8 ?
+                                       srcSurf->GetFormat() : SurfaceFormat::A8R8G8B8_UINT32);
+  if (!dstSurf) {
+    return false;
+  }
+
+  // Wrap the surfaces in pixman images and do the transform.
+  pixman_image_t* dst =
+    pixman_image_create_bits(PIXMAN_a8r8g8b8,
+                             xformBounds.width, xformBounds.height,
+                             (uint32_t*)dstSurf->GetData(), dstSurf->Stride());
+  pixman_image_t* src =
+    pixman_image_create_bits(srcFormat,
+                             srcSurf->GetSize().width, srcSurf->GetSize().height,
+                             (uint32_t*)srcMap.GetData(), srcMap.GetStride());
+  MOZ_ASSERT(src && dst, "Failed to create pixman images?");
+
+  pixman_image_set_filter(src, PIXMAN_FILTER_BILINEAR, nullptr, 0);
+  pixman_image_set_transform(src, &xform);
+
+  pixman_image_composite32(PIXMAN_OP_SRC,
+                           src, nullptr, dst,
+                           0, 0, 0, 0, 0, 0,
+                           xformBounds.width, xformBounds.height);
+
+  pixman_image_unref(dst);
+  pixman_image_unref(src);
+
+  // Temporarily reset the DT's transform, since it has already been composed above.
+  Matrix origTransform = mTransform;
+  SetTransform(Matrix());
+
+  // Draw the transformed surface within the transformed bounds.
+  DrawSurface(dstSurf, Rect(xformBounds), Rect(Point(0, 0), Size(xformBounds.Size())));
+
+  SetTransform(origTransform);
+
+  return true;
+}
+#endif
+
+#ifdef CAIRO_HAS_XLIB_SURFACE
+static bool gXRenderInitialized = false;
+static bool gXRenderHasTransform = false;
+
+static bool
+SupportsXRender(cairo_surface_t* surface)
+{
+  if (!surface ||
+      cairo_surface_get_type(surface) != CAIRO_SURFACE_TYPE_XLIB ||
+      !cairo_xlib_surface_get_xrender_format(surface)) {
+    return false;
+  }
+
+  if (gXRenderInitialized) {
+    return true;
+  }
+  gXRenderInitialized = true;
+
+  cairo_device_t* device = cairo_surface_get_device(surface);
+  if (cairo_device_acquire(device) != CAIRO_STATUS_SUCCESS) {
+    return false;
+  }
+
+  Display* display = cairo_xlib_surface_get_display(surface);
+  int major, minor;
+  if (XRenderQueryVersion(display, &major, &minor)) {
+    if (major > 0 || (major == 0 && minor >= 6)) {
+      gXRenderHasTransform = true;
+    }
+  }
+
+  cairo_device_release(device);
+
+  return true;
+}
+#endif
+
+bool
+DrawTargetCairo::Draw3DTransformedSurface(SourceSurface* aSurface, const Matrix4x4& aMatrix)
+{
+#if CAIRO_HAS_XLIB_SURFACE
+  cairo_surface_t* srcSurf =
+    aSurface->GetType() == SurfaceType::CAIRO ?
+      static_cast<SourceSurfaceCairo*>(aSurface)->GetSurface() : nullptr;
+  if (!SupportsXRender(srcSurf) || !gXRenderHasTransform) {
+    return DrawTarget::Draw3DTransformedSurface(aSurface, aMatrix);
+  }
+
+  Matrix4x4 fullMat = aMatrix * Matrix4x4::From2D(mTransform);
+  IntRect xformBounds =
+    RoundedOut(
+      fullMat.TransformAndClipBounds(Rect(Point(0, 0), Size(aSurface->GetSize())),
+                                     Rect(Point(0, 0), Size(GetSize()))));
+  if (xformBounds.IsEmpty()) {
+    return true;
+  }
+  fullMat.PostTranslate(-xformBounds.x, -xformBounds.y, 0);
+  if (!fullMat.Invert()) {
+    return false;
+  }
+  pixman_transform xform;
+  if (!GfxMatrixToPixmanTransform(fullMat, &xform)) {
+    return false;
+  }
+
+  cairo_surface_t* xformSurf =
+    cairo_surface_create_similar(srcSurf, CAIRO_CONTENT_COLOR_ALPHA,
+                                 xformBounds.width, xformBounds.height);
+  if (!SupportsXRender(xformSurf)) {
+    cairo_surface_destroy(xformSurf);
+    return false;
+  }
+  cairo_device_t* device = cairo_surface_get_device(xformSurf);
+  if (cairo_device_acquire(device) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(xformSurf);
+    return false;
+  }
+
+  Display* display = cairo_xlib_surface_get_display(xformSurf);
+
+  Picture srcPict = XRenderCreatePicture(display,
+                                         cairo_xlib_surface_get_drawable(srcSurf),
+                                         cairo_xlib_surface_get_xrender_format(srcSurf),
+                                         0, nullptr);
+  XRenderSetPictureFilter(display, srcPict, FilterBilinear, nullptr, 0);
+  XRenderSetPictureTransform(display, srcPict, (XTransform*)&xform);
+
+  Picture dstPict = XRenderCreatePicture(display,
+                                         cairo_xlib_surface_get_drawable(xformSurf),
+                                         cairo_xlib_surface_get_xrender_format(xformSurf),
+                                         0, nullptr);
+
+  XRenderComposite(display, PictOpSrc,
+                   srcPict, None, dstPict,
+                   0, 0, 0, 0, 0, 0,
+                   xformBounds.width, xformBounds.height);
+
+  XRenderFreePicture(display, srcPict);
+  XRenderFreePicture(display, dstPict);
+
+  cairo_device_release(device);
+  cairo_surface_mark_dirty(xformSurf);
+
+  AutoPrepareForDrawing(this, mContext);
+
+  cairo_identity_matrix(mContext);
+
+  cairo_set_operator(mContext, CAIRO_OPERATOR_OVER);
+  cairo_set_antialias(mContext, CAIRO_ANTIALIAS_DEFAULT);
+  cairo_set_source_surface(mContext, xformSurf, xformBounds.x, xformBounds.y);
+
+  cairo_new_path(mContext);
+  cairo_rectangle(mContext, xformBounds.x, xformBounds.y, xformBounds.width, xformBounds.height);
+  cairo_fill(mContext);
+
+  cairo_surface_destroy(xformSurf);
+
+  return true;
+#else
+  return DrawTarget::Draw3DTransformedSurface(aSurface, aMatrix);
+#endif
+}
+
 bool
 DrawTargetCairo::Init(cairo_surface_t* aSurface, const IntSize& aSize, SurfaceFormat* aFormat)
 {
@@ -1614,9 +2142,6 @@ DrawTargetCairo::Init(unsigned char* aData, const IntSize &aSize, int32_t aStrid
 void *
 DrawTargetCairo::GetNativeSurface(NativeSurfaceType aType)
 {
-  if (aType == NativeSurfaceType::CAIRO_SURFACE) {
-    return cairo_get_target(mContext);
-  }
   if (aType == NativeSurfaceType::CAIRO_CONTEXT) {
     return mContext;
   }
@@ -1646,11 +2171,14 @@ DrawTargetCairo::WillChange(const Path* aPath /* = nullptr */)
 void
 DrawTargetCairo::SetTransform(const Matrix& aTransform)
 {
-  mTransform = aTransform;
+  DrawTarget::SetTransform(aTransform);
 
-  cairo_matrix_t mat;
-  GfxMatrixToCairoMatrix(mTransform, mat);
-  cairo_set_matrix(mContext, &mat);
+  mTransformSingular = aTransform.IsSingular();
+  if (!mTransformSingular) {
+    cairo_matrix_t mat;
+    GfxMatrixToCairoMatrix(mTransform, mat);
+    cairo_set_matrix(mContext, &mat);
+  }
 }
 
 Rect
@@ -1698,5 +2226,60 @@ BorrowedCairoContext::ReturnCairoContextToDrawTarget(DrawTarget* aDT,
   cairoDT->mContext = aCairo;
 }
 
+#ifdef MOZ_X11
+bool
+BorrowedXlibDrawable::Init(DrawTarget* aDT)
+{
+  MOZ_ASSERT(aDT, "Caller should check for nullptr");
+  MOZ_ASSERT(!mDT, "Can't initialize twice!");
+  mDT = aDT;
+  mDrawable = None;
+
+#ifdef CAIRO_HAS_XLIB_SURFACE
+  if (aDT->GetBackendType() != BackendType::CAIRO ||
+      aDT->IsDualDrawTarget() ||
+      aDT->IsTiledDrawTarget()) {
+    return false;
+  }
+
+  DrawTargetCairo* cairoDT = static_cast<DrawTargetCairo*>(aDT);
+  cairo_surface_t* surf = cairo_get_group_target(cairoDT->mContext);
+  if (cairo_surface_get_type(surf) != CAIRO_SURFACE_TYPE_XLIB) {
+    return false;
+  }
+  cairo_surface_flush(surf);
+
+  cairoDT->WillChange();
+
+  mDisplay = cairo_xlib_surface_get_display(surf);
+  mDrawable = cairo_xlib_surface_get_drawable(surf);
+  mScreen = cairo_xlib_surface_get_screen(surf);
+  mVisual = cairo_xlib_surface_get_visual(surf);
+  mXRenderFormat = cairo_xlib_surface_get_xrender_format(surf);
+  mSize.width = cairo_xlib_surface_get_width(surf);
+  mSize.height = cairo_xlib_surface_get_height(surf);
+
+  double x = 0, y = 0;
+  cairo_surface_get_device_offset(surf, &x, &y);
+  mOffset = Point(x, y);
+
+  return true;
+#else
+  return false;
+#endif
 }
+
+void
+BorrowedXlibDrawable::Finish()
+{
+  DrawTargetCairo* cairoDT = static_cast<DrawTargetCairo*>(mDT);
+  cairo_surface_t* surf = cairo_get_group_target(cairoDT->mContext);
+  cairo_surface_mark_dirty(surf);
+  if (mDrawable) {
+    mDrawable = None;
+  }
 }
+#endif
+
+} // namespace gfx
+} // namespace mozilla

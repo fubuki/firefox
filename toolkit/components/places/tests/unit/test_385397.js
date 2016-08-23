@@ -11,7 +11,7 @@ function run_test()
   run_next_test();
 }
 
-add_task(function test_execute()
+add_task(function* test_execute()
 {
   let now = Date.now() * 1000;
 
@@ -20,7 +20,7 @@ add_task(function test_execute()
     let testURI = uri(site);
     let testImageURI = uri(site + "blank.gif");
     let when = now + (i * TOTAL_SITES);
-    yield promiseAddVisits([
+    yield PlacesTestUtils.addVisits([
       { uri: testURI, visitDate: when, transition: TRANSITION_TYPED },
       { uri: testImageURI, visitDate: ++when, transition: TRANSITION_EMBED },
       { uri: testImageURI, visitDate: ++when, transition: TRANSITION_FRAMED_LINK },
@@ -80,7 +80,7 @@ add_task(function test_execute()
   root.containerOpen = true;
   cc = root.childCount;
   // 2 * TOTAL_SITES because we count the TYPED and LINK, but not EMBED or FRAMED
-  do_check_eq(cc, 2 * TOTAL_SITES); 
+  do_check_eq(cc, 2 * TOTAL_SITES);
   for (let i=0; i < TOTAL_SITES; i++) {
     let index = i * 2;
     let node = root.getChild(index);

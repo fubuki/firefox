@@ -17,6 +17,7 @@
 #include "nsCOMArray.h"
 #include "nsIFile.h"
 #include "nsEnumeratorUtils.h"
+#include "mozilla/dom/Directory.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/Services.h"
 #include "WidgetUtils.h"
@@ -29,6 +30,35 @@ using namespace mozilla::dom;
 
 #define FILEPICKER_TITLES "chrome://global/locale/filepicker.properties"
 #define FILEPICKER_FILTERS "chrome://global/content/filepicker.properties"
+
+namespace {
+
+nsresult
+LocalFileToDirectoryOrBlob(nsPIDOMWindowInner* aWindow,
+                           bool aIsDirectory,
+                           nsIFile* aFile,
+                           nsISupports** aResult)
+{
+  if (aIsDirectory) {
+#ifdef DEBUG
+    bool isDir;
+    aFile->IsDirectory(&isDir);
+    MOZ_ASSERT(isDir);
+#endif
+
+    RefPtr<Directory> directory = Directory::Create(aWindow, aFile);
+    MOZ_ASSERT(directory);
+
+    directory.forget(aResult);
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIDOMBlob> blob = File::CreateFromFile(aWindow, aFile);
+  blob.forget(aResult);
+  return NS_OK;
+}
+
+} // anonymous namespace
 
 /**
  * A runnable to dispatch from the main thread to the main thread to display
@@ -65,8 +95,8 @@ public:
   }
 
 private:
-  nsRefPtr<nsIFilePicker> mFilePicker;
-  nsRefPtr<nsIFilePickerShownCallback> mCallback;
+  RefPtr<nsIFilePicker> mFilePicker;
+  RefPtr<nsIFilePickerShownCallback> mCallback;
 };
 
 class nsBaseFilePickerEnumerator : public nsISimpleEnumerator
@@ -74,14 +104,16 @@ class nsBaseFilePickerEnumerator : public nsISimpleEnumerator
 public:
   NS_DECL_ISUPPORTS
 
-  explicit nsBaseFilePickerEnumerator(nsPIDOMWindow* aParent,
-                                      nsISimpleEnumerator* iterator)
+  nsBaseFilePickerEnumerator(nsPIDOMWindowOuter* aParent,
+                             nsISimpleEnumerator* iterator,
+                             int16_t aMode)
     : mIterator(iterator)
-    , mParent(aParent)
+    , mParent(aParent->GetCurrentInnerWindow())
+    , mMode(aMode)
   {}
 
   NS_IMETHOD
-  GetNext(nsISupports** aResult) MOZ_OVERRIDE
+  GetNext(nsISupports** aResult) override
   {
     nsCOMPtr<nsISupports> tmp;
     nsresult rv = mIterator->GetNext(getter_AddRefs(tmp));
@@ -96,13 +128,14 @@ public:
       return NS_ERROR_FAILURE;
     }
 
-    nsCOMPtr<nsIDOMFile> domFile = File::CreateFromFile(mParent, localFile);
-    domFile.forget(aResult);
-    return NS_OK;
+    return LocalFileToDirectoryOrBlob(mParent,
+                                      mMode == nsIFilePicker::modeGetFolder,
+                                      localFile,
+                                      aResult);
   }
 
   NS_IMETHOD
-  HasMoreElements(bool* aResult) MOZ_OVERRIDE
+  HasMoreElements(bool* aResult) override
   {
     return mIterator->HasMoreElements(aResult);
   }
@@ -113,7 +146,8 @@ protected:
 
 private:
   nsCOMPtr<nsISimpleEnumerator> mIterator;
-  nsCOMPtr<nsPIDOMWindow> mParent;
+  nsCOMPtr<nsPIDOMWindowInner> mParent;
+  int16_t mMode;
 };
 
 NS_IMPL_ISUPPORTS(nsBaseFilePickerEnumerator, nsISimpleEnumerator)
@@ -130,19 +164,18 @@ nsBaseFilePicker::~nsBaseFilePicker()
 
 }
 
-NS_IMETHODIMP nsBaseFilePicker::Init(nsIDOMWindow *aParent,
+NS_IMETHODIMP nsBaseFilePicker::Init(mozIDOMWindowProxy* aParent,
                                      const nsAString& aTitle,
                                      int16_t aMode)
 {
   NS_PRECONDITION(aParent, "Null parent passed to filepicker, no file "
                   "picker for you!");
-  nsCOMPtr<nsIWidget> widget = WidgetUtils::DOMWindowToWidget(aParent);
+
+  mParent = nsPIDOMWindowOuter::From(aParent);
+
+  nsCOMPtr<nsIWidget> widget = WidgetUtils::DOMWindowToWidget(mParent->GetOuterWindow());
   NS_ENSURE_TRUE(widget, NS_ERROR_FAILURE);
 
-  mParent = do_QueryInterface(aParent);
-  if (!mParent->IsInnerWindow()) {
-    mParent = mParent->GetCurrentInnerWindow();
-  }
 
   mMode = aMode;
   InitNative(widget, aTitle);
@@ -311,33 +344,36 @@ nsBaseFilePicker::GetMode(int16_t* aMode)
 }
 
 NS_IMETHODIMP
-nsBaseFilePicker::GetDomfile(nsIDOMFile** aDomfile)
+nsBaseFilePicker::GetDomFileOrDirectory(nsISupports** aValue)
 {
   nsCOMPtr<nsIFile> localFile;
   nsresult rv = GetFile(getter_AddRefs(localFile));
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (!localFile) {
-    *aDomfile = nullptr;
+    *aValue = nullptr;
     return NS_OK;
   }
 
-  nsRefPtr<File> domFile = File::CreateFromFile(mParent, localFile);
-  domFile.forget(aDomfile);
-  return NS_OK;
+  auto* innerParent = mParent ? mParent->GetCurrentInnerWindow() : nullptr;
+
+  return LocalFileToDirectoryOrBlob(innerParent,
+                                    mMode == nsIFilePicker::modeGetFolder,
+                                    localFile,
+                                    aValue);
 }
 
 NS_IMETHODIMP
-nsBaseFilePicker::GetDomfiles(nsISimpleEnumerator** aDomfiles)
+nsBaseFilePicker::GetDomFileOrDirectoryEnumerator(nsISimpleEnumerator** aValue)
 {
   nsCOMPtr<nsISimpleEnumerator> iter;
   nsresult rv = GetFiles(getter_AddRefs(iter));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsRefPtr<nsBaseFilePickerEnumerator> retIter =
-    new nsBaseFilePickerEnumerator(mParent, iter);
+  RefPtr<nsBaseFilePickerEnumerator> retIter =
+    new nsBaseFilePickerEnumerator(mParent, iter, mMode);
 
-  retIter.forget(aDomfiles);
+  retIter.forget(aValue);
   return NS_OK;
 }
 

@@ -7,14 +7,14 @@ this.EXPORTED_SYMBOLS = [
   "SyncScheduler",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-sync/constants.js");
 Cu.import("resource://services-sync/engines.js");
 Cu.import("resource://services-sync/util.js");
-Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://services-common/logmanager.js");
+Cu.import("resource://services-common/async.js");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Status",
                                   "resource://services-sync/status.js");
@@ -62,20 +62,40 @@ SyncScheduler.prototype = {
   },
 
   // nextSync is in milliseconds, but prefs can't hold that much
-  get nextSync() Svc.Prefs.get("nextSync", 0) * 1000,
-  set nextSync(value) Svc.Prefs.set("nextSync", Math.floor(value / 1000)),
+  get nextSync() {
+    return Svc.Prefs.get("nextSync", 0) * 1000;
+  },
+  set nextSync(value) {
+    Svc.Prefs.set("nextSync", Math.floor(value / 1000));
+  },
 
-  get syncInterval() Svc.Prefs.get("syncInterval", this.singleDeviceInterval),
-  set syncInterval(value) Svc.Prefs.set("syncInterval", value),
+  get syncInterval() {
+    return Svc.Prefs.get("syncInterval", this.singleDeviceInterval);
+  },
+  set syncInterval(value) {
+    Svc.Prefs.set("syncInterval", value);
+  },
 
-  get syncThreshold() Svc.Prefs.get("syncThreshold", SINGLE_USER_THRESHOLD),
-  set syncThreshold(value) Svc.Prefs.set("syncThreshold", value),
+  get syncThreshold() {
+    return Svc.Prefs.get("syncThreshold", SINGLE_USER_THRESHOLD);
+  },
+  set syncThreshold(value) {
+    Svc.Prefs.set("syncThreshold", value);
+  },
 
-  get globalScore() Svc.Prefs.get("globalScore", 0),
-  set globalScore(value) Svc.Prefs.set("globalScore", value),
+  get globalScore() {
+    return Svc.Prefs.get("globalScore", 0);
+  },
+  set globalScore(value) {
+    Svc.Prefs.set("globalScore", value);
+  },
 
-  get numClients() Svc.Prefs.get("numClients", 0),
-  set numClients(value) Svc.Prefs.set("numClients", value),
+  get numClients() {
+    return Svc.Prefs.get("numClients", 0);
+  },
+  set numClients(value) {
+    Svc.Prefs.set("numClients", value);
+  },
 
   init: function init() {
     this._log.level = Log.Level[Svc.Prefs.get("log.logger.service.main")];
@@ -220,7 +240,10 @@ SyncScheduler.prototype = {
          this.setDefaults();
          try {
            Svc.Idle.removeIdleObserver(this, Svc.Prefs.get("scheduler.idleTime"));
-         } catch (ex if (ex.result == Cr.NS_ERROR_FAILURE)) {
+         } catch (ex) {
+           if (ex.result != Cr.NS_ERROR_FAILURE) {
+             throw ex;
+           }
            // In all likelihood we didn't have an idle observer registered yet.
            // It's all good.
          }
@@ -253,10 +276,11 @@ SyncScheduler.prototype = {
       case "wake_notification":
         this._log.debug("Woke from sleep.");
         Utils.nextTick(() => {
-          // Trigger a sync if we have multiple clients.
+          // Trigger a sync if we have multiple clients. We give it 5 seconds
+          // incase the network is still in the process of coming back up.
           if (this.numClients > 1) {
-            this._log.debug("More than 1 client. Syncing.");
-            this.scheduleNextSync(0);
+            this._log.debug("More than 1 client. Will sync in 5s.");
+            this.scheduleNextSync(5000);
           }
         });
         break;
@@ -498,49 +522,7 @@ SyncScheduler.prototype = {
       this.syncTimer.clear();
   },
 
-  /**
-   * Prevent new syncs from starting.  This is used by the FxA migration code
-   * where we can't afford to have a sync start partway through the migration.
-   * To handle the edge-case of a sync starting and not stopping, we store
-   * this state in a pref, so on the next startup we remain blocked (and thus
-   * sync will never start) so the migration can complete.
-   *
-   * As a safety measure, we only block for some period of time, and after
-   * that it will automatically unblock.  This ensures that if things go
-   * really pear-shaped and we never end up calling unblockSync() we haven't
-   * completely broken the world.
-   */
-  blockSync: function(until = null) {
-    if (!until) {
-      until = Date.now() + DEFAULT_BLOCK_PERIOD;
-    }
-    // until is specified in ms, but Prefs can't hold that much
-    Svc.Prefs.set("scheduler.blocked-until", Math.floor(until / 1000));
-  },
-
-  unblockSync: function() {
-    Svc.Prefs.reset("scheduler.blocked-until");
-    // the migration code should be ready to roll, so resume normal operations.
-    this.checkSyncStatus();
-  },
-
-  get isBlocked() {
-    let until = Svc.Prefs.get("scheduler.blocked-until");
-    if (until === undefined) {
-      return false;
-    }
-    if (until <= Math.floor(Date.now() / 1000)) {
-      // we were previously blocked but the time has expired.
-      Svc.Prefs.reset("scheduler.blocked-until");
-      return false;
-    }
-    // we remain blocked.
-    return true;
-  },
 };
-
-const LOG_PREFIX_SUCCESS = "success-";
-const LOG_PREFIX_ERROR   = "error-";
 
 this.ErrorHandler = function ErrorHandler(service) {
   this.service = service;
@@ -574,33 +556,16 @@ ErrorHandler.prototype = {
   initLogs: function initLogs() {
     this._log = Log.repository.getLogger("Sync.ErrorHandler");
     this._log.level = Log.Level[Svc.Prefs.get("log.logger.service.main")];
-    this._cleaningUpFileLogs = false;
 
     let root = Log.repository.getLogger("Sync");
     root.level = Log.Level[Svc.Prefs.get("log.rootLogger")];
 
-    let formatter = new Log.BasicFormatter();
-    let capp = new Log.ConsoleAppender(formatter);
-    capp.level = Log.Level[Svc.Prefs.get("log.appender.console")];
-    root.addAppender(capp);
+    let logs = ["Sync", "FirefoxAccounts", "Hawk", "Common.TokenServerClient",
+                "Sync.SyncMigration", "browserwindow.syncui",
+                "Services.Common.RESTRequest", "Services.Common.RESTRequest",
+               ];
 
-    let dapp = new Log.DumpAppender(formatter);
-    dapp.level = Log.Level[Svc.Prefs.get("log.appender.dump")];
-    root.addAppender(dapp);
-
-    let fapp = this._logAppender = new Log.StorageStreamAppender(formatter);
-    fapp.level = Log.Level[Svc.Prefs.get("log.appender.file.level")];
-    root.addAppender(fapp);
-
-    // Arrange for a number of other sync-related logs to also go to our
-    // appenders.
-    for (let extra of ["FirefoxAccounts", "Hawk", "Common.TokenServerClient",
-                       "Sync.SyncMigration"]) {
-      let log = Log.repository.getLogger(extra);
-      for (let appender of [fapp, dapp, capp]) {
-        log.addAppender(appender);
-      }
-    }
+    this._logManager = new LogManager(Svc.Prefs, logs, "sync");
   },
 
   observe: function observe(subject, topic, data) {
@@ -615,18 +580,25 @@ ErrorHandler.prototype = {
           this._log.debug(data + " failed to apply some records.");
         }
         break;
-      case "weave:engine:sync:error":
+      case "weave:engine:sync:error": {
         let exception = subject;  // exception thrown by engine's sync() method
         let engine_name = data;   // engine name that threw the exception
 
         this.checkServerError(exception);
 
         Status.engines = [engine_name, exception.failureCode || ENGINE_UNKNOWN_FAIL];
-        this._log.debug(engine_name + " failed: " + Utils.exceptionStr(exception));
+        if (Async.isShutdownException(exception)) {
+          this._log.debug(engine_name + " was interrupted due to the application shutting down");
+        } else {
+          this._log.debug(engine_name + " failed", exception);
+          Services.telemetry.getKeyedHistogramById("WEAVE_ENGINE_SYNC_ERRORS")
+                            .add(engine_name);
+        }
         break;
+      }
       case "weave:service:login:error":
-        this.resetFileLog(Svc.Prefs.get("log.appender.file.logOnError"),
-                          LOG_PREFIX_ERROR);
+        this._log.error("Sync encountered a login error");
+        this.resetFileLog();
 
         if (this.shouldReportError()) {
           this.notifyOnNextTick("weave:ui:login:error");
@@ -636,13 +608,23 @@ ErrorHandler.prototype = {
 
         this.dontIgnoreErrors = false;
         break;
-      case "weave:service:sync:error":
+      case "weave:service:sync:error": {
         if (Status.sync == CREDENTIALS_CHANGED) {
           this.service.logout();
         }
 
-        this.resetFileLog(Svc.Prefs.get("log.appender.file.logOnError"),
-                          LOG_PREFIX_ERROR);
+        let exception = subject;
+        if (Async.isShutdownException(exception)) {
+          // If we are shutting down we just log the fact, attempt to flush
+          // the log file and get out of here!
+          this._log.error("Sync was interrupted due to the application shutting down");
+          this.resetFileLog();
+          break;
+        }
+
+        // Not a shutdown related exception...
+        this._log.error("Sync encountered an error", exception);
+        this.resetFileLog();
 
         if (this.shouldReportError()) {
           this.notifyOnNextTick("weave:ui:sync:error");
@@ -652,6 +634,7 @@ ErrorHandler.prototype = {
 
         this.dontIgnoreErrors = false;
         break;
+      }
       case "weave:service:sync:finish":
         this._log.trace("Status.service is " + Status.service);
 
@@ -667,9 +650,8 @@ ErrorHandler.prototype = {
         }
 
         if (Status.service == SYNC_FAILED_PARTIAL) {
-          this._log.debug("Some engines did not sync correctly.");
-          this.resetFileLog(Svc.Prefs.get("log.appender.file.logOnError"),
-                            LOG_PREFIX_ERROR);
+          this._log.error("Some engines did not sync correctly.");
+          this.resetFileLog();
 
           if (this.shouldReportError()) {
             this.dontIgnoreErrors = false;
@@ -677,8 +659,7 @@ ErrorHandler.prototype = {
             break;
           }
         } else {
-          this.resetFileLog(Svc.Prefs.get("log.appender.file.logOnSuccess"),
-                            LOG_PREFIX_SUCCESS);
+          this.resetFileLog();
         }
         this.dontIgnoreErrors = false;
         this.notifyOnNextTick("weave:ui:sync:finish");
@@ -706,94 +687,20 @@ ErrorHandler.prototype = {
   },
 
   /**
-   * Finds all logs older than maxErrorAge and deletes them without tying up I/O.
-   */
-  cleanupLogs: function cleanupLogs() {
-    let direntries = FileUtils.getDir("ProfD", ["weave", "logs"]).directoryEntries;
-    let oldLogs = [];
-    let index = 0;
-    let threshold = Date.now() - 1000 * Svc.Prefs.get("log.appender.file.maxErrorAge");
-
-    this._log.debug("Log cleanup threshold time: " + threshold);
-    while (direntries.hasMoreElements()) {
-      let logFile = direntries.getNext().QueryInterface(Ci.nsIFile);
-      if (logFile.lastModifiedTime < threshold) {
-        this._log.trace(" > Noting " + logFile.leafName +
-                        " for cleanup (" + logFile.lastModifiedTime + ")");
-        oldLogs.push(logFile);
-      }
-    }
-
-    // Deletes a file from oldLogs each tick until there are none left.
-    let errorHandler = this;
-    function deleteFile() {
-      if (index >= oldLogs.length) {
-        errorHandler._log.debug("Done deleting files.");
-        errorHandler._cleaningUpFileLogs = false;
-        Svc.Obs.notify("weave:service:cleanup-logs");
-        return;
-      }
-      try {
-        let file = oldLogs[index];
-        file.remove(false);
-        errorHandler._log.trace("Deleted " + file.leafName + ".");
-      } catch (ex) {
-        errorHandler._log._debug("Encountered error trying to clean up old log file '"
-                                 + oldLogs[index].leafName + "':"
-                                 + Utils.exceptionStr(ex));
-      }
-      index++;
-      Utils.nextTick(deleteFile);
-    }
-
-    if (oldLogs.length > 0) {
-      this._cleaningUpFileLogs = true;
-      Utils.nextTick(deleteFile);
-    } else {
-      this._log.debug("No logs to clean up.");
-    }
-  },
-
-  /**
    * Generate a log file for the sync that just completed
    * and refresh the input & output streams.
-   *
-   * @param flushToFile
-   *        the log file to be flushed/reset
-   *
-   * @param filenamePrefix
-   *        a value of either LOG_PREFIX_SUCCESS or LOG_PREFIX_ERROR
-   *        to be used as the log filename prefix
    */
-  resetFileLog: function resetFileLog(flushToFile, filenamePrefix) {
-    let inStream = this._logAppender.getInputStream();
-    this._logAppender.reset();
-    if (flushToFile && inStream) {
-      this._log.debug("Flushing file log.");
-      try {
-        let filename = filenamePrefix + Date.now() + ".txt";
-        let file = FileUtils.getFile("ProfD", ["weave", "logs", filename]);
-        let outStream = FileUtils.openFileOutputStream(file);
-
-        this._log.trace("Beginning stream copy to " + file.leafName + ": " +
-                        Date.now());
-        NetUtil.asyncCopy(inStream, outStream, function onCopyComplete() {
-          this._log.trace("onCopyComplete: " + Date.now());
-          this._log.trace("Output file timestamp: " + file.lastModifiedTime);
-          Svc.Obs.notify("weave:service:reset-file-log");
-          this._log.trace("Notified: " + Date.now());
-          if (filenamePrefix == LOG_PREFIX_ERROR &&
-              !this._cleaningUpFileLogs) {
-            this._log.trace("Scheduling cleanup.");
-            Utils.nextTick(this.cleanupLogs, this);
-          }
-        }.bind(this));
-      } catch (ex) {
-        Svc.Obs.notify("weave:service:reset-file-log");
-      }
-    } else {
+  resetFileLog: function resetFileLog() {
+    let onComplete = logType => {
       Svc.Obs.notify("weave:service:reset-file-log");
-    }
+      this._log.trace("Notified: " + Date.now());
+      if (logType == this._logManager.ERROR_LOG_WRITTEN) {
+        Cu.reportError("Sync encountered an error - see about:sync-log for the log file.");
+      }
+    };
+    // Note we do not return the promise here - the caller doesn't need to wait
+    // for this to complete.
+    this._logManager.resetFileLog().then(onComplete, onComplete);
   },
 
   /**
@@ -827,6 +734,9 @@ ErrorHandler.prototype = {
     }
   },
 
+  // A function to indicate if Sync errors should be "reported" - which in this
+  // context really means "should be notify observers of an error" - but note
+  // that since bug 1180587, no one is going to surface an error to the user.
   shouldReportError: function shouldReportError() {
     if (Status.login == MASTER_PASSWORD_LOCKED) {
       this._log.trace("shouldReportError: false (master password locked).");
@@ -866,8 +776,12 @@ ErrorHandler.prototype = {
       return false;
     }
 
-    return ([Status.login, Status.sync].indexOf(SERVER_MAINTENANCE) == -1 &&
-            [Status.login, Status.sync].indexOf(LOGIN_FAILED_NETWORK_ERROR) == -1);
+
+    let result = ([Status.login, Status.sync].indexOf(SERVER_MAINTENANCE) == -1 &&
+                  [Status.login, Status.sync].indexOf(LOGIN_FAILED_NETWORK_ERROR) == -1);
+    this._log.trace("shouldReportError: ${result} due to login=${login}, sync=${sync}",
+                    {result, login: Status.login, sync: Status.sync});
+    return result;
   },
 
   get currentAlertMode() {

@@ -20,7 +20,7 @@ class RuleCache;
 /**
  * Class represents an accessible pivot.
  */
-class nsAccessiblePivot MOZ_FINAL : public nsIAccessiblePivot
+class nsAccessiblePivot final : public nsIAccessiblePivot
 {
 public:
   typedef mozilla::a11y::Accessible Accessible;
@@ -114,17 +114,17 @@ private:
   /*
    * The root accessible.
    */
-  nsRefPtr<Accessible> mRoot;
+  RefPtr<Accessible> mRoot;
 
   /*
    * The temporary modal root accessible.
    */
-  nsRefPtr<Accessible> mModalRoot;
+  RefPtr<Accessible> mModalRoot;
 
   /*
    * The current pivot position.
    */
-  nsRefPtr<Accessible> mPosition;
+  RefPtr<Accessible> mPosition;
 
   /*
    * The text start offset ofthe pivot.

@@ -58,10 +58,9 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
 
+Cu.import("resource://gre/modules/Integration.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "DownloadIntegration",
-                                  "resource://gre/modules/DownloadIntegration.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
                                   "resource://gre/modules/FileUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
@@ -89,6 +88,9 @@ XPCOMUtils.defineLazyServiceGetter(this, "gExternalHelperAppService",
 XPCOMUtils.defineLazyServiceGetter(this, "gPrintSettingsService",
            "@mozilla.org/gfx/printsettings-service;1",
            Ci.nsIPrintSettingsService);
+
+Integration.downloads.defineModuleGetter(this, "DownloadIntegration",
+            "resource://gre/modules/DownloadIntegration.jsm");
 
 const BackgroundFileSaverStreamListener = Components.Constructor(
       "@mozilla.org/network/background-file-saver;1?mode=streamlistener",
@@ -230,6 +232,11 @@ this.Download.prototype = {
    * transferred before the download finishes, that can be zero for empty files.
    *
    * When hasProgress is false, this property is always zero.
+   *
+   * @note This property may be different than the final file size on disk for
+   *       downloads that are encoded during the network transfer.  You can use
+   *       the "size" property of the DownloadTarget object to get the actual
+   *       size on disk once the download succeeds.
    */
   totalBytes: 0,
 
@@ -239,7 +246,8 @@ this.Download.prototype = {
    *
    * @note You shouldn't rely on this property being equal to totalBytes to
    *       determine whether the download is completed.  You should use the
-   *       individual state properties instead.
+   *       individual state properties instead.  This property may not be
+   *       updated during the last part of the download.
    */
   currentBytes: 0,
 
@@ -414,10 +422,12 @@ this.Download.prototype = {
 
       let changeMade = false;
 
-      if ("contentType" in aOptions &&
-          this.contentType != aOptions.contentType) {
-        this.contentType = aOptions.contentType;
-        changeMade = true;
+      for (let property of ["contentType", "progress", "hasPartialData",
+                            "hasBlockedData"]) {
+        if (property in aOptions && this[property] != aOptions[property]) {
+          this[property] = aOptions[property];
+          changeMade = true;
+        }
       }
 
       if (changeMade) {
@@ -427,7 +437,7 @@ this.Download.prototype = {
 
     // Now that we stored the promise in the download object, we can start the
     // task that will actually execute the download.
-    deferAttempt.resolve(Task.spawn(function task_D_start() {
+    deferAttempt.resolve(Task.spawn(function* task_D_start() {
       // Wait upon any pending operation before restarting.
       if (this._promiseCanceled) {
         yield this._promiseCanceled;
@@ -454,6 +464,12 @@ this.Download.prototype = {
           throw new DownloadError({ becauseBlockedByParentalControls: true });
         }
 
+        // Disallow download if needed runtime permissions have not been granted
+        // by user.
+        if (yield DownloadIntegration.shouldBlockForRuntimePermissions()) {
+          throw new DownloadError({ becauseBlockedByRuntimePermissions: true });
+        }
+
         // We should check if we have been canceled in the meantime, after all
         // the previous asynchronous operations have been executed and just
         // before we call the "execute" method of the saver.
@@ -467,13 +483,23 @@ this.Download.prototype = {
         yield this.saver.execute(DS_setProgressBytes.bind(this),
                                  DS_setProperties.bind(this));
 
-        // Check for the last time if the download has been canceled.
+        // Now that the actual saving finished, read the actual file size on
+        // disk, that may be different from the amount of data transferred.
+        yield this.target.refresh();
+
+        // Check for the last time if the download has been canceled. This must
+        // be done right before setting the "stopped" property of the download,
+        // without any asynchronous operations in the middle, so that another
+        // cancellation request cannot start in the meantime and stay unhandled.
         if (this._promiseCanceled) {
           try {
             yield OS.File.remove(this.target.path);
           } catch (ex) {
             Cu.reportError(ex);
           }
+
+          this.target.exists = false;
+          this.target.size = 0;
 
           // Cancellation exceptions will be changed in the catch block below.
           throw new DownloadError();
@@ -610,6 +636,7 @@ this.Download.prototype = {
     this._promiseUnblock = Task.spawn(function* () {
       try {
         yield OS.File.move(this.target.partFilePath, this.target.path);
+        yield this.target.refresh();
       } catch (ex) {
         yield this.refresh();
         this._promiseUnblock = null;
@@ -752,8 +779,8 @@ this.Download.prototype = {
     if (!this._promiseCanceled) {
       // Start a new cancellation request.
       let deferCanceled = Promise.defer();
-      this._currentAttempt.then(function () deferCanceled.resolve(),
-                                function () deferCanceled.resolve());
+      this._currentAttempt.then(() => deferCanceled.resolve(),
+                                () => deferCanceled.resolve());
       this._promiseCanceled = deferCanceled.promise;
 
       // The download can already be restarted.
@@ -828,7 +855,7 @@ this.Download.prototype = {
       this._promiseRemovePartialData = promiseRemovePartialData;
 
       deferRemovePartialData.resolve(
-        Task.spawn(function task_D_removePartialData() {
+        Task.spawn(function* task_D_removePartialData() {
           try {
             // Wait upon any pending cancellation request.
             if (this._promiseCanceled) {
@@ -891,8 +918,18 @@ this.Download.prototype = {
    */
   refresh: function ()
   {
-    return Task.spawn(function () {
+    return Task.spawn(function* () {
       if (!this.stopped || this._finalized) {
+        return;
+      }
+
+      if (this.succeeded) {
+        let oldExists = this.target.exists;
+        let oldSize = this.target.size;
+        yield this.target.refresh();
+        if (oldExists != this.target.exists || oldSize != this.target.size) {
+          this._notifyChange();
+        }
         return;
       }
 
@@ -915,7 +952,10 @@ this.Download.prototype = {
             this.progress = Math.floor(this.currentBytes /
                                            this.totalBytes * 100);
           }
-        } catch (ex if ex instanceof OS.File.Error && ex.becauseNoSuchFile) {
+        } catch (ex) {
+          if (!(ex instanceof OS.File.Error) || !ex.becauseNoSuchFile) {
+            throw ex;
+          }
           // Ignore the result if the state has changed meanwhile.
           if (!this.stopped || this._finalized) {
             return;
@@ -1325,6 +1365,58 @@ this.DownloadTarget.prototype = {
   partFilePath: null,
 
   /**
+   * Indicates whether the target file exists.
+   *
+   * This is a dynamic property updated when the download finishes or when the
+   * "refresh" method of the Download object is called. It can be used by the
+   * front-end to reduce I/O compared to checking the target file directly.
+   */
+  exists: false,
+
+  /**
+   * Size in bytes of the target file, or zero if the download has not finished.
+   *
+   * Even if the target file does not exist anymore, this property may still
+   * have a value taken from the download metadata. If the metadata has never
+   * been available in this session and the size cannot be obtained from the
+   * file because it has already been deleted, this property will be zero.
+   *
+   * For single-file downloads, this property will always match the actual file
+   * size on disk, while the totalBytes property of the Download object, when
+   * available, may represent the size of the encoded data instead.
+   *
+   * For downloads involving multiple files, like complete web pages saved to
+   * disk, the meaning of this value is undefined. It currently matches the size
+   * of the main file only rather than the sum of all the written data.
+   *
+   * This is a dynamic property updated when the download finishes or when the
+   * "refresh" method of the Download object is called. It can be used by the
+   * front-end to reduce I/O compared to checking the target file directly.
+   */
+  size: 0,
+
+  /**
+   * Sets the "exists" and "size" properties based on the actual file on disk.
+   *
+   * @return {Promise}
+   * @resolves When the operation has finished successfully.
+   * @rejects JavaScript exception.
+   */
+  refresh: Task.async(function* () {
+    try {
+      this.size = (yield OS.File.stat(this.path)).size;
+      this.exists = true;
+    } catch (ex) {
+      // Report any error not caused by the file not being there. In any case,
+      // the size of the download is not updated and the known value is kept.
+      if (!(ex instanceof OS.File.Error && ex.becauseNoSuchFile)) {
+        Cu.reportError(ex);
+      }
+      this.exists = false;
+    }
+  }),
+
+  /**
    * Returns a static representation of the current object state.
    *
    * @return A JavaScript object that can be serialized to JSON.
@@ -1413,7 +1505,8 @@ this.DownloadError = function (aProperties)
     this.message = aProperties.message;
   } else if (aProperties.becauseBlocked ||
              aProperties.becauseBlockedByParentalControls ||
-             aProperties.becauseBlockedByReputationCheck) {
+             aProperties.becauseBlockedByReputationCheck ||
+             aProperties.becauseBlockedByRuntimePermissions) {
     this.message = "Download blocked.";
   } else {
     let exception = new Components.Exception("", this.result);
@@ -1440,6 +1533,10 @@ this.DownloadError = function (aProperties)
   } else if (aProperties.becauseBlockedByReputationCheck) {
     this.becauseBlocked = true;
     this.becauseBlockedByReputationCheck = true;
+    this.reputationCheckVerdict = aProperties.reputationCheckVerdict || "";
+  } else if (aProperties.becauseBlockedByRuntimePermissions) {
+    this.becauseBlocked = true;
+    this.becauseBlockedByRuntimePermissions = true;
   } else if (aProperties.becauseBlocked) {
     this.becauseBlocked = true;
   }
@@ -1450,6 +1547,16 @@ this.DownloadError = function (aProperties)
 
   this.stack = new Error().stack;
 }
+
+/**
+ * These constants are used by the reputationCheckVerdict property and indicate
+ * the detailed reason why a download is blocked.
+ *
+ * @note These values should not be changed because they can be serialized.
+ */
+this.DownloadError.BLOCK_VERDICT_MALWARE = "Malware";
+this.DownloadError.BLOCK_VERDICT_POTENTIALLY_UNWANTED = "PotentiallyUnwanted";
+this.DownloadError.BLOCK_VERDICT_UNCOMMON = "Uncommon";
 
 this.DownloadError.prototype = {
   __proto__: Error.prototype,
@@ -1488,6 +1595,24 @@ this.DownloadError.prototype = {
   becauseBlockedByReputationCheck: false,
 
   /**
+   * Indicates the download was blocked because a runtime permission required to
+   * download files was not granted.
+   *
+   * This does not apply to all systems. On Android this flag is set to true if
+   * a needed runtime permission (storage) has not been granted by the user.
+   */
+  becauseBlockedByRuntimePermissions: false,
+
+  /**
+   * If becauseBlockedByReputationCheck is true, indicates the detailed reason
+   * why the download was blocked, according to the "BLOCK_VERDICT_" constants.
+   *
+   * If the download was not blocked or the reason for the block is unknown,
+   * this will be an empty string.
+   */
+  reputationCheckVerdict: "",
+
+  /**
    * If this DownloadError was caused by an exception this property will
    * contain the original exception. This will not be serialized when saving
    * to the store.
@@ -1509,6 +1634,8 @@ this.DownloadError.prototype = {
       becauseBlocked: this.becauseBlocked,
       becauseBlockedByParentalControls: this.becauseBlockedByParentalControls,
       becauseBlockedByReputationCheck: this.becauseBlockedByReputationCheck,
+      becauseBlockedByRuntimePermissions: this.becauseBlockedByRuntimePermissions,
+      reputationCheckVerdict: this.reputationCheckVerdict,
     };
 
     serializeUnknownProperties(this, serializable);
@@ -1533,7 +1660,9 @@ this.DownloadError.fromSerializable = function (aSerializable) {
     property != "becauseTargetFailed" &&
     property != "becauseBlocked" &&
     property != "becauseBlockedByParentalControls" &&
-    property != "becauseBlockedByReputationCheck");
+    property != "becauseBlockedByReputationCheck" &&
+    property != "becauseBlockedByRuntimePermissions" &&
+    property != "reputationCheckVerdict");
 
   return e;
 };
@@ -1630,8 +1759,11 @@ this.DownloadSaver.prototype = {
       gDownloadHistory.addDownload(sourceUri, referrerUri, startPRTime,
                                    targetUri);
     }
-    catch(ex if ex instanceof Components.Exception &&
-                ex.result == Cr.NS_ERROR_NOT_AVAILABLE) {
+    catch(ex) {
+      if (!(ex instanceof Components.Exception) ||
+          ex.result != Cr.NS_ERROR_NOT_AVAILABLE) {
+        throw ex;
+      }
       //
       // Under normal operation the download history service may not
       // be available. We don't want all downloads that are public to fail
@@ -1761,7 +1893,7 @@ this.DownloadCopySaver.prototype = {
     let partFilePath = download.target.partFilePath;
     let keepPartialData = download.tryToKeepPartialData;
 
-    return Task.spawn(function task_DCS_execute() {
+    return Task.spawn(function* task_DCS_execute() {
       // Add the download to history the first time it is started in this
       // session.  If the download is restarted in a different session, a new
       // history visit will be added.  We do this just to avoid the complexity
@@ -1781,7 +1913,10 @@ this.DownloadCopySaver.prototype = {
         // If the file already exists, don't delete its contents yet.
         let file = yield OS.File.open(targetPath, { write: true });
         yield file.close();
-      } catch (ex if ex instanceof OS.File.Error) {
+      } catch (ex) {
+        if (!(ex instanceof OS.File.Error)) {
+          throw ex;
+        }
         // Throw a DownloadError indicating that the operation failed because of
         // the target file.  We cannot translate this into a specific result
         // code, but we preserve the original message using the toString method.
@@ -1828,7 +1963,10 @@ this.DownloadCopySaver.prototype = {
 
           // Create a channel from the source, and listen to progress
           // notifications.
-          let channel = NetUtil.newChannel(NetUtil.newURI(download.source.url));
+          let channel = NetUtil.newChannel({
+            uri: download.source.url,
+            loadUsingSystemPrincipal: true,
+          });
           if (channel instanceof Ci.nsIPrivateBrowsingChannel) {
             channel.setPrivate(download.source.isPrivate);
           }
@@ -1848,8 +1986,11 @@ this.DownloadCopySaver.prototype = {
               channel.resumeAt(stat.size, this.entityID);
               resumeAttempted = true;
               resumeFromBytes = stat.size;
-            } catch (ex if ex instanceof OS.File.Error &&
-                           ex.becauseNoSuchFile) { }
+            } catch (ex) {
+              if (!(ex instanceof OS.File.Error) || !ex.becauseNoSuchFile) {
+                throw ex;
+              }
+            }
           }
 
           channel.notificationCallbacks = {
@@ -1869,7 +2010,7 @@ this.DownloadCopySaver.prototype = {
 
           // Open the channel, directing output to the background file saver.
           backgroundFileSaver.QueryInterface(Ci.nsIStreamListener);
-          channel.asyncOpen({
+          channel.asyncOpen2({
             onStartRequest: function (aRequest, aContext) {
               backgroundFileSaver.onStartRequest(aRequest, aContext);
 
@@ -1918,8 +2059,11 @@ this.DownloadCopySaver.prototype = {
                   try {
                     // If reading the ID succeeds, the source is resumable.
                     this.entityID = aRequest.entityID;
-                  } catch (ex if ex instanceof Components.Exception &&
-                                 ex.result == Cr.NS_ERROR_NOT_RESUMABLE) {
+                  } catch (ex) {
+                    if (!(ex instanceof Components.Exception) ||
+                        ex.result != Cr.NS_ERROR_NOT_RESUMABLE) {
+                      throw ex;
+                    }
                     keepPartialData = false;
                   }
                 } else {
@@ -1968,7 +2112,7 @@ this.DownloadCopySaver.prototype = {
                                                   aInputStream, aOffset,
                                                   aCount);
             }.bind(copySaver),
-          }, null);
+          });
 
           // We should check if we have been canceled in the meantime, after
           // all the previous asynchronous operations have been executed and
@@ -1983,6 +2127,9 @@ this.DownloadCopySaver.prototype = {
           // In case an error occurs while setting up the chain of objects for
           // the download, ensure that we release the resources of the saver.
           backgroundFileSaver.finish(Cr.NS_ERROR_FAILURE);
+          // Since we're not going to handle deferSaveComplete.promise below,
+          // we need to make sure that the rejection is handled.
+          deferSaveComplete.promise.catch(() => {});
           throw ex;
         }
 
@@ -1990,7 +2137,7 @@ this.DownloadCopySaver.prototype = {
         // up the chain of objects for the download.
         yield deferSaveComplete.promise;
 
-        yield this._checkReputationAndMove();
+        yield this._checkReputationAndMove(aSetPropertiesFn);
       } catch (ex) {
         // Ensure we always remove the placeholder for the final target file on
         // failure, independently of which code path failed.  In some cases, the
@@ -2018,18 +2165,22 @@ this.DownloadCopySaver.prototype = {
    * will move it to the target path since reputation checking is the final
    * step in the saver.
    *
+   * @param aSetPropertiesFn
+   *        Function provided to the "execute" method.
+   *
    * @return {Promise}
    * @resolves When the reputation check and cleanup is complete.
    * @rejects DownloadError if the download should be blocked.
    */
-  _checkReputationAndMove: Task.async(function* () {
+  _checkReputationAndMove: Task.async(function* (aSetPropertiesFn) {
     let download = this.download;
     let targetPath = this.download.target.path;
     let partFilePath = this.download.target.partFilePath;
 
-    if (yield DownloadIntegration.shouldBlockForReputationCheck(download)) {
-      download.progress = 100;
-      download.hasPartialData = false;
+    let { shouldBlock, verdict } =
+        yield DownloadIntegration.shouldBlockForReputationCheck(download);
+    if (shouldBlock) {
+      let newProperties = { progress: 100, hasPartialData: false };
 
       // We will remove the potentially dangerous file if instructed by
       // DownloadIntegration. We will always remove the file when the
@@ -2042,10 +2193,15 @@ this.DownloadCopySaver.prototype = {
           Cu.reportError(ex);
         }
       } else {
-        download.hasBlockedData = true;
+        newProperties.hasBlockedData = true;
       }
 
-      throw new DownloadError({ becauseBlockedByReputationCheck: true });
+      aSetPropertiesFn(newProperties);
+
+      throw new DownloadError({
+        becauseBlockedByReputationCheck: true,
+        reputationCheckVerdict: verdict,
+      });
     }
 
     if (partFilePath) {
@@ -2070,11 +2226,15 @@ this.DownloadCopySaver.prototype = {
    */
   removePartialData: function ()
   {
-    return Task.spawn(function task_DCS_removePartialData() {
+    return Task.spawn(function* task_DCS_removePartialData() {
       if (this.download.target.partFilePath) {
         try {
           yield OS.File.remove(this.download.target.partFilePath);
-        } catch (ex if ex instanceof OS.File.Error && ex.becauseNoSuchFile) { }
+        } catch (ex) {
+          if (!(ex instanceof OS.File.Error) || !ex.becauseNoSuchFile) {
+            throw ex;
+          }
+        }
       }
     }.bind(this));
   },
@@ -2215,14 +2375,18 @@ this.DownloadLegacySaver.prototype = {
    */
   onProgressBytes: function DLS_onProgressBytes(aCurrentBytes, aTotalBytes)
   {
+    this.progressWasNotified = true;
+
     // Ignore progress notifications until we are ready to process them.
     if (!this.setProgressBytesFn) {
+      // Keep the data from the last progress notification that was received.
+      this.currentBytes = aCurrentBytes;
+      this.totalBytes = aTotalBytes;
       return;
     }
 
     let hasPartFile = !!this.download.target.partFilePath;
 
-    this.progressWasNotified = true;
     this.setProgressBytesFn(aCurrentBytes, aTotalBytes,
                             aCurrentBytes > 0 && hasPartFile);
   },
@@ -2252,8 +2416,12 @@ this.DownloadLegacySaver.prototype = {
       try {
         // If reading the ID succeeds, the source is resumable.
         this.entityID = aRequest.entityID;
-      } catch (ex if ex instanceof Components.Exception &&
-                     ex.result == Cr.NS_ERROR_NOT_RESUMABLE) { }
+      } catch (ex) {
+        if (!(ex instanceof Components.Exception) ||
+            ex.result != Cr.NS_ERROR_NOT_RESUMABLE) {
+          throw ex;
+        }
+      }
     }
 
     // For legacy downloads, we must update the referrer at this time.
@@ -2313,7 +2481,7 @@ this.DownloadLegacySaver.prototype = {
   /**
    * Implements "DownloadSaver.execute".
    */
-  execute: function DLS_execute(aSetProgressBytesFn)
+  execute: function DLS_execute(aSetProgressBytesFn, aSetPropertiesFn)
   {
     // Check if this is not the first execution of the download.  The Download
     // object guarantees that this function is not re-entered during execution.
@@ -2328,8 +2496,11 @@ this.DownloadLegacySaver.prototype = {
     }
 
     this.setProgressBytesFn = aSetProgressBytesFn;
+    if (this.progressWasNotified) {
+      this.onProgressBytes(this.currentBytes, this.totalBytes);
+    }
 
-    return Task.spawn(function task_DLS_execute() {
+    return Task.spawn(function* task_DLS_execute() {
       try {
         // Wait for the component that executes the download to finish.
         yield this.deferExecuted.promise;
@@ -2359,10 +2530,14 @@ this.DownloadLegacySaver.prototype = {
             let file = yield OS.File.open(this.download.target.path,
                                           { create: true });
             yield file.close();
-          } catch (ex if ex instanceof OS.File.Error && ex.becauseExists) { }
+          } catch (ex) {
+            if (!(ex instanceof OS.File.Error) || !ex.becauseExists) {
+              throw ex;
+            }
+          }
         }
 
-        yield this._checkReputationAndMove();
+        yield this._checkReputationAndMove(aSetPropertiesFn);
 
       } catch (ex) {
         // Ensure we always remove the final target file on failure,
@@ -2397,7 +2572,8 @@ this.DownloadLegacySaver.prototype = {
   },
 
   _checkReputationAndMove: function () {
-    return DownloadCopySaver.prototype._checkReputationAndMove.call(this);
+    return DownloadCopySaver.prototype._checkReputationAndMove
+                                      .apply(this, arguments);
   },
 
   /**
@@ -2541,7 +2717,7 @@ this.DownloadPDFSaver.prototype = {
    */
   execute: function (aSetProgressBytesFn, aSetPropertiesFn)
   {
-    return Task.spawn(function task_DCS_execute() {
+    return Task.spawn(function* task_DCS_execute() {
       if (!this.download.source.windowRef) {
         throw new DownloadError({
           message: "PDF saver must be passed an open window, and cannot be restarted.",

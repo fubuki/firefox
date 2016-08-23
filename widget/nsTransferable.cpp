@@ -29,11 +29,12 @@ Notes to self:
 #include "nsDirectoryService.h"
 #include "nsCRT.h" 
 #include "nsNetUtil.h"
+#include "nsIDOMNode.h"
 #include "nsIOutputStream.h"
 #include "nsIInputStream.h"
+#include "nsIWeakReferenceUtils.h"
 #include "nsIFile.h"
 #include "nsILoadContext.h"
-#include "nsAutoPtr.h"
 
 NS_IMPL_ISUPPORTS(nsTransferable, nsITransferable)
 
@@ -56,10 +57,11 @@ DataStruct::~DataStruct()
 
 //-------------------------------------------------------------------------
 void
-DataStruct::SetData ( nsISupports* aData, uint32_t aDataLen )
+DataStruct::SetData ( nsISupports* aData, uint32_t aDataLen, bool aIsPrivateData )
 {
   // Now, check to see if we consider the data to be "too large"
-  if (aDataLen > kLargeDatasetSize) {
+  // as well as ensuring that private browsing mode is disabled
+  if (aDataLen > kLargeDatasetSize && !aIsPrivateData) {
     // if so, cache it to disk instead of memory
     if ( NS_SUCCEEDED(WriteCache(aData, aDataLen)) )
       return;
@@ -151,7 +153,7 @@ DataStruct::WriteCache(nsISupports* aData, uint32_t aDataLen)
     if ( buff ) {
       uint32_t ignored;
       outStr->Write(reinterpret_cast<char*>(buff), aDataLen, &ignored);
-      nsMemory::Free(buff);
+      free(buff);
       return NS_OK;
     }
   }
@@ -180,7 +182,7 @@ DataStruct::ReadCache(nsISupports** aData, uint32_t* aDataLen)
 
     uint32_t size = uint32_t(fileSize);
     // create new memory for the large clipboard data
-    nsAutoArrayPtr<char> data(new char[size]);
+    auto data = MakeUnique<char[]>(size);
     if ( !data )
       return NS_ERROR_OUT_OF_MEMORY;
       
@@ -191,11 +193,12 @@ DataStruct::ReadCache(nsISupports** aData, uint32_t* aDataLen)
     
     if (!cacheFile) return NS_ERROR_FAILURE;
 
-    nsresult rv = inStr->Read(data, fileSize, aDataLen);
+    nsresult rv = inStr->Read(data.get(), fileSize, aDataLen);
 
     // make sure we got all the data ok
     if (NS_SUCCEEDED(rv) && *aDataLen == size) {
-      nsPrimitiveHelpers::CreatePrimitiveForData ( mFlavor.get(), data, fileSize, aData );
+      nsPrimitiveHelpers::CreatePrimitiveForData(mFlavor.get(), data.get(),
+                                                 fileSize, aData);
       return *aData ? NS_OK : NS_ERROR_FAILURE;
     }
 
@@ -399,7 +402,7 @@ nsTransferable::SetTransferData(const char *aFlavor, nsISupports *aData, uint32_
   for (size_t i = 0; i < mDataArray.Length(); ++i) {
     DataStruct& data = mDataArray.ElementAt(i);
     if ( data.GetFlavor().Equals(aFlavor) ) {
-      data.SetData ( aData, aDataLen );
+      data.SetData ( aData, aDataLen, mPrivateData );
       return NS_OK;
     }
   }
@@ -415,7 +418,7 @@ nsTransferable::SetTransferData(const char *aFlavor, nsISupports *aData, uint32_
         nsCOMPtr<nsISupports> ConvertedData;
         uint32_t ConvertedLen;
         mFormatConv->Convert(aFlavor, aData, aDataLen, data.GetFlavor().get(), getter_AddRefs(ConvertedData), &ConvertedLen);
-        data.SetData(ConvertedData, ConvertedLen);
+        data.SetData(ConvertedData, ConvertedLen, mPrivateData);
         return NS_OK;
       }
     }

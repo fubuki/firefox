@@ -24,8 +24,8 @@ class nsBoxLayoutState;
 namespace mozilla {
 namespace gfx {
 class DrawTarget;
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 nsIFrame* NS_NewBoxFrame(nsIPresShell* aPresShell,
                          nsStyleContext* aContext,
@@ -56,25 +56,25 @@ public:
   // gets the rect inside our border and debug border. If you wish to paint inside a box
   // call this method to get the rect so you don't draw on the debug border or outer border.
 
-  virtual void SetLayoutManager(nsBoxLayout* aLayout) MOZ_OVERRIDE { mLayoutManager = aLayout; }
-  virtual nsBoxLayout* GetLayoutManager() MOZ_OVERRIDE { return mLayoutManager; }
+  virtual void SetXULLayoutManager(nsBoxLayout* aLayout) override { mLayoutManager = aLayout; }
+  virtual nsBoxLayout* GetXULLayoutManager() override { return mLayoutManager; }
 
-  virtual nsresult RelayoutChildAtOrdinal(nsBoxLayoutState& aState, nsIFrame* aChild) MOZ_OVERRIDE;
+  virtual nsresult XULRelayoutChildAtOrdinal(nsIFrame* aChild) override;
 
-  virtual nsSize GetPrefSize(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
-  virtual nsSize GetMinSize(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
-  virtual nsSize GetMaxSize(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
-  virtual nscoord GetFlex(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
-  virtual nscoord GetBoxAscent(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
+  virtual nsSize GetXULPrefSize(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nsSize GetXULMinSize(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nsSize GetXULMaxSize(nsBoxLayoutState& aBoxLayoutState) override;
+  virtual nscoord GetXULFlex() override;
+  virtual nscoord GetXULBoxAscent(nsBoxLayoutState& aBoxLayoutState) override;
 #ifdef DEBUG_LAYOUT
-  virtual nsresult SetDebug(nsBoxLayoutState& aBoxLayoutState, bool aDebug) MOZ_OVERRIDE;
-  virtual nsresult GetDebug(bool& aDebug) MOZ_OVERRIDE;
+  virtual nsresult SetXULDebug(nsBoxLayoutState& aBoxLayoutState, bool aDebug) override;
+  virtual nsresult GetXULDebug(bool& aDebug) override;
 #endif
-  virtual Valignment GetVAlign() const MOZ_OVERRIDE { return mValign; }
-  virtual Halignment GetHAlign() const MOZ_OVERRIDE { return mHalign; }
-  NS_IMETHOD DoLayout(nsBoxLayoutState& aBoxLayoutState) MOZ_OVERRIDE;
+  virtual Valignment GetXULVAlign() const override { return mValign; }
+  virtual Halignment GetXULHAlign() const override { return mHalign; }
+  NS_IMETHOD DoXULLayout(nsBoxLayoutState& aBoxLayoutState) override;
 
-  virtual bool ComputesOwnOverflowArea() MOZ_OVERRIDE { return false; }
+  virtual bool ComputesOwnOverflowArea() override { return false; }
 
   // ----- child and sibling operations ---
 
@@ -82,39 +82,39 @@ public:
   
   virtual void Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
-                    nsIFrame*         aPrevInFlow) MOZ_OVERRIDE;
+                    nsIFrame*         aPrevInFlow) override;
 
  
   virtual nsresult AttributeChanged(int32_t         aNameSpaceID,
                                     nsIAtom*        aAttribute,
-                                    int32_t         aModType) MOZ_OVERRIDE;
+                                    int32_t         aModType) override;
 
-  virtual void MarkIntrinsicISizesDirty() MOZ_OVERRIDE;
-  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
-  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) MOZ_OVERRIDE;
+  virtual void MarkIntrinsicISizesDirty() override;
+  virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
+  virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
 
   virtual void Reflow(nsPresContext*           aPresContext,
                       nsHTMLReflowMetrics&     aDesiredSize,
                       const nsHTMLReflowState& aReflowState,
-                      nsReflowStatus&          aStatus) MOZ_OVERRIDE;
+                      nsReflowStatus&          aStatus) override;
 
   virtual void SetInitialChildList(ChildListID  aListID,
-                                   nsFrameList& aChildList) MOZ_OVERRIDE;
+                                   nsFrameList& aChildList) override;
   virtual void AppendFrames(ChildListID     aListID,
-                            nsFrameList&    aFrameList) MOZ_OVERRIDE;
+                            nsFrameList&    aFrameList) override;
   virtual void InsertFrames(ChildListID     aListID,
                             nsIFrame*       aPrevFrame,
-                            nsFrameList&    aFrameList) MOZ_OVERRIDE;
+                            nsFrameList&    aFrameList) override;
   virtual void RemoveFrame(ChildListID     aListID,
-                           nsIFrame*       aOldFrame) MOZ_OVERRIDE;
+                           nsIFrame*       aOldFrame) override;
 
-  virtual nsContainerFrame* GetContentInsertionFrame() MOZ_OVERRIDE;
+  virtual nsContainerFrame* GetContentInsertionFrame() override;
 
-  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) MOZ_OVERRIDE;
+  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext) override;
 
-  virtual nsIAtom* GetType() const MOZ_OVERRIDE;
+  virtual nsIAtom* GetType() const override;
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const MOZ_OVERRIDE
+  virtual bool IsFrameOfType(uint32_t aFlags) const override
   {
     // record that children that are ignorable whitespace should be excluded 
     // (When content was loaded via the XUL content sink, it's already
@@ -132,14 +132,14 @@ public:
   }
 
 #ifdef DEBUG_FRAME_DUMP
-  virtual nsresult GetFrameName(nsAString& aResult) const MOZ_OVERRIDE;
+  virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
   virtual void DidReflow(nsPresContext*           aPresContext,
                          const nsHTMLReflowState* aReflowState,
-                         nsDidReflowStatus        aStatus) MOZ_OVERRIDE;
+                         nsDidReflowStatus        aStatus) override;
 
-  virtual bool HonorPrintBackgroundSettings() MOZ_OVERRIDE;
+  virtual bool HonorPrintBackgroundSettings() override;
 
   virtual ~nsBoxFrame();
   
@@ -153,7 +153,7 @@ public:
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
-                                const nsDisplayListSet& aLists) MOZ_OVERRIDE;
+                                const nsDisplayListSet& aLists) override;
   
 #ifdef DEBUG_LAYOUT
     virtual void SetDebugOnChildList(nsBoxLayoutState& aState, nsIFrame* aChild, bool aDebug);
@@ -180,7 +180,7 @@ public:
 
 protected:
 #ifdef DEBUG_LAYOUT
-    virtual void GetBoxName(nsAutoString& aName) MOZ_OVERRIDE;
+    virtual void GetBoxName(nsAutoString& aName) override;
     void PaintXULDebugBackground(nsRenderingContext& aRenderingContext,
                                  nsPoint aPt);
     void PaintXULDebugOverlay(DrawTarget& aRenderingContext,
@@ -194,7 +194,7 @@ protected:
     virtual bool GetInitialVAlignment(Valignment& aValign); 
     virtual bool GetInitialAutoStretch(bool& aStretch); 
   
-    virtual void DestroyFrom(nsIFrame* aDestructRoot) MOZ_OVERRIDE;
+    virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
 
     nsSize mPrefSize;
     nsSize mMinSize;
@@ -209,7 +209,8 @@ protected:
     bool GetEventPoint(mozilla::WidgetGUIEvent* aEvent, nsPoint& aPoint);
     // Gets the event coordinates relative to the widget offset associated with
     // this frame. Return true if a single valid point was found.
-    bool GetEventPoint(mozilla::WidgetGUIEvent* aEvent, nsIntPoint& aPoint);
+    bool GetEventPoint(mozilla::WidgetGUIEvent* aEvent,
+                       mozilla::LayoutDeviceIntPoint& aPoint);
 
 protected:
     void RegUnregAccessKey(bool aDoReg);
@@ -219,9 +220,9 @@ protected:
 private: 
 
 #ifdef DEBUG_LAYOUT
-    nsresult SetDebug(nsPresContext* aPresContext, bool aDebug);
+    nsresult SetXULDebug(nsPresContext* aPresContext, bool aDebug);
     bool GetInitialDebug(bool& aDebug);
-    void GetDebugPref(nsPresContext* aPresContext);
+    void GetDebugPref();
 
     void GetDebugBorder(nsMargin& aInset);
     void GetDebugPadding(nsMargin& aInset);
@@ -229,7 +230,7 @@ private:
 
     nsresult GetFrameSizeWithMargin(nsIFrame* aBox, nsSize& aSize);
 
-    void PixelMarginToTwips(nsPresContext* aPresContext, nsMargin& aMarginPixels);
+    void PixelMarginToTwips(nsMargin& aMarginPixels);
 
     void GetValue(nsPresContext* aPresContext, const nsSize& a, const nsSize& b, char* value);
     void GetValue(nsPresContext* aPresContext, int32_t a, int32_t b, char* value);

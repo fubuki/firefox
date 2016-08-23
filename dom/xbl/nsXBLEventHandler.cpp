@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -89,18 +90,18 @@ nsXBLKeyEventHandler::ExecuteMatchedHandlers(
                         uint32_t aCharCode,
                         const IgnoreModifierState& aIgnoreModifierState)
 {
-  WidgetEvent* event = aKeyEvent->GetInternalNSEvent();
-  nsCOMPtr<EventTarget> target = aKeyEvent->InternalDOMEvent()->GetCurrentTarget();
+  WidgetEvent* event = aKeyEvent->AsEvent()->WidgetEventPtr();
+  nsCOMPtr<EventTarget> target = aKeyEvent->AsEvent()->InternalDOMEvent()->GetCurrentTarget();
 
   bool executed = false;
   for (uint32_t i = 0; i < mProtoHandlers.Length(); ++i) {
     nsXBLPrototypeHandler* handler = mProtoHandlers[i];
     bool hasAllowUntrustedAttr = handler->HasAllowUntrustedAttr();
-    if ((event->mFlags.mIsTrusted ||
+    if ((event->IsTrusted() ||
         (hasAllowUntrustedAttr && handler->AllowUntrustedEvents()) ||
         (!hasAllowUntrustedAttr && !mIsBoundToChrome && !mUsingContentXBLScope)) &&
         handler->KeyEventMatched(aKeyEvent, aCharCode, aIgnoreModifierState)) {
-      handler->ExecuteHandler(target, aKeyEvent);
+      handler->ExecuteHandler(target, aKeyEvent->AsEvent());
       executed = true;
     }
   }
@@ -139,18 +140,21 @@ nsXBLKeyEventHandler::HandleEvent(nsIDOMEvent* aEvent)
   if (!key)
     return NS_OK;
 
-  nsAutoTArray<nsShortcutCandidate, 10> accessKeys;
-  nsContentUtils::GetAccelKeyCandidates(key, accessKeys);
+  WidgetKeyboardEvent* nativeKeyboardEvent =
+    aEvent->WidgetEventPtr()->AsKeyboardEvent();
+  MOZ_ASSERT(nativeKeyboardEvent);
+  AutoShortcutKeyCandidateArray shortcutKeys;
+  nativeKeyboardEvent->GetShortcutKeyCandidates(shortcutKeys);
 
-  if (accessKeys.IsEmpty()) {
+  if (shortcutKeys.IsEmpty()) {
     ExecuteMatchedHandlers(key, 0, IgnoreModifierState());
     return NS_OK;
   }
 
-  for (uint32_t i = 0; i < accessKeys.Length(); ++i) {
+  for (uint32_t i = 0; i < shortcutKeys.Length(); ++i) {
     IgnoreModifierState ignoreModifierState;
-    ignoreModifierState.mShift = accessKeys[i].mIgnoreShift;
-    if (ExecuteMatchedHandlers(key, accessKeys[i].mCharCode,
+    ignoreModifierState.mShift = shortcutKeys[i].mIgnoreShift;
+    if (ExecuteMatchedHandlers(key, shortcutKeys[i].mCharCode,
                                ignoreModifierState)) {
       return NS_OK;
     }
@@ -160,42 +164,24 @@ nsXBLKeyEventHandler::HandleEvent(nsIDOMEvent* aEvent)
 
 ///////////////////////////////////////////////////////////////////////////////////
 
-nsresult
+already_AddRefed<nsXBLEventHandler>
 NS_NewXBLEventHandler(nsXBLPrototypeHandler* aHandler,
-                      nsIAtom* aEventType,
-                      nsXBLEventHandler** aResult)
+                      nsIAtom* aEventType)
 {
+  RefPtr<nsXBLEventHandler> handler;
+
   switch (nsContentUtils::GetEventClassID(nsDependentAtomString(aEventType))) {
     case eDragEventClass:
     case eMouseEventClass:
     case eMouseScrollEventClass:
     case eWheelEventClass:
     case eSimpleGestureEventClass:
-      *aResult = new nsXBLMouseEventHandler(aHandler);
+      handler = new nsXBLMouseEventHandler(aHandler);
       break;
     default:
-      *aResult = new nsXBLEventHandler(aHandler);
+      handler = new nsXBLEventHandler(aHandler);
       break;
   }
 
-  if (!*aResult)
-    return NS_ERROR_OUT_OF_MEMORY;
-
-  NS_ADDREF(*aResult);
-
-  return NS_OK;
-}
-
-nsresult
-NS_NewXBLKeyEventHandler(nsIAtom* aEventType, uint8_t aPhase, uint8_t aType,
-                         nsXBLKeyEventHandler** aResult)
-{
-  *aResult = new nsXBLKeyEventHandler(aEventType, aPhase, aType);
-
-  if (!*aResult)
-    return NS_ERROR_OUT_OF_MEMORY;
-
-  NS_ADDREF(*aResult);
-
-  return NS_OK;
+  return handler.forget();
 }

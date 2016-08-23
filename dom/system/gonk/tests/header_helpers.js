@@ -3,10 +3,10 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 
-let subscriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
+var subscriptLoader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                         .getService(Ci.mozIJSSubScriptLoader);
 
 /**
@@ -193,34 +193,25 @@ function newIncomingParcel(fakeParcelSize, response, request, data) {
 }
 
 /**
- * Test whether specified function throws exception with expected
- * result.
+ * Create a parcel buffer which represents the hex string.
  *
- * @param func
- *        Function to be tested.
- * @param message
- *        Message of expected exception. <code>null</code> for no throws.
- * @param stack
- *        Optional stack object to be printed. <code>null</code> for
- *        Components#stack#caller.
+ * @param hexString
+ *        The HEX string to be converted.
+ *
+ * @return an Uint8Array carrying all parcel data.
  */
-function do_check_throws(func, message, stack)
-{
-  if (!stack)
-    stack = Components.stack.caller;
+function hexStringToParcelByteArrayData(hexString) {
+  let length = Math.ceil((hexString.length / 2));
+  let bytes = new Uint8Array(4 + length);
 
-  try {
-    func();
-  } catch (exc) {
-    if (exc.message === message) {
-      return;
-    }
-    do_throw("expecting exception '" + message
-             + "', caught '" + exc.message + "'", stack);
+  bytes[0] = length & 0xFF;
+  bytes[1] = (length >>  8) & 0xFF;
+  bytes[2] = (length >> 16) & 0xFF;
+  bytes[3] = (length >> 24) & 0xFF;
+
+  for (let i = 0; i < length; i ++) {
+    bytes[i + 4] = Number.parseInt(hexString.substr(i * 2, 2), 16);
   }
 
-  if (message) {
-    do_throw("expecting exception '" + message + "', none thrown", stack);
-  }
+  return bytes;
 }
-

@@ -63,7 +63,12 @@ private:                                                                    \
                                                                             \
     friend class Internal;                                                  \
                                                                             \
-    nsISupports*        fOuter;                                             \
+    nsISupports* MOZ_UNSAFE_REF("fOuter can either point to fAggregated "   \
+                                "or to an outer object, and the safety "    \
+                                "of this reference depends on the exact "   \
+                                "lifetime semantics of the AddRef/Release " \
+                                "functions created by these macros.")       \
+                        fOuter;                                             \
     Internal            fAggregated;                                        \
                                                                             \
 public:                                                                     \
@@ -290,16 +295,13 @@ _InstanceClass##Constructor(nsISupports *aOuter, REFNSIID aIID,             \
     if (NS_WARN_IF(aOuter && !aIID.Equals(NS_GET_IID(nsISupports))))        \
         return NS_ERROR_INVALID_ARG;                                        \
                                                                             \
-    _InstanceClass* inst = new _InstanceClass(aOuter);                      \
+    RefPtr<_InstanceClass> inst = new _InstanceClass(aOuter);               \
     if (!inst) {                                                            \
         return NS_ERROR_OUT_OF_MEMORY;                                      \
     }                                                                       \
                                                                             \
     nsISupports* inner = inst->InnerObject();                               \
     nsresult rv = inner->QueryInterface(aIID, aResult);                     \
-    if (NS_FAILED(rv)) {                                                    \
-        delete inst;                                                        \
-    }                                                                       \
                                                                             \
     return rv;                                                              \
 }                                                                           \
@@ -313,7 +315,7 @@ _InstanceClass##Constructor(nsISupports *aOuter, REFNSIID aIID,             \
     if (NS_WARN_IF(aOuter && !aIID.Equals(NS_GET_IID(nsISupports))))        \
         return NS_ERROR_INVALID_ARG;                                        \
                                                                             \
-    _InstanceClass* inst = new _InstanceClass(aOuter);                      \
+    RefPtr<_InstanceClass> inst = new _InstanceClass(aOuter);               \
     if (!inst) {                                                            \
         return NS_ERROR_OUT_OF_MEMORY;                                      \
     }                                                                       \

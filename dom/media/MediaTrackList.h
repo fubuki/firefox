@@ -20,41 +20,6 @@ class AudioTrackList;
 class VideoTrackList;
 class AudioTrack;
 class VideoTrack;
-class MediaTrackList;
-
-/**
- * This is for the media resource to notify its audio track and video track,
- * when a media-resource-specific track has ended, or whether it has enabled or
- * not. All notification methods are called from the main thread.
- */
-class MediaTrackListListener
-{
-public:
-  friend class mozilla::DOMMediaStream;
-
-  explicit MediaTrackListListener(MediaTrackList* aMediaTrackList)
-    : mMediaTrackList(aMediaTrackList) {};
-
-  ~MediaTrackListListener()
-  {
-    mMediaTrackList = nullptr;
-  };
-
-  // Notify mMediaTrackList that a track has created by the media resource,
-  // and this corresponding MediaTrack object should be added into
-  // mMediaTrackList, and fires a addtrack event.
-  void NotifyMediaTrackCreated(MediaTrack* aTrack);
-
-  // Notify mMediaTrackList that a track has ended by the media resource,
-  // and this corresponding MediaTrack object should be removed from
-  // mMediaTrackList, and fires a removetrack event.
-  void NotifyMediaTrackEnded(const nsAString& aId);
-
-protected:
-  // A weak reference to a MediaTrackList object, its lifetime managed by its
-  // owner.
-  MediaTrackList* mMediaTrackList;
-};
 
 /**
  * Base class of AudioTrackList and VideoTrackList. The AudioTrackList and
@@ -67,7 +32,7 @@ protected:
 class MediaTrackList : public DOMEventTargetHelper
 {
 public:
-  MediaTrackList(nsPIDOMWindow* aOwnerWindow, HTMLMediaElement* aMediaElement);
+  MediaTrackList(nsPIDOMWindowInner* aOwnerWindow, HTMLMediaElement* aMediaElement);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(MediaTrackList, DOMEventTargetHelper)
@@ -80,7 +45,7 @@ public:
 
   void AddTrack(MediaTrack* aTrack);
 
-  void RemoveTrack(const nsRefPtr<MediaTrack>& aTrack);
+  void RemoveTrack(const RefPtr<MediaTrack>& aTrack);
 
   void RemoveTracks();
 
@@ -106,6 +71,11 @@ public:
 
   MediaTrack* GetTrackById(const nsAString& aId);
 
+  bool IsEmpty() const
+  {
+    return mTracks.IsEmpty();
+  }
+
   uint32_t Length() const
   {
     return mTracks.Length();
@@ -115,7 +85,6 @@ public:
   IMPL_EVENT_HANDLER(addtrack)
   IMPL_EVENT_HANDLER(removetrack)
 
-  friend class MediaTrackListListener;
   friend class AudioTrack;
   friend class VideoTrack;
 
@@ -131,8 +100,8 @@ protected:
 
   HTMLMediaElement* GetMediaElement() { return mMediaElement; }
 
-  nsTArray<nsRefPtr<MediaTrack>> mTracks;
-  nsRefPtr<HTMLMediaElement> mMediaElement;
+  nsTArray<RefPtr<MediaTrack>> mTracks;
+  RefPtr<HTMLMediaElement> mMediaElement;
 };
 
 } // namespace dom

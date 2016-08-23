@@ -35,7 +35,7 @@ namespace ipc {
 class FileDescriptor
 {
 public:
-  typedef base::ProcessHandle ProcessHandle;
+  typedef base::ProcessId ProcessId;
 
 #ifdef XP_WIN
   typedef HANDLE PlatformHandleType;
@@ -52,8 +52,10 @@ public:
   FileDescriptor();
 
   FileDescriptor(const FileDescriptor& aOther)
-    : mHandleCreatedByOtherProcess(false),
-      mHandleCreatedByOtherProcessWasUsed(false)
+    : mHandleCreatedByOtherProcess(false)
+#ifdef DEBUG
+    , mHandleCreatedByOtherProcessWasUsed(false)
+#endif
   {
     // Don't use operator= here because that will call
     // CloseCurrentProcessHandle() on this (uninitialized) object.
@@ -69,7 +71,9 @@ public:
   : mHandle(aPickle.fd)
 #endif
   , mHandleCreatedByOtherProcess(true)
+#ifdef DEBUG
   , mHandleCreatedByOtherProcessWasUsed(false)
+#endif
   { }
 
   ~FileDescriptor()
@@ -89,7 +93,7 @@ public:
   // process (e.g. dup() on POSIX, DuplicateHandle() on Windows). Returns a
   // pickled value that can be passed to the other process via IPC.
   PickleType
-  ShareTo(const IPDLPrivate&, ProcessHandle aOtherProcess) const;
+  ShareTo(const IPDLPrivate&, ProcessId aTargetPid) const;
 
   // Tests mHandle against a well-known invalid platform-specific file handle
   // (e.g. -1 on POSIX, INVALID_HANDLE_VALUE on Windows).
@@ -102,9 +106,11 @@ public:
   PlatformHandleType
   PlatformHandle() const
   {
+#ifdef DEBUG
     if (mHandleCreatedByOtherProcess) {
       mHandleCreatedByOtherProcessWasUsed = true;
     }
+#endif
     return mHandle;
   }
 
@@ -120,13 +126,17 @@ private:
   {
     if (aOther.mHandleCreatedByOtherProcess) {
       mHandleCreatedByOtherProcess = true;
+#ifdef DEBUG
       mHandleCreatedByOtherProcessWasUsed =
         aOther.mHandleCreatedByOtherProcessWasUsed;
+#endif
       mHandle = aOther.PlatformHandle();
     } else {
       DuplicateInCurrentProcess(aOther.PlatformHandle());
       mHandleCreatedByOtherProcess = false;
+#ifdef DEBUG
       mHandleCreatedByOtherProcessWasUsed = false;
+#endif
     }
   }
 
@@ -147,9 +157,11 @@ private:
   // destruction.
   bool mHandleCreatedByOtherProcess;
 
+#ifdef DEBUG
   // This is to ensure that we don't leak the handle (which is only possible
   // when we're in the receiving process).
-  mutable DebugOnly<bool> mHandleCreatedByOtherProcessWasUsed;
+  mutable bool mHandleCreatedByOtherProcessWasUsed;
+#endif
 };
 
 } // namespace ipc

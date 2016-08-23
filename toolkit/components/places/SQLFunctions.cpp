@@ -16,6 +16,11 @@
 #include "nsPrintfCString.h"
 #include "nsNavHistory.h"
 #include "mozilla/Likely.h"
+#include "nsVariant.h"
+
+// Maximum number of chars to search through.
+// MatchAutoCompleteFunction won't look for matches over this threshold.
+#define MAX_CHARS_TO_SEARCH_THROUGH 255
 
 using namespace mozilla::storage;
 
@@ -189,7 +194,7 @@ namespace places {
   nsresult
   MatchAutoCompleteFunction::create(mozIStorageConnection *aDBConn)
   {
-    nsRefPtr<MatchAutoCompleteFunction> function =
+    RefPtr<MatchAutoCompleteFunction> function =
       new MatchAutoCompleteFunction();
 
     nsresult rv = aDBConn->CreateFunction(
@@ -387,11 +392,17 @@ namespace places {
     searchFunctionPtr searchFunction = getSearchFunction(matchBehavior);
 
     // Clean up our URI spec and prepare it for searching.
-    nsCString fixedURI;
-    fixupURISpec(url, matchBehavior, fixedURI);
+    nsCString fixedUrl;
+    fixupURISpec(url, matchBehavior, fixedUrl);
+    // Limit the number of chars we search through.
+    const nsDependentCSubstring& trimmedUrl =
+      Substring(fixedUrl, 0, MAX_CHARS_TO_SEARCH_THROUGH);
 
     nsAutoCString title;
     (void)aArguments->GetUTF8String(kArgIndexTitle, title);
+    // Limit the number of chars we search through.
+    const nsDependentCSubstring& trimmedTitle =
+      Substring(title, 0, MAX_CHARS_TO_SEARCH_THROUGH);
 
     // Determine if every token matches either the bookmark title, tags, page
     // title, or page URL.
@@ -400,19 +411,21 @@ namespace places {
       const nsDependentCSubstring &token = tokenizer.nextToken();
 
       if (HAS_BEHAVIOR(TITLE) && HAS_BEHAVIOR(URL)) {
-        matches = (searchFunction(token, title) || searchFunction(token, tags)) &&
-                  searchFunction(token, fixedURI);
+        matches = (searchFunction(token, trimmedTitle) ||
+                   searchFunction(token, tags)) &&
+                  searchFunction(token, trimmedUrl);
       }
       else if (HAS_BEHAVIOR(TITLE)) {
-        matches = searchFunction(token, title) || searchFunction(token, tags);
+        matches = searchFunction(token, trimmedTitle) ||
+                  searchFunction(token, tags);
       }
       else if (HAS_BEHAVIOR(URL)) {
-        matches = searchFunction(token, fixedURI);
+        matches = searchFunction(token, trimmedUrl);
       }
       else {
-        matches = searchFunction(token, title) ||
+        matches = searchFunction(token, trimmedTitle) ||
                   searchFunction(token, tags) ||
-                  searchFunction(token, fixedURI);
+                  searchFunction(token, trimmedUrl);
       }
     }
 
@@ -436,7 +449,7 @@ namespace places {
   nsresult
   CalculateFrecencyFunction::create(mozIStorageConnection *aDBConn)
   {
-    nsRefPtr<CalculateFrecencyFunction> function =
+    RefPtr<CalculateFrecencyFunction> function =
       new CalculateFrecencyFunction();
 
     nsresult rv = aDBConn->CreateFunction(
@@ -477,13 +490,13 @@ namespace places {
     // This is a const version of the history object for thread-safety.
     const nsNavHistory* history = nsNavHistory::GetConstHistoryService();
     NS_ENSURE_STATE(history);
-    nsRefPtr<Database> DB = Database::GetDatabase();
+    RefPtr<Database> DB = Database::GetDatabase();
     NS_ENSURE_STATE(DB);
 
     if (pageId > 0) {
       // The page is already in the database, and we can fetch current
       // params from the database.
-      nsRefPtr<mozIStorageStatement> getPageInfo = DB->GetStatement(
+      RefPtr<mozIStorageStatement> getPageInfo = DB->GetStatement(
         "SELECT typed, hidden, visit_count, "
           "(SELECT count(*) FROM moz_historyvisits WHERE place_id = :page_id), "
           "EXISTS (SELECT 1 FROM moz_bookmarks WHERE fk = :page_id), "
@@ -633,7 +646,7 @@ namespace places {
   nsresult
   GenerateGUIDFunction::create(mozIStorageConnection *aDBConn)
   {
-    nsRefPtr<GenerateGUIDFunction> function = new GenerateGUIDFunction();
+    RefPtr<GenerateGUIDFunction> function = new GenerateGUIDFunction();
     nsresult rv = aDBConn->CreateFunction(
       NS_LITERAL_CSTRING("generate_guid"), 0, function
     );
@@ -676,7 +689,7 @@ namespace places {
   nsresult
   GetUnreversedHostFunction::create(mozIStorageConnection *aDBConn)
   {
-    nsRefPtr<GetUnreversedHostFunction> function = new GetUnreversedHostFunction();
+    RefPtr<GetUnreversedHostFunction> function = new GetUnreversedHostFunction();
     nsresult rv = aDBConn->CreateFunction(
       NS_LITERAL_CSTRING("get_unreversed_host"), 1, function
     );
@@ -703,9 +716,7 @@ namespace places {
     nsAutoString src;
     aArguments->GetString(0, src);
 
-    nsCOMPtr<nsIWritableVariant> result =
-      do_CreateInstance("@mozilla.org/variant;1");
-    NS_ENSURE_STATE(result);
+    RefPtr<nsVariant> result = new nsVariant();
 
     if (src.Length()>1) {
       src.Truncate(src.Length() - 1);
@@ -716,7 +727,7 @@ namespace places {
     else {
       result->SetAsAString(EmptyString());
     }
-    NS_ADDREF(*_result = result);
+    result.forget(_result);
     return NS_OK;
   }
 
@@ -734,7 +745,7 @@ namespace places {
   nsresult
   FixupURLFunction::create(mozIStorageConnection *aDBConn)
   {
-    nsRefPtr<FixupURLFunction> function = new FixupURLFunction();
+    RefPtr<FixupURLFunction> function = new FixupURLFunction();
     nsresult rv = aDBConn->CreateFunction(
       NS_LITERAL_CSTRING("fixup_url"), 1, function
     );
@@ -761,9 +772,14 @@ namespace places {
     nsAutoString src;
     aArguments->GetString(0, src);
 
-    nsCOMPtr<nsIWritableVariant> result =
-      do_CreateInstance("@mozilla.org/variant;1");
-    NS_ENSURE_STATE(result);
+    RefPtr<nsVariant> result = new nsVariant();
+
+    if (StringBeginsWith(src, NS_LITERAL_STRING("http://")))
+      src.Cut(0, 7);
+    else if (StringBeginsWith(src, NS_LITERAL_STRING("https://")))
+      src.Cut(0, 8);
+    else if (StringBeginsWith(src, NS_LITERAL_STRING("ftp://")))
+      src.Cut(0, 6);
 
     // Remove common URL hostname prefixes
     if (StringBeginsWith(src, NS_LITERAL_STRING("www."))) {
@@ -771,7 +787,7 @@ namespace places {
     }
 
     result->SetAsAString(src);
-    NS_ADDREF(*_result = result);
+    result.forget(_result);
     return NS_OK;
   }
 
@@ -786,7 +802,7 @@ namespace places {
   nsresult
   FrecencyNotificationFunction::create(mozIStorageConnection *aDBConn)
   {
-    nsRefPtr<FrecencyNotificationFunction> function =
+    RefPtr<FrecencyNotificationFunction> function =
       new FrecencyNotificationFunction();
     nsresult rv = aDBConn->CreateFunction(
       NS_LITERAL_CSTRING("notify_frecency"), 5, function
@@ -828,12 +844,10 @@ namespace places {
     navHistory->DispatchFrecencyChangedNotification(spec, newFrecency, guid,
                                                     hidden, lastVisitDate);
 
-    nsCOMPtr<nsIWritableVariant> result =
-      do_CreateInstance("@mozilla.org/variant;1");
-    NS_ENSURE_STATE(result);
+    RefPtr<nsVariant> result = new nsVariant();
     rv = result->SetAsInt32(newFrecency);
     NS_ENSURE_SUCCESS(rv, rv);
-    NS_ADDREF(*_result = result);
+    result.forget(_result);
     return NS_OK;
   }
 

@@ -21,7 +21,7 @@
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
 #endif
-#include "nsStackWalk.h"
+#include "mozilla/StackWalk.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
 
@@ -45,17 +45,21 @@ SandboxLogJSStack(void)
     return;
   }
   nsCOMPtr<nsIStackFrame> frame = dom::GetCurrentJSStack();
+  // If we got a stack, we must have a current JSContext.  This is icky.  :(
+  // Would be better if GetCurrentJSStack() handed out the JSContext it ended up
+  // using or something.
+  JSContext* cx = frame ? nsContentUtils::GetCurrentJSContext() : nullptr;
   for (int i = 0; frame != nullptr; ++i) {
     nsAutoString fileName, funName;
     int32_t lineNumber;
 
     // Don't stop unwinding if an attribute can't be read.
     fileName.SetIsVoid(true);
-    unused << frame->GetFilename(fileName);
+    Unused << frame->GetFilename(cx, fileName);
     lineNumber = 0;
-    unused << frame->GetLineNumber(&lineNumber);
+    Unused << frame->GetLineNumber(cx, &lineNumber);
     funName.SetIsVoid(true);
-    unused << frame->GetName(funName);
+    Unused << frame->GetName(cx, funName);
 
     if (!funName.IsVoid() || !fileName.IsVoid()) {
       SANDBOX_LOG_ERROR("JS frame %d: %s %s line %d", i,
@@ -67,7 +71,7 @@ SandboxLogJSStack(void)
     }
 
     nsCOMPtr<nsIStackFrame> nextFrame;
-    nsresult rv = frame->GetCaller(getter_AddRefs(nextFrame));
+    nsresult rv = frame->GetCaller(cx, getter_AddRefs(nextFrame));
     NS_ENSURE_SUCCESS_VOID(rv);
     frame = nextFrame;
   }
@@ -77,10 +81,10 @@ static void SandboxPrintStackFrame(uint32_t aFrameNumber, void *aPC, void *aSP,
                                    void *aClosure)
 {
   char buf[1024];
-  nsCodeAddressDetails details;
+  MozCodeAddressDetails details;
 
-  NS_DescribeCodeAddress(aPC, &details);
-  NS_FormatCodeAddressDetails(buf, sizeof(buf), aFrameNumber, aPC, &details);
+  MozDescribeCodeAddress(aPC, &details);
+  MozFormatCodeAddressDetails(buf, sizeof(buf), aFrameNumber, aPC, &details);
   SANDBOX_LOG_ERROR("frame %s", buf);
 }
 
@@ -90,11 +94,11 @@ SandboxLogCStack()
   // Skip 3 frames: one for this module, one for the signal handler in
   // libmozsandbox, and one for the signal trampoline.
   //
-  // Warning: this might not print any stack frames.  NS_StackWalk
+  // Warning: this might not print any stack frames.  MozStackWalk
   // can't walk past the signal trampoline on ARM (bug 968531), and
   // x86 frame pointer walking may or may not work (bug 1082276).
 
-  NS_StackWalk(SandboxPrintStackFrame, /* skip */ 3, /* max */ 0,
+  MozStackWalk(SandboxPrintStackFrame, /* skip */ 3, /* max */ 0,
                nullptr, 0, nullptr);
   SANDBOX_LOG_ERROR("end of stack.");
 }

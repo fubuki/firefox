@@ -68,18 +68,38 @@ HTMLLabelAccessible::RelationByType(RelationType aType)
 {
   Relation rel = AccessibleWrap::RelationByType(aType);
   if (aType == RelationType::LABEL_FOR) {
-    nsRefPtr<dom::HTMLLabelElement> label = dom::HTMLLabelElement::FromContent(mContent);
+    dom::HTMLLabelElement* label = dom::HTMLLabelElement::FromContent(mContent);
     rel.AppendTarget(mDoc, label->GetControl());
   }
 
   return rel;
 }
 
-role
-HTMLLabelAccessible::NativeRole()
+uint8_t
+HTMLLabelAccessible::ActionCount()
 {
-  return roles::LABEL;
+  return nsCoreUtils::IsLabelWithControl(mContent) ? 1 : 0;
 }
+
+void
+HTMLLabelAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
+{
+  if (aIndex == 0) {
+    if (nsCoreUtils::IsLabelWithControl(mContent))
+      aName.AssignLiteral("click");
+  }
+}
+
+bool
+HTMLLabelAccessible::DoAction(uint8_t aIndex)
+{
+  if (aIndex != 0)
+    return false;
+
+  DoCommand();
+  return true;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsHTMLOuputAccessible
@@ -96,21 +116,3 @@ HTMLOutputAccessible::RelationByType(RelationType aType)
 
   return rel;
 }
-
-role
-HTMLOutputAccessible::NativeRole()
-{
-  return roles::SECTION;
-}
-
-already_AddRefed<nsIPersistentProperties>
-HTMLOutputAccessible::NativeAttributes()
-{
-  nsCOMPtr<nsIPersistentProperties> attributes =
-    AccessibleWrap::NativeAttributes();
-  nsAccUtils::SetAccAttr(attributes, nsGkAtoms::live,
-                         NS_LITERAL_STRING("polite"));
-
-  return attributes.forget();
-}
-

@@ -10,6 +10,7 @@
 
 namespace mozilla {
 namespace a11y {
+class ProxyAccessible;
 
 /**
  * Used for <browser>, <frame>, <iframe>, <page> or editor> elements.
@@ -20,29 +21,34 @@ namespace a11y {
  * the inner document root.
  */
 
-class OuterDocAccessible MOZ_FINAL : public AccessibleWrap
+class OuterDocAccessible final : public AccessibleWrap
 {
 public:
   OuterDocAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  // Accessible
-  virtual void Shutdown() MOZ_OVERRIDE;
-  virtual mozilla::a11y::role NativeRole() MOZ_OVERRIDE;
-  virtual Accessible* ChildAtPoint(int32_t aX, int32_t aY,
-                                   EWhichChildAtPoint aWhichChild) MOZ_OVERRIDE;
+  ProxyAccessible* RemoteChildDoc() const;
 
-  virtual void InvalidateChildren() MOZ_OVERRIDE;
-  virtual bool InsertChildAt(uint32_t aIdx, Accessible* aChild) MOZ_OVERRIDE;
-  virtual bool RemoveChild(Accessible* aAccessible) MOZ_OVERRIDE;
+  // Accessible
+  virtual void Shutdown() override;
+  virtual mozilla::a11y::role NativeRole() override;
+  virtual Accessible* ChildAtPoint(int32_t aX, int32_t aY,
+                                   EWhichChildAtPoint aWhichChild) override;
+
+  virtual bool InsertChildAt(uint32_t aIdx, Accessible* aChild) override;
+  virtual bool RemoveChild(Accessible* aAccessible) override;
+  virtual bool IsAcceptableChild(nsIContent* aEl) const override;
 
 protected:
-  virtual ~OuterDocAccessible() MOZ_OVERRIDE;
-
-  // Accessible
-  virtual void CacheChildren() MOZ_OVERRIDE;
+  virtual ~OuterDocAccessible() override;
 };
+
+inline OuterDocAccessible*
+Accessible::AsOuterDoc()
+{
+  return IsOuterDoc() ? static_cast<OuterDocAccessible*>(this) : nullptr;
+}
 
 } // namespace a11y
 } // namespace mozilla

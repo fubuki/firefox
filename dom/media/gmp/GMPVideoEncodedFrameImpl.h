@@ -36,9 +36,10 @@
 #include "gmp-video-frame-encoded.h"
 #include "gmp-decryption.h"
 #include "mozilla/ipc/Shmem.h"
-#include "mp4_demuxer/DecoderData.h"
 
 namespace mozilla {
+class CryptoSample;
+
 namespace gmp {
 
 class GMPVideoHostImpl;
@@ -53,7 +54,7 @@ public:
   GMPVideoEncodedFrameImpl(const GMPVideoEncodedFrameData& aFrameData, GMPVideoHostImpl* aHost);
   virtual ~GMPVideoEncodedFrameImpl();
 
-  void InitCrypto(const mp4_demuxer::CryptoSample& aCrypto);
+  void InitCrypto(const CryptoSample& aCrypto);
 
   // This is called during a normal destroy sequence, which is
   // when a consumer is finished or during XPCOM shutdown.
@@ -64,38 +65,38 @@ public:
   bool RelinquishFrameData(GMPVideoEncodedFrameData& aFrameData);
 
   // GMPVideoFrame
-  virtual GMPVideoFrameFormat GetFrameFormat() MOZ_OVERRIDE;
-  virtual void Destroy() MOZ_OVERRIDE;
+  GMPVideoFrameFormat GetFrameFormat() override;
+  void Destroy() override;
 
   // GMPVideoEncodedFrame
-  virtual GMPErr   CreateEmptyFrame(uint32_t aSize) MOZ_OVERRIDE;
-  virtual GMPErr   CopyFrame(const GMPVideoEncodedFrame& aFrame) MOZ_OVERRIDE;
-  virtual void     SetEncodedWidth(uint32_t aEncodedWidth) MOZ_OVERRIDE;
-  virtual uint32_t EncodedWidth() MOZ_OVERRIDE;
-  virtual void     SetEncodedHeight(uint32_t aEncodedHeight) MOZ_OVERRIDE;
-  virtual uint32_t EncodedHeight() MOZ_OVERRIDE;
+  GMPErr   CreateEmptyFrame(uint32_t aSize) override;
+  GMPErr   CopyFrame(const GMPVideoEncodedFrame& aFrame) override;
+  void     SetEncodedWidth(uint32_t aEncodedWidth) override;
+  uint32_t EncodedWidth() override;
+  void     SetEncodedHeight(uint32_t aEncodedHeight) override;
+  uint32_t EncodedHeight() override;
   // Microseconds
-  virtual void     SetTimeStamp(uint64_t aTimeStamp) MOZ_OVERRIDE;
-  virtual uint64_t TimeStamp() MOZ_OVERRIDE;
+  void     SetTimeStamp(uint64_t aTimeStamp) override;
+  uint64_t TimeStamp() override;
   // Set frame duration (microseconds)
   // NOTE: next-frame's Timestamp() != this-frame's TimeStamp()+Duration()
   // depending on rounding to avoid having to track roundoff errors
   // and dropped/missing frames(!) (which may leave a large gap)
-  virtual void     SetDuration(uint64_t aDuration) MOZ_OVERRIDE;
-  virtual uint64_t Duration() const MOZ_OVERRIDE;
-  virtual void     SetFrameType(GMPVideoFrameType aFrameType) MOZ_OVERRIDE;
-  virtual GMPVideoFrameType FrameType() MOZ_OVERRIDE;
-  virtual void     SetAllocatedSize(uint32_t aNewSize) MOZ_OVERRIDE;
-  virtual uint32_t AllocatedSize() MOZ_OVERRIDE;
-  virtual void     SetSize(uint32_t aSize) MOZ_OVERRIDE;
-  virtual uint32_t Size() MOZ_OVERRIDE;
-  virtual void     SetCompleteFrame(bool aCompleteFrame) MOZ_OVERRIDE;
-  virtual bool     CompleteFrame() MOZ_OVERRIDE;
-  virtual const uint8_t* Buffer() const MOZ_OVERRIDE;
-  virtual uint8_t* Buffer() MOZ_OVERRIDE;
-  virtual GMPBufferType BufferType() const MOZ_OVERRIDE;
-  virtual void     SetBufferType(GMPBufferType aBufferType) MOZ_OVERRIDE;
-  virtual const    GMPEncryptedBufferMetadata* GetDecryptionData() const MOZ_OVERRIDE;
+  void     SetDuration(uint64_t aDuration) override;
+  uint64_t Duration() const override;
+  void     SetFrameType(GMPVideoFrameType aFrameType) override;
+  GMPVideoFrameType FrameType() override;
+  void     SetAllocatedSize(uint32_t aNewSize) override;
+  uint32_t AllocatedSize() override;
+  void     SetSize(uint32_t aSize) override;
+  uint32_t Size() override;
+  void     SetCompleteFrame(bool aCompleteFrame) override;
+  bool     CompleteFrame() override;
+  const uint8_t* Buffer() const override;
+  uint8_t* Buffer() override;
+  GMPBufferType BufferType() const override;
+  void     SetBufferType(GMPBufferType aBufferType) override;
+  const    GMPEncryptedBufferMetadata* GetDecryptionData() const override;
 
 private:
   void DestroyBuffer();

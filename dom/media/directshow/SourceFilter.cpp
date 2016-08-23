@@ -9,7 +9,7 @@
 #include "mozilla/RefPtr.h"
 #include "DirectShowUtils.h"
 #include "MP3FrameParser.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include <algorithm>
 
 using namespace mozilla::media;
@@ -19,9 +19,9 @@ namespace mozilla {
 // Define to trace what's on...
 //#define DEBUG_SOURCE_TRACE 1
 
-#if defined(PR_LOGGING) && defined (DEBUG_SOURCE_TRACE)
-PRLogModuleInfo* GetDirectShowLog();
-#define DIRECTSHOW_LOG(...) PR_LOG(GetDirectShowLog(), PR_LOG_DEBUG, (__VA_ARGS__))
+#if defined (DEBUG_SOURCE_TRACE)
+static LazyLogModule gDirectShowLog("DirectShowDecoder");
+#define DIRECTSHOW_LOG(...) MOZ_LOG(gDirectShowLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 #else
 #define DIRECTSHOW_LOG(...)
 #endif
@@ -76,7 +76,7 @@ public:
   {}
 
   int64_t GetLength() {
-    int64_t len = mResource->GetLength();
+    int64_t len = mResource.GetLength();
     if (len == -1) {
       return len;
     }
@@ -85,19 +85,20 @@ public:
   nsresult ReadAt(int64_t aOffset, char* aBuffer,
                   uint32_t aCount, uint32_t* aBytes)
   {
-    return mResource->ReadAt(aOffset + mDataOffset,
-                             aBuffer,
-                             aCount,
-                             aBytes);
+    return mResource.ReadAt(aOffset + mDataOffset,
+                            aBuffer,
+                            aCount,
+                            aBytes);
   }
   int64_t GetCachedDataEnd() {
-    int64_t tell = mResource->Tell();
-    int64_t dataEnd = mResource->GetCachedDataEnd(tell) - mDataOffset;
+    int64_t tell = mResource.GetResource()->Tell();
+    int64_t dataEnd =
+      mResource.GetResource()->GetCachedDataEnd(tell) - mDataOffset;
     return dataEnd;
   }
 private:
   // MediaResource from which we read data.
-  RefPtr<MediaResource> mResource;
+  MediaResourceIndex mResource;
   int64_t mDataOffset;
 };
 
@@ -133,22 +134,22 @@ public:
 
   // IUnknown
   // Defer to ref counting to BasePin, which defers to owning nsBaseFilter.
-  STDMETHODIMP_(ULONG) AddRef() MOZ_OVERRIDE { return BasePin::AddRef(); }
-  STDMETHODIMP_(ULONG) Release() MOZ_OVERRIDE { return BasePin::Release(); }
-  STDMETHODIMP QueryInterface(REFIID iid, void** ppv) MOZ_OVERRIDE;
+  STDMETHODIMP_(ULONG) AddRef() override { return BasePin::AddRef(); }
+  STDMETHODIMP_(ULONG) Release() override { return BasePin::Release(); }
+  STDMETHODIMP QueryInterface(REFIID iid, void** ppv) override;
 
   // BasePin Overrides.
   // Determines if the pin accepts a specific media type.
-  HRESULT CheckMediaType(const MediaType* aMediaType) MOZ_OVERRIDE;
+  HRESULT CheckMediaType(const MediaType* aMediaType) override;
 
   // Retrieves a preferred media type, by index value.
-  HRESULT GetMediaType(int aPosition, MediaType* aMediaType) MOZ_OVERRIDE;
+  HRESULT GetMediaType(int aPosition, MediaType* aMediaType) override;
 
   // Releases the pin from a connection.
-  HRESULT BreakConnect(void) MOZ_OVERRIDE;
+  HRESULT BreakConnect(void) override;
 
   // Determines whether a pin connection is suitable.
-  HRESULT CheckConnect(IPin* aPin) MOZ_OVERRIDE;
+  HRESULT CheckConnect(IPin* aPin) override;
 
 
   // IAsyncReader overrides
@@ -157,35 +158,35 @@ public:
   // pin connection.
   STDMETHODIMP RequestAllocator(IMemAllocator* aPreferred,
                                 ALLOCATOR_PROPERTIES* aProps,
-                                IMemAllocator** aActual) MOZ_OVERRIDE;
+                                IMemAllocator** aActual) override;
 
   // The Request method queues an asynchronous request for data. Downstream
   // will call WaitForNext() when they want to retrieve the result.
-  STDMETHODIMP Request(IMediaSample* aSample, DWORD_PTR aUserData) MOZ_OVERRIDE;
+  STDMETHODIMP Request(IMediaSample* aSample, DWORD_PTR aUserData) override;
 
   // The WaitForNext method waits for the next pending read request
   // to complete. This method fails if the graph is flushing.
   // Defers to SyncRead/5.
   STDMETHODIMP WaitForNext(DWORD aTimeout,
                            IMediaSample** aSamples,
-                           DWORD_PTR* aUserData) MOZ_OVERRIDE;
+                           DWORD_PTR* aUserData) override;
 
   // The SyncReadAligned method performs a synchronous read. The method
   // blocks until the request is completed. Defers to SyncRead/5. This
   // method does not fail if the graph is flushing.
-  STDMETHODIMP SyncReadAligned(IMediaSample* aSample) MOZ_OVERRIDE;
+  STDMETHODIMP SyncReadAligned(IMediaSample* aSample) override;
 
   // The SyncRead method performs a synchronous read. The method blocks
   // until the request is completed. Defers to SyncRead/5. This
   // method does not fail if the graph is flushing.
-  STDMETHODIMP SyncRead(LONGLONG aPosition, LONG aLength, BYTE* aBuffer) MOZ_OVERRIDE;
+  STDMETHODIMP SyncRead(LONGLONG aPosition, LONG aLength, BYTE* aBuffer) override;
 
   // The Length method retrieves the total length of the stream.
-  STDMETHODIMP Length(LONGLONG* aTotal, LONGLONG* aAvailable) MOZ_OVERRIDE;
+  STDMETHODIMP Length(LONGLONG* aTotal, LONGLONG* aAvailable) override;
 
   // IPin Overrides
-  STDMETHODIMP BeginFlush(void) MOZ_OVERRIDE;
-  STDMETHODIMP EndFlush(void) MOZ_OVERRIDE;
+  STDMETHODIMP BeginFlush(void) override;
+  STDMETHODIMP EndFlush(void) override;
 
   uint32_t GetAndResetBytesConsumedCount();
 
@@ -379,7 +380,7 @@ OutputPin::RequestAllocator(IMemAllocator* aPreferred,
 
   // Just create a default allocator. It's highly unlikely that we'll use
   // this anyway, as most parsers insist on using their own allocators.
-  nsRefPtr<IMemAllocator> allocator;
+  RefPtr<IMemAllocator> allocator;
   hr = CoCreateInstance(CLSID_MemoryAllocator,
                         0,
                         CLSCTX_INPROC_SERVER,
@@ -559,23 +560,13 @@ OutputPin::SyncRead(LONGLONG aPosition,
     }
   }
 
-  // Read in a loop to ensure we fill the buffer, when possible.
-  LONG totalBytesRead = 0;
-  while (totalBytesRead < aLength) {
-    BYTE* readBuffer = aBuffer + totalBytesRead;
-    uint32_t bytesRead = 0;
-    LONG length = aLength - totalBytesRead;
-    nsresult rv = mResource.ReadAt(aPosition + totalBytesRead,
-                                   reinterpret_cast<char*>(readBuffer),
-                                   length,
-                                   &bytesRead);
-    if (NS_FAILED(rv)) {
-      return E_FAIL;
-    }
-    totalBytesRead += bytesRead;
-    if (bytesRead == 0) {
-      break;
-    }
+  uint32_t totalBytesRead = 0;
+  nsresult rv = mResource.ReadAt(aPosition,
+                                 reinterpret_cast<char*>(aBuffer),
+                                 aLength,
+                                 &totalBytesRead);
+  if (NS_FAILED(rv)) {
+    return E_FAIL;
   }
   if (totalBytesRead > 0) {
     CriticalSectionAutoEnter lock(*mLock);

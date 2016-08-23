@@ -40,7 +40,7 @@ var addon2 = {
 
 const profileDir = gProfD.clone();
 profileDir.append("extensions");
-profileDir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0755);
+profileDir.create(AM_Ci.nsIFile.DIRECTORY_TYPE, 0o755);
 
 const sourceDir = gProfD.clone();
 sourceDir.append("source");
@@ -123,7 +123,7 @@ function run_test_1() {
     do_check_eq(uri.spec, rootUri);
     uri = a1.getResourceURI("install.rdf");
     do_check_eq(uri.spec, rootUri + "install.rdf");
-    
+
     // Check that upgrade is disabled for addons installed by file-pointers.
     do_check_eq(a1.permissions & AddonManager.PERM_CAN_UPGRADE, 0);
     run_test_2();
@@ -395,7 +395,7 @@ function run_test_10() {
     do_check_eq(uri.spec, rootUri);
     uri = a1.getResourceURI("install.rdf");
     do_check_eq(uri.spec, rootUri + "install.rdf");
-    
+
     // Check that upgrade is disabled for addons installed by file-pointers.
     do_check_eq(a1.permissions & AddonManager.PERM_CAN_UPGRADE, 0);
     end_test();

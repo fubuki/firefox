@@ -50,6 +50,7 @@ XULLabelAccessible::
     nsAutoString text;
     textBoxFrame->GetCroppedTitle(text);
     mValueTextLeaf->SetText(text);
+    AppendChild(mValueTextLeaf);
   }
 }
 
@@ -92,7 +93,7 @@ XULLabelAccessible::RelationByType(RelationType aType)
   if (aType == RelationType::LABEL_FOR) {
     // Caption is the label for groupbox
     nsIContent* parent = mContent->GetFlattenedTreeParent();
-    if (parent && parent->Tag() == nsGkAtoms::caption) {
+    if (parent && parent->IsXULElement(nsGkAtoms::caption)) {
       Accessible* parent = Parent();
       if (parent && parent->Role() == roles::GROUPING)
         rel.AppendTarget(parent);
@@ -118,18 +119,6 @@ XULLabelAccessible::UpdateLabelValue(const nsString& aValue)
 #endif
 
   TextUpdater::Run(mDoc, mValueTextLeaf, aValue);
-}
-
-void
-XULLabelAccessible::CacheChildren()
-{
-  if (mValueTextLeaf) {
-    AppendChild(mValueTextLeaf);
-    return;
-  }
-
-  // Cache children from subtree.
-  AccessibleWrap::CacheChildren();
 }
 
 

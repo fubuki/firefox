@@ -7,10 +7,11 @@
 /* rendering object for CSS "display: ruby-base" */
 
 #include "nsRubyBaseFrame.h"
+
+#include "mozilla/WritingModes.h"
 #include "nsLineLayout.h"
 #include "nsPresContext.h"
 #include "nsStyleContext.h"
-#include "WritingModes.h"
 
 using namespace mozilla;
 
@@ -21,7 +22,7 @@ using namespace mozilla;
 
 NS_QUERYFRAME_HEAD(nsRubyBaseFrame)
   NS_QUERYFRAME_ENTRY(nsRubyBaseFrame)
-NS_QUERYFRAME_TAIL_INHERITING(nsRubyBaseFrameSuper)
+NS_QUERYFRAME_TAIL_INHERITING(nsRubyContentFrame)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsRubyBaseFrame)
 

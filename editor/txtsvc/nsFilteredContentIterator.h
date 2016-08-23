@@ -19,7 +19,7 @@ class nsINode;
 class nsITextServicesFilter;
 class nsRange;
 
-class nsFilteredContentIterator MOZ_FINAL : public nsIContentIterator
+class nsFilteredContentIterator final : public nsIContentIterator
 {
 public:
 
@@ -30,22 +30,22 @@ public:
   explicit nsFilteredContentIterator(nsITextServicesFilter* aFilter);
 
   /* nsIContentIterator */
-  virtual nsresult Init(nsINode* aRoot) MOZ_OVERRIDE;
-  virtual nsresult Init(nsIDOMRange* aRange) MOZ_OVERRIDE;
-  virtual void First() MOZ_OVERRIDE;
-  virtual void Last() MOZ_OVERRIDE;
-  virtual void Next() MOZ_OVERRIDE;
-  virtual void Prev() MOZ_OVERRIDE;
-  virtual nsINode *GetCurrentNode() MOZ_OVERRIDE;
-  virtual bool IsDone() MOZ_OVERRIDE;
-  virtual nsresult PositionAt(nsINode* aCurNode) MOZ_OVERRIDE;
+  virtual nsresult Init(nsINode* aRoot) override;
+  virtual nsresult Init(nsIDOMRange* aRange) override;
+  virtual void First() override;
+  virtual void Last() override;
+  virtual void Next() override;
+  virtual void Prev() override;
+  virtual nsINode *GetCurrentNode() override;
+  virtual bool IsDone() override;
+  virtual nsresult PositionAt(nsINode* aCurNode) override;
 
   /* Helpers */
   bool DidSkip()      { return mDidSkip; }
   void         ClearDidSkip() {  mDidSkip = false; }
 
 protected:
-  nsFilteredContentIterator() { }
+  nsFilteredContentIterator() : mDidSkip(false), mIsOutOfRange(false) { }
 
   virtual ~nsFilteredContentIterator();
 
@@ -66,7 +66,7 @@ protected:
   nsCOMPtr<nsIAtom> mMapAtom;
 
   nsCOMPtr<nsITextServicesFilter> mFilter;
-  nsRefPtr<nsRange>               mRange;
+  RefPtr<nsRange>               mRange;
   bool                            mDidSkip;
   bool                            mIsOutOfRange;
   eDirectionType                  mDirection;

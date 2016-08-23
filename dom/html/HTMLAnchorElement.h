@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set tw=80 expandtab softtabstop=2 ts=2 sw=2: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,9 +18,9 @@ class EventChainPostVisitor;
 class EventChainPreVisitor;
 namespace dom {
 
-class HTMLAnchorElement MOZ_FINAL : public nsGenericHTMLElement,
-                                    public nsIDOMHTMLAnchorElement,
-                                    public Link
+class HTMLAnchorElement final : public nsGenericHTMLElement,
+                                public nsIDOMHTMLAnchorElement,
+                                public Link
 {
 public:
   using Element::GetText;
@@ -39,8 +39,11 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(HTMLAnchorElement,
                                            nsGenericHTMLElement)
 
-  virtual int32_t TabIndexDefault() MOZ_OVERRIDE;
-  virtual bool Draggable() const MOZ_OVERRIDE;
+  virtual int32_t TabIndexDefault() override;
+  virtual bool Draggable() const override;
+
+  // Element
+  virtual bool IsInteractiveHTMLContent(bool aIgnoreTabindex) const override;
 
   // nsIDOMHTMLAnchorElement
   NS_DECL_NSIDOMHTMLANCHORELEMENT
@@ -50,17 +53,17 @@ public:
 
   virtual nsresult BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                               nsIContent* aBindingParent,
-                              bool aCompileEventHandlers) MOZ_OVERRIDE;
+                              bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep = true,
-                              bool aNullParent = true) MOZ_OVERRIDE;
-  virtual bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) MOZ_OVERRIDE;
+                              bool aNullParent = true) override;
+  virtual bool IsHTMLFocusable(bool aWithMouse, bool *aIsFocusable, int32_t *aTabIndex) override;
 
-  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  virtual nsresult PreHandleEvent(EventChainPreVisitor& aVisitor) override;
   virtual nsresult PostHandleEvent(
-                     EventChainPostVisitor& aVisitor) MOZ_OVERRIDE;
-  virtual bool IsLink(nsIURI** aURI) const MOZ_OVERRIDE;
-  virtual void GetLinkTarget(nsAString& aTarget) MOZ_OVERRIDE;
-  virtual already_AddRefed<nsIURI> GetHrefURI() const MOZ_OVERRIDE;
+                     EventChainPostVisitor& aVisitor) override;
+  virtual bool IsLink(nsIURI** aURI) const override;
+  virtual void GetLinkTarget(nsAString& aTarget) override;
+  virtual already_AddRefed<nsIURI> GetHrefURI() const override;
 
   nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                    const nsAString& aValue, bool aNotify)
@@ -69,27 +72,25 @@ public:
   }
   virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
                            nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) MOZ_OVERRIDE;
+                           bool aNotify) override;
   virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) MOZ_OVERRIDE;
+                             bool aNotify) override;
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsIAtom* aAttribute,
                                 const nsAString& aValue,
-                                nsAttrValue& aResult) MOZ_OVERRIDE;
+                                nsAttrValue& aResult) override;
 
-  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const MOZ_OVERRIDE;
+  virtual nsresult Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const override;
 
-  virtual EventStates IntrinsicState() const MOZ_OVERRIDE;
+  virtual EventStates IntrinsicState() const override;
 
-  virtual void OnDNSPrefetchDeferred() MOZ_OVERRIDE;
-  virtual void OnDNSPrefetchRequested() MOZ_OVERRIDE;
-  virtual bool HasDeferredDNSPrefetchRequest() MOZ_OVERRIDE;
+  virtual void OnDNSPrefetchDeferred() override;
+  virtual void OnDNSPrefetchRequested() override;
+  virtual bool HasDeferredDNSPrefetchRequest() override;
 
   // WebIDL API
-  void GetHref(nsAString& aValue, ErrorResult& rv)
-  {
-    GetHTMLURIAttr(nsGkAtoms::href, aValue);
-  }
+
+  // The XPCOM GetHref is OK for us
   void SetHref(const nsAString& aValue, mozilla::ErrorResult& rv)
   {
     SetHTMLAttr(nsGkAtoms::href, aValue, rv);
@@ -99,7 +100,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::target, aValue, rv);
   }
-  void GetDownload(nsString& aValue)
+  void GetDownload(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::download, aValue);
   }
@@ -112,7 +113,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::ping, aValue, rv);
   }
-  void GetRel(nsString& aValue)
+  void GetRel(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::rel, aValue);
   }
@@ -120,8 +121,16 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::rel, aValue, rv);
   }
+  void SetReferrerPolicy(const nsAString& aValue, mozilla::ErrorResult& rv)
+  {
+    SetHTMLAttr(nsGkAtoms::referrerpolicy, aValue, rv);
+  }
+  void GetReferrerPolicy(nsAString& aReferrer)
+  {
+    GetEnumAttr(nsGkAtoms::referrerpolicy, EmptyCString().get(), aReferrer);
+  }
   nsDOMTokenList* RelList();
-  void GetHreflang(nsString& aValue)
+  void GetHreflang(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::hreflang, aValue);
   }
@@ -129,7 +138,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::hreflang, aValue, rv);
   }
-  void GetType(nsString& aValue)
+  void GetType(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::type, aValue);
   }
@@ -145,8 +154,8 @@ public:
 
   // Link::GetOrigin is OK for us
 
-  using Link::GetProtocol;
-  using Link::SetProtocol;
+  // Link::GetProtocol is OK for us
+  // Link::SetProtocol is OK for us
 
   // Link::GetUsername is OK for us
   // Link::SetUsername is OK for us
@@ -154,26 +163,26 @@ public:
   // Link::GetPassword is OK for us
   // Link::SetPassword is OK for us
 
-  using Link::GetHost;
-  using Link::SetHost;
+  // Link::Link::GetHost is OK for us
+  // Link::Link::SetHost is OK for us
 
-  using Link::GetHostname;
-  using Link::SetHostname;
+  // Link::Link::GetHostname is OK for us
+  // Link::Link::SetHostname is OK for us
 
-  using Link::GetPort;
-  using Link::SetPort;
+  // Link::Link::GetPort is OK for us
+  // Link::Link::SetPort is OK for us
 
-  using Link::GetPathname;
-  using Link::SetPathname;
+  // Link::Link::GetPathname is OK for us
+  // Link::Link::SetPathname is OK for us
 
-  using Link::GetSearch;
-  using Link::SetSearch;
+  // Link::Link::GetSearch is OK for us
+  // Link::Link::SetSearch is OK for us
 
-  using Link::GetHash;
-  using Link::SetHash;
+  // Link::Link::GetHash is OK for us
+  // Link::Link::SetHash is OK for us
 
   // The XPCOM URI decomposition attributes are fine for us
-  void GetCoords(nsString& aValue)
+  void GetCoords(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::coords, aValue);
   }
@@ -181,7 +190,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::coords, aValue, rv);
   }
-  void GetCharset(nsString& aValue)
+  void GetCharset(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::charset, aValue);
   }
@@ -189,7 +198,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::charset, aValue, rv);
   }
-  void GetName(nsString& aValue)
+  void GetName(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::name, aValue);
   }
@@ -197,7 +206,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::name, aValue, rv);
   }
-  void GetRev(nsString& aValue)
+  void GetRev(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::rev, aValue);
   }
@@ -205,7 +214,7 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::rev, aValue, rv);
   }
-  void GetShape(nsString& aValue)
+  void GetShape(DOMString& aValue)
   {
     GetHTMLAttr(nsGkAtoms::shape, aValue);
   }
@@ -213,18 +222,18 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::shape, aValue, rv);
   }
-  void Stringify(nsAString& aResult, ErrorResult& aError)
+  void Stringify(nsAString& aResult)
   {
-    GetHref(aResult, aError);
+    GetHref(aResult);
   }
 
 protected:
   virtual ~HTMLAnchorElement();
 
-  virtual void GetItemValueText(nsAString& text) MOZ_OVERRIDE;
-  virtual void SetItemValueText(const nsAString& text) MOZ_OVERRIDE;
-  virtual JSObject* WrapNode(JSContext *aCx) MOZ_OVERRIDE;
-  nsRefPtr<nsDOMTokenList > mRelList;
+  virtual void GetItemValueText(DOMString& text) override;
+  virtual void SetItemValueText(const nsAString& text) override;
+  virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
+  RefPtr<nsDOMTokenList > mRelList;
 };
 
 } // namespace dom

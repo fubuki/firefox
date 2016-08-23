@@ -27,16 +27,16 @@ class nsIFrame;
  * biggest sizes.
  */
 
-class nsGridCell MOZ_FINAL
+class nsGridCell final
 {
 public:
     nsGridCell();
     ~nsGridCell();
 
-    nsSize      GetPrefSize(nsBoxLayoutState& aBoxLayoutState);
-    nsSize      GetMinSize(nsBoxLayoutState& aBoxLayoutState);
-    nsSize      GetMaxSize(nsBoxLayoutState& aBoxLayoutState);
-    bool        IsCollapsed();
+    nsSize      GetXULPrefSize(nsBoxLayoutState& aBoxLayoutState);
+    nsSize      GetXULMinSize(nsBoxLayoutState& aBoxLayoutState);
+    nsSize      GetXULMaxSize(nsBoxLayoutState& aBoxLayoutState);
+    bool        IsXULCollapsed();
 
 // accessors
     nsIFrame*   GetBoxInColumn()               { return mBoxInColumn; }

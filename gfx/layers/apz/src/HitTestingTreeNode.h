@@ -9,14 +9,16 @@
 
 #include "APZUtils.h"                       // for HitTestResult
 #include "FrameMetrics.h"                   // for ScrollableLayerGuid
+#include "Layers.h"
 #include "mozilla/gfx/Matrix.h"             // for Matrix4x4
 #include "mozilla/layers/LayersTypes.h"     // for EventRegions
 #include "mozilla/Maybe.h"                  // for Maybe
-#include "nsRefPtr.h"                       // for nsRefPtr
+#include "mozilla/RefPtr.h"               // for nsRefPtr
 
 namespace mozilla {
 namespace layers {
 
+class AsyncDragMetrics;
 class AsyncPanZoomController;
 
 /**
@@ -53,8 +55,9 @@ class HitTestingTreeNode {
 private:
   ~HitTestingTreeNode();
 public:
-  HitTestingTreeNode(AsyncPanZoomController* aApzc, bool aIsPrimaryHolder);
-  void RecycleWith(AsyncPanZoomController* aApzc);
+  HitTestingTreeNode(AsyncPanZoomController* aApzc, bool aIsPrimaryHolder,
+                     uint64_t aLayersId);
+  void RecycleWith(AsyncPanZoomController* aApzc, uint64_t aLayersId);
   void Destroy();
 
   /* Tree construction methods */
@@ -76,19 +79,39 @@ public:
   AsyncPanZoomController* GetApzc() const;
   AsyncPanZoomController* GetNearestContainingApzc() const;
   bool IsPrimaryHolder() const;
+  uint64_t GetLayersId() const;
 
   /* Hit test related methods */
 
   void SetHitTestData(const EventRegions& aRegions,
-                      const gfx::Matrix4x4& aTransform,
-                      const Maybe<nsIntRegion>& aClipRegion);
+                      const CSSTransformMatrix& aTransform,
+                      const Maybe<ParentLayerIntRegion>& aClipRegion,
+                      const EventRegionsOverride& aOverride);
   bool IsOutsideClip(const ParentLayerPoint& aPoint) const;
+
+  /* Scrollbar info */
+
+  void SetScrollbarData(FrameMetrics::ViewID aScrollViewId,
+                        Layer::ScrollDirection aDir,
+                        int32_t aScrollSize,
+                        bool aIsScrollContainer);
+  bool MatchesScrollDragMetrics(const AsyncDragMetrics& aDragMetrics) const;
+  int32_t GetScrollSize() const;
+  bool IsScrollbarNode() const;
+
+  /* Fixed pos info */
+
+  void SetFixedPosData(FrameMetrics::ViewID aFixedPosTarget);
+  FrameMetrics::ViewID GetFixedPosTarget() const;
+
   /* Convert aPoint into the LayerPixel space for the layer corresponding to
    * this node. */
   Maybe<LayerPoint> Untransform(const ParentLayerPoint& aPoint) const;
   /* Assuming aPoint is inside the clip region for this node, check which of the
    * event region spaces it falls inside. */
   HitTestResult HitTest(const ParentLayerPoint& aPoint) const;
+  /* Returns the mOverride flag. */
+  EventRegionsOverride GetEventRegionsOverride() const;
 
   /* Debug helpers */
   void Dump(const char* aPrefix = "") const;
@@ -96,12 +119,21 @@ public:
 private:
   void SetApzcParent(AsyncPanZoomController* aApzc);
 
-  nsRefPtr<HitTestingTreeNode> mLastChild;
-  nsRefPtr<HitTestingTreeNode> mPrevSibling;
-  nsRefPtr<HitTestingTreeNode> mParent;
+  RefPtr<HitTestingTreeNode> mLastChild;
+  RefPtr<HitTestingTreeNode> mPrevSibling;
+  RefPtr<HitTestingTreeNode> mParent;
 
-  nsRefPtr<AsyncPanZoomController> mApzc;
+  RefPtr<AsyncPanZoomController> mApzc;
   bool mIsPrimaryApzcHolder;
+
+  uint64_t mLayersId;
+
+  FrameMetrics::ViewID mScrollViewId;
+  Layer::ScrollDirection mScrollDir;
+  int32_t mScrollSize;
+  bool mIsScrollbarContainer;
+
+  FrameMetrics::ViewID mFixedPosTarget;
 
   /* Let {L,M} be the {layer, scrollable metrics} pair that this node
    * corresponds to in the layer tree. mEventRegions contains the event regions
@@ -114,17 +146,21 @@ private:
 
   /* This is the transform from layer L. This does NOT include any async
    * transforms. */
-  gfx::Matrix4x4 mTransform;
+  CSSTransformMatrix mTransform;
 
   /* This is clip rect for L that we wish to use for hit-testing purposes. Note
    * that this may not be exactly the same as the clip rect on layer L because
    * of the touch-sensitive region provided by the GeckoContentController, or
    * because we may use the composition bounds of the layer if the clip is not
    * present. This value is in L's ParentLayerPixels. */
-  Maybe<nsIntRegion> mClipRegion;
+  Maybe<ParentLayerIntRegion> mClipRegion;
+
+  /* Indicates whether or not the event regions on this node need to be
+   * overridden in a certain way. */
+  EventRegionsOverride mOverride;
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif // mozilla_layers_HitTestingTreeNode_h

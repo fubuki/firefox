@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,6 +8,7 @@
 #include "mozilla/dom/HTMLFrameSetElementBinding.h"
 #include "mozilla/dom/EventHandlerBinding.h"
 #include "nsGlobalWindow.h"
+#include "mozilla/UniquePtrExtensions.h"
 
 NS_IMPL_NS_NEW_HTML_ELEMENT(FrameSet)
 
@@ -18,9 +20,9 @@ HTMLFrameSetElement::~HTMLFrameSetElement()
 }
 
 JSObject*
-HTMLFrameSetElement::WrapNode(JSContext *aCx)
+HTMLFrameSetElement::WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HTMLFrameSetElementBinding::Wrap(aCx, this);
+  return HTMLFrameSetElementBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_ISUPPORTS_INHERITED(HTMLFrameSetElement, nsGenericHTMLElement,
@@ -33,15 +35,15 @@ HTMLFrameSetElement::SetCols(const nsAString& aCols)
 {
   ErrorResult rv;
   SetCols(aCols, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 NS_IMETHODIMP
 HTMLFrameSetElement::GetCols(nsAString& aCols)
 {
-  nsString cols;
+  DOMString cols;
   GetCols(cols);
-  aCols = cols;
+  cols.ToString(aCols);
   return NS_OK;
 }
 
@@ -50,15 +52,15 @@ HTMLFrameSetElement::SetRows(const nsAString& aRows)
 {
   ErrorResult rv;
   SetRows(aRows, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 NS_IMETHODIMP
 HTMLFrameSetElement::GetRows(nsAString& aRows)
 {
-  nsString rows;
+  DOMString rows;
   GetRows(rows);
-  aRows = rows;
+  rows.ToString(aRows);
   return NS_OK;
 }
 
@@ -80,7 +82,7 @@ HTMLFrameSetElement::SetAttr(int32_t aNameSpaceID,
    */
   if (aAttribute == nsGkAtoms::rows && aNameSpaceID == kNameSpaceID_None) {
     int32_t oldRows = mNumRows;
-    ParseRowCol(aValue, mNumRows, getter_Transfers(mRowSpecs));
+    ParseRowCol(aValue, mNumRows, &mRowSpecs);
     
     if (mNumRows != oldRows) {
       mCurrentRowColHint = NS_STYLE_HINT_FRAMECHANGE;
@@ -88,7 +90,7 @@ HTMLFrameSetElement::SetAttr(int32_t aNameSpaceID,
   } else if (aAttribute == nsGkAtoms::cols &&
              aNameSpaceID == kNameSpaceID_None) {
     int32_t oldCols = mNumCols;
-    ParseRowCol(aValue, mNumCols, getter_Transfers(mColSpecs));
+    ParseRowCol(aValue, mNumCols, &mColSpecs);
 
     if (mNumCols != oldCols) {
       mCurrentRowColHint = NS_STYLE_HINT_FRAMECHANGE;
@@ -115,19 +117,19 @@ HTMLFrameSetElement::GetRowSpec(int32_t *aNumValues,
     const nsAttrValue* value = GetParsedAttr(nsGkAtoms::rows);
     if (value && value->Type() == nsAttrValue::eString) {
       nsresult rv = ParseRowCol(value->GetStringValue(), mNumRows,
-                                getter_Transfers(mRowSpecs));
+                                &mRowSpecs);
       NS_ENSURE_SUCCESS(rv, rv);
     }
 
     if (!mRowSpecs) {  // we may not have had an attr or had an empty attr
-      mRowSpecs = new nsFramesetSpec[1];
+      mRowSpecs = MakeUnique<nsFramesetSpec[]>(1);
       mNumRows = 1;
       mRowSpecs[0].mUnit  = eFramesetUnit_Relative;
       mRowSpecs[0].mValue = 1;
     }
   }
 
-  *aSpecs = mRowSpecs;
+  *aSpecs = mRowSpecs.get();
   *aNumValues = mNumRows;
   return NS_OK;
 }
@@ -145,19 +147,19 @@ HTMLFrameSetElement::GetColSpec(int32_t *aNumValues,
     const nsAttrValue* value = GetParsedAttr(nsGkAtoms::cols);
     if (value && value->Type() == nsAttrValue::eString) {
       nsresult rv = ParseRowCol(value->GetStringValue(), mNumCols,
-                                getter_Transfers(mColSpecs));
+                                &mColSpecs);
       NS_ENSURE_SUCCESS(rv, rv);
     }
 
     if (!mColSpecs) {  // we may not have had an attr or had an empty attr
-      mColSpecs = new nsFramesetSpec[1];
+      mColSpecs = MakeUnique<nsFramesetSpec[]>(1);
       mNumCols = 1;
       mColSpecs[0].mUnit  = eFramesetUnit_Relative;
       mColSpecs[0].mValue = 1;
     }
   }
 
-  *aSpecs = mColSpecs;
+  *aSpecs = mColSpecs.get();
   *aNumValues = mNumCols;
   return NS_OK;
 }
@@ -204,7 +206,7 @@ HTMLFrameSetElement::GetAttributeChangeHint(const nsIAtom* aAttribute,
 nsresult
 HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
                                  int32_t& aNumSpecs,
-                                 nsFramesetSpec** aSpecs) 
+                                 UniquePtr<nsFramesetSpec[]>* aSpecs)
 {
   if (aValue.IsEmpty()) {
     aNumSpecs = 0;
@@ -232,8 +234,7 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
     commaX = spec.FindChar(sComma, commaX + 1);
   }
 
-  static const fallible_t fallible = fallible_t();
-  nsFramesetSpec* specs = new (fallible) nsFramesetSpec[count];
+  auto specs = MakeUniqueFallible<nsFramesetSpec[]>(count);
   if (!specs) {
     *aSpecs = nullptr;
     aNumSpecs = 0;
@@ -327,8 +328,8 @@ HTMLFrameSetElement::ParseRowCol(const nsAString & aValue,
 
   aNumSpecs = count;
   // Transfer ownership to caller here
-  *aSpecs = specs;
-  
+  *aSpecs = Move(specs);
+
   return NS_OK;
 }
 
@@ -349,10 +350,8 @@ HTMLFrameSetElement::IsEventAttributeName(nsIAtom *aName)
   type_*                                                                       \
   HTMLFrameSetElement::GetOn##name_()                                          \
   {                                                                            \
-    nsPIDOMWindow* win = OwnerDoc()->GetInnerWindow();                         \
-    if (win) {                                                                 \
-      nsCOMPtr<nsISupports> supports = do_QueryInterface(win);                 \
-      nsGlobalWindow* globalWin = nsGlobalWindow::FromSupports(supports);      \
+    if (nsPIDOMWindowInner* win = OwnerDoc()->GetInnerWindow()) {              \
+      nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                   \
       return globalWin->GetOn##name_();                                        \
     }                                                                          \
     return nullptr;                                                            \
@@ -360,13 +359,12 @@ HTMLFrameSetElement::IsEventAttributeName(nsIAtom *aName)
   void                                                                         \
   HTMLFrameSetElement::SetOn##name_(type_* handler)                            \
   {                                                                            \
-    nsPIDOMWindow* win = OwnerDoc()->GetInnerWindow();                         \
+    nsPIDOMWindowInner* win = OwnerDoc()->GetInnerWindow();                    \
     if (!win) {                                                                \
       return;                                                                  \
     }                                                                          \
                                                                                \
-    nsCOMPtr<nsISupports> supports = do_QueryInterface(win);                   \
-    nsGlobalWindow* globalWin = nsGlobalWindow::FromSupports(supports);        \
+    nsGlobalWindow* globalWin = nsGlobalWindow::Cast(win);                     \
     return globalWin->SetOn##name_(handler);                                   \
   }
 #define WINDOW_EVENT(name_, id_, type_, struct_)                               \

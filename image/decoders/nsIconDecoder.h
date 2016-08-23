@@ -4,15 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef nsIconDecoder_h
-#define nsIconDecoder_h
+#ifndef mozilla_image_decoders_nsIconDecoder_h
+#define mozilla_image_decoders_nsIconDecoder_h
 
 #include "Decoder.h"
-
-#include "nsCOMPtr.h"
+#include "StreamingLexer.h"
+#include "SurfacePipe.h"
 
 namespace mozilla {
 namespace image {
+
 class RasterImage;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -21,42 +22,45 @@ class RasterImage;
 // and this decoder takes that format and converts it into 24-bit RGB with
 // alpha channel support. It was modeled a bit off the PPM decoder.
 //
-// Assumptions about the decoder:
-// (1) We receive ALL of the data from the icon channel in one OnDataAvailable
-//     call. We don't support multiple ODA calls yet.
-// (2) the format of the incoming data is as follows:
-//     The first two bytes contain the width and the height of the icon.
-//     The remaining bytes contain the icon data, 4 bytes per pixel, in
-//       ARGB order (platform endianness, A in highest bits, B in lowest
-//       bits), row-primary, top-to-bottom, left-to-right, with
-//       premultiplied alpha.
+// The format of the incoming data is as follows:
 //
+// The first two bytes contain the width and the height of the icon.
+// The remaining bytes contain the icon data, 4 bytes per pixel, in
+// ARGB order (platform endianness, A in highest bits, B in lowest
+// bits), row-primary, top-to-bottom, left-to-right, with
+// premultiplied alpha.
 //
 ////////////////////////////////////////////////////////////////////////////////
 
 class nsIconDecoder : public Decoder
 {
 public:
-
-  explicit nsIconDecoder(RasterImage* aImage);
   virtual ~nsIconDecoder();
 
-  virtual void WriteInternal(const char* aBuffer, uint32_t aCount) MOZ_OVERRIDE;
+  virtual void WriteInternal(const char* aBuffer, uint32_t aCount) override;
 
-  uint8_t mWidth;
-  uint8_t mHeight;
-  uint32_t mPixBytesRead;
-  uint32_t mState;
-};
+private:
+  friend class DecoderFactory;
 
-enum {
-  iconStateStart      = 0,
-  iconStateHaveHeight = 1,
-  iconStateReadPixels = 2,
-  iconStateFinished   = 3
+  // Decoders should only be instantiated via DecoderFactory.
+  explicit nsIconDecoder(RasterImage* aImage);
+
+  enum class State {
+    HEADER,
+    ROW_OF_PIXELS,
+    FINISH
+  };
+
+  LexerTransition<State> ReadHeader(const char* aData);
+  LexerTransition<State> ReadRowOfPixels(const char* aData, size_t aLength);
+  LexerTransition<State> Finish();
+
+  StreamingLexer<State> mLexer;
+  SurfacePipe mPipe;
+  uint32_t mBytesPerRow;
 };
 
 } // namespace image
 } // namespace mozilla
 
-#endif // nsIconDecoder_h
+#endif // mozilla_image_decoders_nsIconDecoder_h

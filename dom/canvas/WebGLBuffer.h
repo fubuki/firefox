@@ -8,26 +8,34 @@
 
 #include "GLDefs.h"
 #include "mozilla/LinkedList.h"
-#include "mozilla/MemoryReporting.h"
+#include "nsAutoPtr.h"
 #include "nsWrapperCache.h"
-#include "WebGLBindableName.h"
+
 #include "WebGLObjectModel.h"
-#include "WebGLStrongTypes.h"
 #include "WebGLTypes.h"
 
 namespace mozilla {
 
 class WebGLElementArrayCache;
 
-class WebGLBuffer MOZ_FINAL
+class WebGLBuffer final
     : public nsWrapperCache
-    , public WebGLBindableName<BufferBinding>
     , public WebGLRefCountedObject<WebGLBuffer>
     , public LinkedListElement<WebGLBuffer>
     , public WebGLContextBoundObject
 {
 public:
+
+    enum class Kind {
+        Undefined,
+        ElementArray,
+        OtherData
+    };
+
     explicit WebGLBuffer(WebGLContext* webgl, GLuint buf);
+
+    void BindTo(GLenum target);
+    Kind Content() const { return mContent; }
 
     void Delete();
 
@@ -47,10 +55,12 @@ public:
     bool IsElementArrayUsedWithMultipleTypes() const;
 
     WebGLContext* GetParentObject() const {
-        return Context();
-    };
+        return mContext;
+    }
 
-    virtual JSObject* WrapObject(JSContext* cx) MOZ_OVERRIDE;
+    virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> givenProto) override;
+
+    const GLenum mGLName;
 
     NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(WebGLBuffer)
     NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(WebGLBuffer)
@@ -58,8 +68,7 @@ public:
 protected:
     ~WebGLBuffer();
 
-    virtual void OnTargetChanged() MOZ_OVERRIDE;
-
+    Kind mContent;
     WebGLsizeiptr mByteLength;
     nsAutoPtr<WebGLElementArrayCache> mCache;
 };

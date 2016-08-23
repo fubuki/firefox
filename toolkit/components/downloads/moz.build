@@ -4,12 +4,22 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-XPCSHELL_TESTS_MANIFESTS += ['test/unit/xpcshell.ini']
+with Files('*'):
+    BUG_COMPONENT = ('Toolkit', 'Download Manager')
 
-if not CONFIG['MOZ_JSDOWNLOADS']:
-    XPCSHELL_TESTS_MANIFESTS += ['test/schema_migration/xpcshell.ini']
-    BROWSER_CHROME_MANIFESTS += ['test/browser/browser.ini']
-    MOCHITEST_MANIFESTS += ['test/browser/mochitest.ini']
+with Files('ApplicationReputation.*'):
+    BUG_COMPONENT = ('Core', 'DOM: Security')
+
+with Files('csd.pb.*'):
+    BUG_COMPONENT = ('Core', 'DOM: Security')
+
+with Files('generate_csd.sh'):
+    BUG_COMPONENT = ('Core', 'DOM: Security')
+
+with Files('nsIApplicationReputation.idl'):
+    BUG_COMPONENT = ('Core', 'DOM: Security')
+
+XPCSHELL_TESTS_MANIFESTS += ['test/unit/xpcshell.ini']
 
 XPIDL_SOURCES += [
     'nsIApplicationReputation.idl',
@@ -51,8 +61,6 @@ if not CONFIG['MOZ_SUITE']:
         'nsDownloadManagerUI.manifest',
     ]
 
-FAIL_ON_WARNINGS = True
-
 FINAL_LIBRARY = 'xul'
 
 LOCAL_INCLUDES += [
@@ -61,5 +69,6 @@ LOCAL_INCLUDES += [
 ]
 
 DEFINES['GOOGLE_PROTOBUF_NO_RTTI'] = True
+DEFINES['GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER'] = True
 
 CXXFLAGS += CONFIG['TK_CFLAGS']

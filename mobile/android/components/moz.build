@@ -11,34 +11,32 @@ XPIDL_SOURCES += [
 XPIDL_MODULE = 'MobileComponents'
 
 EXTRA_COMPONENTS += [
-    'ActivitiesGlue.js',
+    'AboutRedirector.js',
     'AddonUpdateService.js',
+    'AndroidActivitiesGlue.js',
     'BlocklistPrompt.js',
+    'BrowserCLH.js',
     'ColorPicker.js',
     'ContentDispatchChooser.js',
     'ContentPermissionPrompt.js',
+    'DirectoryProvider.js',
     'FilePicker.js',
+    'HelperAppDialog.js',
+    'ImageBlockingPolicy.js',
     'LoginManagerPrompter.js',
     'NSSDialogService.js',
-    'PaymentsUI.js',
     'PromptService.js',
+    'SessionStore.js',
     'SiteSpecificUserAgent.js',
     'Snippets.js',
     'TabSource.js',
-    'WebappsUpdateTimer.js',
     'XPIDialogService.js',
 ]
 
+# Keep it this way if at all possible.  If you need preprocessing,
+# consider adding fields to AppConstants.jsm.
 EXTRA_PP_COMPONENTS += [
-    'AboutRedirector.js',
-    'BrowserCLH.js',
-    'DirectoryProvider.js',
-    'HelperAppDialog.js',
     'MobileComponents.manifest',
-    'SessionStore.js',
-    'Sidebar.js',
 ]
-
-DEFINES['ANDROID_PACKAGE_NAME'] = CONFIG['ANDROID_PACKAGE_NAME']
 
 DIRS += ['build']

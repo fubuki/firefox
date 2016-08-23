@@ -41,9 +41,10 @@ NS_NewHTMLVideoFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsVideoFrame)
 
-nsVideoFrame::nsVideoFrame(nsStyleContext* aContext) :
-  nsContainerFrame(aContext)
+nsVideoFrame::nsVideoFrame(nsStyleContext* aContext)
+  : nsContainerFrame(aContext)
 {
+  EnableVisibilityTracking();
 }
 
 nsVideoFrame::~nsVideoFrame()
@@ -59,7 +60,7 @@ nsresult
 nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
   nsNodeInfoManager *nodeInfoManager = GetContent()->GetComposedDoc()->NodeInfoManager();
-  nsRefPtr<NodeInfo> nodeInfo;
+  RefPtr<NodeInfo> nodeInfo;
   Element *element;
 
   if (HasVideoElement()) {
@@ -168,7 +169,7 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     return nullptr;
   }
 
-  nsRefPtr<ImageContainer> container = element->GetImageContainer();
+  RefPtr<ImageContainer> container = element->GetImageContainer();
   if (!container)
     return nullptr;
   
@@ -203,7 +204,7 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
                     static_cast<int32_t>(destGFXRect.Height()));
   container->SetScaleHint(scaleHint);
 
-  nsRefPtr<ImageLayer> layer = static_cast<ImageLayer*>
+  RefPtr<ImageLayer> layer = static_cast<ImageLayer*>
     (aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, aItem));
   if (!layer) {
     layer = aManager->CreateImageLayer();
@@ -218,7 +219,7 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   Matrix transform = Matrix::Translation(p.x, p.y);
   layer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
   layer->SetScaleToSize(scaleHint, ScaleMode::STRETCH);
-  nsRefPtr<Layer> result = layer.forget();
+  RefPtr<Layer> result = layer.forget();
   return result.forget();
 }
 
@@ -227,7 +228,7 @@ class DispatchResizeToControls : public nsRunnable
 public:
   explicit DispatchResizeToControls(nsIContent* aContent)
     : mContent(aContent) {}
-  NS_IMETHOD Run() MOZ_OVERRIDE {
+  NS_IMETHOD Run() override {
     nsContentUtils::DispatchTrustedEvent(mContent->OwnerDoc(), mContent,
                                          NS_LITERAL_STRING("resizevideocontrols"),
                                          false, false);
@@ -242,6 +243,7 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
                      const nsHTMLReflowState& aReflowState,
                      nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsVideoFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aMetrics, aStatus);
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
@@ -263,21 +265,20 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
 
   // Reflow the child frames. We may have up to two, an image frame
   // which is the poster, and a box frame, which is the video controls.
-  for (nsIFrame *child = mFrames.FirstChild();
-       child;
-       child = child->GetNextSibling()) {
+  for (nsIFrame* child : mFrames) {
     if (child->GetContent() == mPosterImage) {
       // Reflow the poster frame.
       nsImageFrame* imageFrame = static_cast<nsImageFrame*>(child);
       nsHTMLReflowMetrics kidDesiredSize(aReflowState);
       WritingMode wm = imageFrame->GetWritingMode();
       LogicalSize availableSize = aReflowState.AvailableSize(wm);
+      LogicalSize cbSize = aMetrics.Size(aMetrics.GetWritingMode()).
+                             ConvertTo(wm, aMetrics.GetWritingMode());
       nsHTMLReflowState kidReflowState(aPresContext,
                                        aReflowState,
                                        imageFrame,
                                        availableSize,
-                                       aMetrics.Width(),
-                                       aMetrics.Height());
+                                       &cbSize);
 
       nsRect posterRenderRect;
       if (ShouldDisplayPoster()) {
@@ -304,7 +305,7 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
                                        aReflowState.ComputedWidth(),
                                        aReflowState.ComputedHeight()));
       if (child->GetSize() != size) {
-        nsRefPtr<nsRunnable> event = new DispatchResizeToControls(child->GetContent());
+        RefPtr<nsRunnable> event = new DispatchResizeToControls(child->GetContent());
         nsContentUtils::AddScriptRunner(event);
       }
     } else if (child->GetContent() == mCaptionDiv) {
@@ -312,12 +313,13 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
       nsHTMLReflowMetrics kidDesiredSize(aReflowState);
       WritingMode wm = child->GetWritingMode();
       LogicalSize availableSize = aReflowState.AvailableSize(wm);
+      LogicalSize cbSize = aMetrics.Size(aMetrics.GetWritingMode()).
+                             ConvertTo(wm, aMetrics.GetWritingMode());
       nsHTMLReflowState kidReflowState(aPresContext,
                                        aReflowState,
                                        child,
                                        availableSize,
-                                       aMetrics.Width(),
-                                       aMetrics.Height());
+                                       &cbSize);
       nsSize size(aReflowState.ComputedWidth(), aReflowState.ComputedHeight());
       size.width -= kidReflowState.ComputedPhysicalBorderPadding().LeftRight();
       size.height -= kidReflowState.ComputedPhysicalBorderPadding().TopBottom();
@@ -365,7 +367,7 @@ public:
   // away completely (e.g. because of a decoder error). The problem would
   // be especially acute if we have off-main-thread rendering.
 
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) override
   {
     *aSnap = true;
     nsIFrame* f = Frame();
@@ -374,14 +376,14 @@ public:
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,
                                              LayerManager* aManager,
-                                             const ContainerLayerParameters& aContainerParameters) MOZ_OVERRIDE
+                                             const ContainerLayerParameters& aContainerParameters) override
   {
     return static_cast<nsVideoFrame*>(mFrame)->BuildLayer(aBuilder, aManager, this, aContainerParameters);
   }
 
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
-                                   const ContainerLayerParameters& aParameters) MOZ_OVERRIDE
+                                   const ContainerLayerParameters& aParameters) override
   {
     if (aManager->IsCompositingCheap()) {
       // Since ImageLayers don't require additional memory of the
@@ -435,9 +437,7 @@ nsVideoFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // Add child frames to display list. We expect various children,
   // but only want to draw mPosterImage conditionally. Others we
   // always add to the display list.
-  for (nsIFrame *child = mFrames.FirstChild();
-       child;
-       child = child->GetNextSibling()) {
+  for (nsIFrame* child : mFrames) {
     if (child->GetContent() != mPosterImage || shouldDisplayPoster) {
       child->BuildDisplayListForStackingContext(aBuilder,
                                                 aDirtyRect - child->GetOffsetTo(this),
@@ -567,7 +567,7 @@ nsVideoFrame::GetVideoIntrinsicSize(nsRenderingContext *aRenderingContext)
 
     // Ask the controls frame what its preferred height is
     nsBoxLayoutState boxState(PresContext(), aRenderingContext, 0);
-    nscoord prefHeight = mFrames.LastChild()->GetPrefSize(boxState).height;
+    nscoord prefHeight = mFrames.LastChild()->GetXULPrefSize(boxState).height;
     return nsSize(nsPresContext::CSSPixelsToAppUnits(size.width), prefHeight);
   }
 
@@ -615,6 +615,21 @@ nsVideoFrame::AttributeChanged(int32_t aNameSpaceID,
   return nsContainerFrame::AttributeChanged(aNameSpaceID,
                                             aAttribute,
                                             aModType);
+}
+
+void
+nsVideoFrame::OnVisibilityChange(Visibility aNewVisibility,
+                                 Maybe<OnNonvisible> aNonvisibleAction)
+{
+  nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mPosterImage);
+  if (!imageLoader) {
+    nsContainerFrame::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
+    return;
+  }
+
+  imageLoader->OnVisibilityChange(aNewVisibility, aNonvisibleAction);
+
+  nsContainerFrame::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
 }
 
 bool nsVideoFrame::HasVideoElement() {

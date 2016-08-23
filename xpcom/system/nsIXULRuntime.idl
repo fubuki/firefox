@@ -23,7 +23,7 @@ bool BrowserTabsRemoteAutostart();
  *                    stable/frozen, please contact Benjamin Smedberg.
  */
 
-[scriptable, uuid(15b0e6cf-83da-4672-814e-cfa0b06ba31b)]
+[scriptable, uuid(a1b2e167-b748-42bf-ba85-996ec39062b9)]
 interface nsIXULRuntime : nsISupports
 {
   /**
@@ -92,16 +92,21 @@ interface nsIXULRuntime : nsISupports
   readonly attribute boolean browserTabsRemoteAutostart;
 
   /**
+   * A numeric value indicating whether multiprocess might be blocked.
+   * Possible values can be found at nsAppRunner.cpp. A value of 0
+   * represents not blocking.
+   */
+   readonly attribute unsigned long multiprocessBlockPolicy;
+
+  /**
    * If true, the accessibility service is running.
    */
   readonly attribute boolean accessibilityEnabled;
 
   /**
-   * This returns a very rough approximation of whether IME is likely
-   * to be used for the browser session. DO NOT USE! This is temporary
-   * and will be removed.
+   * Indicates whether the current Firefox build is 64-bit.
    */
-  readonly attribute boolean keyboardMayHaveIME;
+  readonly attribute boolean is64Bit;
 
   /**
    * Signal the apprunner to invalidate caches on the next restart.

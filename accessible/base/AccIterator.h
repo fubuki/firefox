@@ -43,7 +43,7 @@ public:
    * Return next accessible complying with filter function. Return the first
    * accessible for the first time.
    */
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   AccIterator();
@@ -89,7 +89,7 @@ public:
   /**
    * Return next related accessible for the given dependent accessible.
    */
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   RelatedAccIterator();
@@ -123,12 +123,14 @@ public:
   /**
    * Return next label accessible associated with the given element.
    */
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   HTMLLabelIterator();
   HTMLLabelIterator(const HTMLLabelIterator&);
   HTMLLabelIterator& operator = (const HTMLLabelIterator&);
+
+  bool IsLabel(Accessible* aLabel);
 
   RelatedAccIterator mRelIter;
   // XXX: replace it on weak reference (bug 678429), it's safe to use raw
@@ -150,7 +152,7 @@ public:
   /**
    * Return next output accessible associated with the given element.
    */
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   HTMLOutputIterator();
@@ -173,7 +175,7 @@ public:
   /**
    * Return next label accessible associated with the given element.
    */
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   XULLabelIterator();
@@ -196,7 +198,7 @@ public:
   /**
    * Return next description accessible associated with the given element.
    */
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   XULDescriptionIterator();
@@ -234,7 +236,7 @@ public:
   nsIContent* GetElem(const nsDependentSubstring& aID);
 
   // AccIterable
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   IDRefsIterator();
@@ -247,6 +249,7 @@ private:
   nsAString::index_type mCurrIdx;
 };
 
+
 /**
  * Iterator that points to a single accessible returning it on the first call
  * to Next().
@@ -257,14 +260,14 @@ public:
   explicit SingleAccIterator(Accessible* aTarget): mAcc(aTarget) { }
   virtual ~SingleAccIterator() { }
 
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   SingleAccIterator();
   SingleAccIterator(const SingleAccIterator&);
   SingleAccIterator& operator = (const SingleAccIterator&);
 
-  nsRefPtr<Accessible> mAcc;
+  RefPtr<Accessible> mAcc;
 };
 
 
@@ -278,7 +281,7 @@ public:
     mContainer(aItemContainer), mAnchor(nullptr) { }
   virtual ~ItemIterator() { }
 
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   ItemIterator() = delete;
@@ -300,7 +303,7 @@ public:
                       int32_t aRowIdx);
   virtual ~XULTreeItemIterator() { }
 
-  virtual Accessible* Next();
+  virtual Accessible* Next() override;
 
 private:
   XULTreeItemIterator() = delete;

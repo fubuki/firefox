@@ -7,10 +7,11 @@
 #ifndef BUFFER_DECODER_H_
 #define BUFFER_DECODER_H_
 
-#include "AbstractMediaDecoder.h"
-#include "MediaTaskQueue.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/ReentrantMonitor.h"
+#include "mozilla/TaskQueue.h"
+
+#include "AbstractMediaDecoder.h"
 
 namespace mozilla {
 
@@ -18,7 +19,7 @@ namespace mozilla {
  * This class provides a decoder object which decodes a media file that lives in
  * a memory buffer.
  */
-class BufferDecoder : public AbstractMediaDecoder
+class BufferDecoder final : public AbstractMediaDecoder
 {
 public:
   // This class holds a weak pointer to MediaResource.  It's the responsibility
@@ -28,65 +29,22 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
 
   // This has to be called before decoding begins
-  void BeginDecoding(MediaTaskQueue* aTaskQueueIdentity);
+  void BeginDecoding(TaskQueue* aTaskQueueIdentity);
 
-  virtual ReentrantMonitor& GetReentrantMonitor() MOZ_FINAL MOZ_OVERRIDE;
+  MediaResource* GetResource() const final override;
 
-  virtual bool IsShutdown() const MOZ_FINAL MOZ_OVERRIDE;
+  void NotifyDecodedFrames(uint32_t aParsed, uint32_t aDecoded,
+                           uint32_t aDropped) final override;
 
-  virtual bool OnStateMachineThread() const MOZ_FINAL MOZ_OVERRIDE;
+  VideoFrameContainer* GetVideoFrameContainer() final override;
+  layers::ImageContainer* GetImageContainer() final override;
 
-  virtual bool OnDecodeThread() const MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual MediaResource* GetResource() const MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void NotifyBytesConsumed(int64_t aBytes, int64_t aOffset) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void NotifyDecodedFrames(uint32_t aParsed, uint32_t aDecoded,
-                                   uint32_t aDropped) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual int64_t GetMediaDuration() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void SetMediaDuration(int64_t aDuration) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void UpdateEstimatedMediaDuration(int64_t aDuration) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void SetMediaSeekable(bool aMediaSeekable) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual VideoFrameContainer* GetVideoFrameContainer() MOZ_FINAL MOZ_OVERRIDE;
-  virtual layers::ImageContainer* GetImageContainer() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual bool IsTransportSeekable() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual bool IsMediaSeekable() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void MetadataLoaded(nsAutoPtr<MediaInfo> aInfo, nsAutoPtr<MetadataTags> aTags, bool aRestoredFromDromant) MOZ_FINAL MOZ_OVERRIDE;
-  virtual void QueueMetadata(int64_t aTime, nsAutoPtr<MediaInfo> aInfo, nsAutoPtr<MetadataTags> aTags) MOZ_FINAL MOZ_OVERRIDE;
-  virtual void FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo, bool aRestoredFromDromant) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void RemoveMediaTracks() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void SetMediaEndTime(int64_t aTime) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void UpdatePlaybackPosition(int64_t aTime) MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void OnReadMetadataCompleted() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual MediaDecoderOwner* GetOwner() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void NotifyWaitingForResourcesStatusChanged() MOZ_FINAL MOZ_OVERRIDE;
-
-  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset) MOZ_FINAL MOZ_OVERRIDE;
+  MediaDecoderOwner* GetOwner() final override;
 
 private:
   virtual ~BufferDecoder();
-
-  // This monitor object is not really used to synchronize access to anything.
-  // It's just there in order for us to be able to override
-  // GetReentrantMonitor correctly.
-  ReentrantMonitor mReentrantMonitor;
-  nsRefPtr<MediaTaskQueue> mTaskQueueIdentity;
-  nsRefPtr<MediaResource> mResource;
+  RefPtr<TaskQueue> mTaskQueueIdentity;
+  RefPtr<MediaResource> mResource;
 };
 
 } // namespace mozilla

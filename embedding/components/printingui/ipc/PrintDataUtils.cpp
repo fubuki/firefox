@@ -22,7 +22,7 @@ namespace embedding {
 
 NS_IMPL_ISUPPORTS(MockWebBrowserPrint, nsIWebBrowserPrint);
 
-MockWebBrowserPrint::MockWebBrowserPrint(PrintData aData)
+MockWebBrowserPrint::MockWebBrowserPrint(const PrintData &aData)
   : mData(aData)
 {
   MOZ_COUNT_CTOR(MockWebBrowserPrint);
@@ -46,7 +46,7 @@ MockWebBrowserPrint::GetCurrentPrintSettings(nsIPrintSettings **aCurrentPrintSet
 }
 
 NS_IMETHODIMP
-MockWebBrowserPrint::GetCurrentChildDOMWindow(nsIDOMWindow **aCurrentPrintSettings)
+MockWebBrowserPrint::GetCurrentChildDOMWindow(mozIDOMWindowProxy **aCurrentPrintSettings)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -106,7 +106,7 @@ MockWebBrowserPrint::Print(nsIPrintSettings* aThePrintSettings,
 
 NS_IMETHODIMP
 MockWebBrowserPrint::PrintPreview(nsIPrintSettings* aThePrintSettings,
-                                  nsIDOMWindow* aChildDOMWin,
+                                  mozIDOMWindowProxy* aChildDOMWin,
                                   nsIWebProgressListener* aWPListener)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
@@ -129,7 +129,23 @@ NS_IMETHODIMP
 MockWebBrowserPrint::EnumerateDocumentNames(uint32_t* aCount,
                                             char16_t*** aResult)
 {
-  return NS_ERROR_NOT_IMPLEMENTED;
+  *aCount = 0;
+  *aResult = nullptr;
+
+  if (mData.printJobName().IsEmpty()) {
+    return NS_OK;
+  }
+
+  // The only consumer that cares about this is the OS X printing
+  // dialog, and even then, it only cares about the first document
+  // name. That's why we only send a single document name through
+  // PrintData.
+  char16_t** array = (char16_t**) moz_xmalloc(sizeof(char16_t*));
+  array[0] = ToNewUnicode(mData.printJobName());
+
+  *aCount = 1;
+  *aResult = array;
+  return NS_OK;
 }
 
 NS_IMETHODIMP

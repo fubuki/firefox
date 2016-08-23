@@ -9,9 +9,6 @@
 #define __mozilla_widget_GfxInfoBase_h__
 
 #include "nsIGfxInfo.h"
-#if defined(XP_MACOSX) || defined(XP_WIN)
-#include "nsIGfxInfo2.h"
-#endif
 #include "nsCOMPtr.h"
 #include "nsIObserver.h"
 #include "nsWeakReference.h"
@@ -19,6 +16,7 @@
 #include "nsTArray.h"
 #include "nsString.h"
 #include "GfxInfoCollector.h"
+#include "gfxTelemetry.h"
 #include "nsIGfxInfoDebug.h"
 #include "mozilla/Mutex.h"
 #include "js/Value.h"
@@ -28,9 +26,6 @@ namespace mozilla {
 namespace widget {  
 
 class GfxInfoBase : public nsIGfxInfo,
-#if defined(XP_MACOSX) || defined(XP_WIN)
-                    public nsIGfxInfo2,
-#endif
                     public nsIObserver,
                     public nsSupportsWeakReference
 #ifdef DEBUG
@@ -50,13 +45,15 @@ public:
   // using GfxInfoBase::GetFeatureSuggestedDriverVersion;
   // using GfxInfoBase::GetWebGLParameter;
   // to import the relevant methods into their namespace.
-  NS_IMETHOD GetFeatureStatus(int32_t aFeature, int32_t *_retval) MOZ_OVERRIDE;
-  NS_IMETHOD GetFeatureSuggestedDriverVersion(int32_t aFeature, nsAString & _retval) MOZ_OVERRIDE;
-  NS_IMETHOD GetWebGLParameter(const nsAString & aParam, nsAString & _retval) MOZ_OVERRIDE;
+  NS_IMETHOD GetFeatureStatus(int32_t aFeature, nsACString& aFailureId, int32_t *_retval) override;
+  NS_IMETHOD GetFeatureSuggestedDriverVersion(int32_t aFeature, nsAString & _retval) override;
+  NS_IMETHOD GetWebGLParameter(const nsAString & aParam, nsAString & _retval) override;
 
-  NS_IMETHOD GetFailures(uint32_t *failureCount, char ***failures) MOZ_OVERRIDE;
-  NS_IMETHOD_(void) LogFailure(const nsACString &failure) MOZ_OVERRIDE;
-  NS_IMETHOD GetInfo(JSContext*, JS::MutableHandle<JS::Value>) MOZ_OVERRIDE;
+  NS_IMETHOD GetMonitors(JSContext* cx, JS::MutableHandleValue _retval) override;
+  NS_IMETHOD GetFailures(uint32_t *failureCount, int32_t** indices, char ***failures) override;
+  NS_IMETHOD_(void) LogFailure(const nsACString &failure) override;
+  NS_IMETHOD GetInfo(JSContext*, JS::MutableHandle<JS::Value>) override;
+  NS_IMETHOD GetFeatures(JSContext*, JS::MutableHandle<JS::Value>) override;
 
   // Initialization function. If you override this, you must call this class's
   // version of Init first.
@@ -68,7 +65,7 @@ public:
   virtual nsresult Init();
   
   // only useful on X11
-  NS_IMETHOD_(void) GetData() MOZ_OVERRIDE { }
+  NS_IMETHOD_(void) GetData() override { }
 
   static void AddCollector(GfxInfoCollectorBase* collector);
   static void RemoveCollector(GfxInfoCollectorBase* collector);
@@ -82,6 +79,13 @@ public:
   virtual nsString Manufacturer() { return EmptyString(); }
   virtual uint32_t OperatingSystemVersion() { return 0; }
 
+  // Convenience to get the application version
+  static const nsCString& GetApplicationVersion();
+
+  virtual nsresult FindMonitors(JSContext* cx, JS::HandleObject array) {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
 protected:
 
   virtual ~GfxInfoBase();
@@ -89,27 +93,35 @@ protected:
   virtual nsresult GetFeatureStatusImpl(int32_t aFeature, int32_t* aStatus,
                                         nsAString& aSuggestedDriverVersion,
                                         const nsTArray<GfxDriverInfo>& aDriverInfo,
+                                        nsACString& aFailureId,
                                         OperatingSystem* aOS = nullptr);
 
   // Gets the driver info table. Used by GfxInfoBase to check for general cases
   // (while subclasses check for more specific ones).
   virtual const nsTArray<GfxDriverInfo>& GetGfxDriverInfo() = 0;
 
+  virtual void DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> obj);
+  bool InitFeatureObject(
+    JSContext* aCx,
+    JS::Handle<JSObject*> aContainer,
+    const char* aName,
+    mozilla::gfx::FeatureStatus aFeatureStatus,
+    JS::MutableHandle<JSObject*> aOutObj);
+
 private:
   virtual int32_t FindBlocklistedDeviceInList(const nsTArray<GfxDriverInfo>& aDriverInfo,
                                               nsAString& aSuggestedVersion,
                                               int32_t aFeature,
+                                              nsACString &aFailureId,
                                               OperatingSystem os);
 
   void EvaluateDownloadedBlacklist(nsTArray<GfxDriverInfo>& aDriverInfo);
 
-  nsCString mFailures[9]; // The choice of 9 is Ehsan's
-  uint32_t mFailureCount;
   Mutex mMutex;
 
 };
 
-}
-}
+} // namespace widget
+} // namespace mozilla
 
 #endif /* __mozilla_widget_GfxInfoBase_h__ */

@@ -60,14 +60,18 @@ static const uint8_t gsRGBToLinearRGBMap[256] = {
 };
 
 static void
-ComputesRGBLuminanceMask(uint8_t *aData,
-                         int32_t aStride,
+ComputesRGBLuminanceMask(const uint8_t *aSourceData,
+                         int32_t aSourceStride,
+                         uint8_t *aDestData,
+                         int32_t aDestStride,
                          const IntSize &aSize,
                          float aOpacity)
 {
 #ifdef BUILD_ARM_NEON
   if (mozilla::supports_neon()) {
-    ComputesRGBLuminanceMask_NEON(aData, aStride, aSize, aOpacity);
+    ComputesRGBLuminanceMask_NEON(aSourceData, aSourceStride,
+                                  aDestData, aDestStride,
+                                  aSize, aOpacity);
     return;
   }
 #endif
@@ -75,91 +79,113 @@ ComputesRGBLuminanceMask(uint8_t *aData,
   int32_t redFactor = 55 * aOpacity; // 255 * 0.2125 * opacity
   int32_t greenFactor = 183 * aOpacity; // 255 * 0.7154 * opacity
   int32_t blueFactor = 18 * aOpacity; // 255 * 0.0721
-  int32_t offset = aStride - 4 * aSize.width;
-  uint8_t *pixel = aData;
+  int32_t sourceOffset = aSourceStride - 4 * aSize.width;
+  const uint8_t *sourcePixel = aSourceData;
+  int32_t destOffset = aDestStride - aSize.width;
+  uint8_t *destPixel = aDestData;
 
   for (int32_t y = 0; y < aSize.height; y++) {
     for (int32_t x = 0; x < aSize.width; x++) {
-      uint8_t a = pixel[GFX_ARGB32_OFFSET_A];
+      uint8_t a = sourcePixel[GFX_ARGB32_OFFSET_A];
 
-      uint8_t luminance;
       if (a) {
-        luminance = (redFactor * pixel[GFX_ARGB32_OFFSET_R] +
-                     greenFactor * pixel[GFX_ARGB32_OFFSET_G] +
-                     blueFactor * pixel[GFX_ARGB32_OFFSET_B]) >> 8;
+        *destPixel = (redFactor * sourcePixel[GFX_ARGB32_OFFSET_R] +
+                      greenFactor * sourcePixel[GFX_ARGB32_OFFSET_G] +
+                      blueFactor * sourcePixel[GFX_ARGB32_OFFSET_B]) >> 8;
       } else {
-        luminance = 0;
+        *destPixel = 0;
       }
-      memset(pixel, luminance, 4);
-      pixel += 4;
+      sourcePixel += 4;
+      destPixel++;
     }
-    pixel += offset;
+    sourcePixel += sourceOffset;
+    destPixel += destOffset;
   }
 }
 
 static void
-ComputeLinearRGBLuminanceMask(uint8_t *aData,
-                              int32_t aStride,
+ComputeLinearRGBLuminanceMask(const uint8_t *aSourceData,
+                              int32_t aSourceStride,
+                              uint8_t *aDestData,
+                              int32_t aDestStride,
                               const IntSize &aSize,
                               float aOpacity)
 {
   int32_t redFactor = 55 * aOpacity; // 255 * 0.2125 * opacity
   int32_t greenFactor = 183 * aOpacity; // 255 * 0.7154 * opacity
   int32_t blueFactor = 18 * aOpacity; // 255 * 0.0721
-  int32_t offset = aStride - 4 * aSize.width;
-  uint8_t *pixel = aData;
+  int32_t sourceOffset = aSourceStride - 4 * aSize.width;
+  const uint8_t *sourcePixel = aSourceData;
+  int32_t destOffset = aDestStride - aSize.width;
+  uint8_t *destPixel = aDestData;
 
   for (int32_t y = 0; y < aSize.height; y++) {
     for (int32_t x = 0; x < aSize.width; x++) {
-      uint8_t a = pixel[GFX_ARGB32_OFFSET_A];
+      uint8_t a = sourcePixel[GFX_ARGB32_OFFSET_A];
 
-      uint8_t luminance;
       // unpremultiply
       if (a) {
-        if (a != 255) {
-          pixel[GFX_ARGB32_OFFSET_B] =
-            (255 * pixel[GFX_ARGB32_OFFSET_B]) / a;
-          pixel[GFX_ARGB32_OFFSET_G] =
-            (255 * pixel[GFX_ARGB32_OFFSET_G]) / a;
-          pixel[GFX_ARGB32_OFFSET_R] =
-            (255 * pixel[GFX_ARGB32_OFFSET_R]) / a;
-        }
+        if (a == 255) {
+          /* sRGB -> linearRGB -> intensity */
+          *destPixel =
+            static_cast<uint8_t>
+                       ((gsRGBToLinearRGBMap[sourcePixel[GFX_ARGB32_OFFSET_R]] *
+                         redFactor +
+                         gsRGBToLinearRGBMap[sourcePixel[GFX_ARGB32_OFFSET_G]] *
+                         greenFactor +
+                         gsRGBToLinearRGBMap[sourcePixel[GFX_ARGB32_OFFSET_B]] *
+                         blueFactor) >> 8);
+        } else {
+          uint8_t tempPixel[4];
+          tempPixel[GFX_ARGB32_OFFSET_B] =
+            (255 * sourcePixel[GFX_ARGB32_OFFSET_B]) / a;
+          tempPixel[GFX_ARGB32_OFFSET_G] =
+            (255 * sourcePixel[GFX_ARGB32_OFFSET_G]) / a;
+          tempPixel[GFX_ARGB32_OFFSET_R] =
+            (255 * sourcePixel[GFX_ARGB32_OFFSET_R]) / a;
 
-        /* sRGB -> linearRGB -> intensity */
-        luminance =
-          static_cast<uint8_t>
-                     (((gsRGBToLinearRGBMap[pixel[GFX_ARGB32_OFFSET_R]] *
-                        redFactor +
-                        gsRGBToLinearRGBMap[pixel[GFX_ARGB32_OFFSET_G]] *
-                        greenFactor +
-                        gsRGBToLinearRGBMap[pixel[GFX_ARGB32_OFFSET_B]] *
-                        blueFactor) >> 8) * (a / 255.0f));
+          /* sRGB -> linearRGB -> intensity */
+          *destPixel =
+            static_cast<uint8_t>
+                       (((gsRGBToLinearRGBMap[tempPixel[GFX_ARGB32_OFFSET_R]] *
+                          redFactor +
+                          gsRGBToLinearRGBMap[tempPixel[GFX_ARGB32_OFFSET_G]] *
+                          greenFactor +
+                          gsRGBToLinearRGBMap[tempPixel[GFX_ARGB32_OFFSET_B]] *
+                          blueFactor) >> 8) * (a / 255.0f));
+        }
       } else {
-        luminance = 0;
+        *destPixel = 0;
       }
-      memset(pixel, luminance, 4);
-      pixel += 4;
+      sourcePixel += 4;
+      destPixel++;
     }
-    pixel += offset;
+    sourcePixel += sourceOffset;
+    destPixel += destOffset;
   }
 }
 
 static void
-ComputeAlphaMask(uint8_t *aData,
-                 int32_t aStride,
+ComputeAlphaMask(const uint8_t *aSourceData,
+                 int32_t aSourceStride,
+                 uint8_t *aDestData,
+                 int32_t aDestStride,
                  const IntSize &aSize,
                  float aOpacity)
 {
-  int32_t offset = aStride - 4 * aSize.width;
-  uint8_t *pixel = aData;
+  int32_t sourceOffset = aSourceStride - 4 * aSize.width;
+  const uint8_t *sourcePixel = aSourceData;
+  int32_t destOffset = aDestStride - aSize.width;
+  uint8_t *destPixel = aDestData;
 
   for (int32_t y = 0; y < aSize.height; y++) {
     for (int32_t x = 0; x < aSize.width; x++) {
-      uint8_t luminance = pixel[GFX_ARGB32_OFFSET_A] * aOpacity;
-      memset(pixel, luminance, 4);
-      pixel += 4;
+      *destPixel = sourcePixel[GFX_ARGB32_OFFSET_A] * aOpacity;
+      sourcePixel += 4;
+      destPixel++;
     }
-    pixel += offset;
+    sourcePixel += sourceOffset;
+    destPixel += destOffset;
   }
 }
 
@@ -174,12 +200,13 @@ NS_NewSVGMaskFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsSVGMaskFrame)
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 nsSVGMaskFrame::GetMaskForMaskedFrame(gfxContext* aContext,
                                       nsIFrame* aMaskedFrame,
                                       const gfxMatrix &aMatrix,
                                       float aOpacity,
-                                      Matrix* aMaskTransform)
+                                      Matrix* aMaskTransform,
+                                      uint8_t aMaskOp)
 {
   // If the flag is set when we get here, it means this mask frame
   // has already been used painting the current mask, and the document
@@ -216,8 +243,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(gfxContext* aContext,
 
   bool resultOverflows;
   IntSize maskSurfaceSize =
-    ToIntSize(nsSVGUtils::ConvertToSurfaceSize(maskSurfaceRect.Size(),
-                                               &resultOverflows));
+    nsSVGUtils::ConvertToSurfaceSize(maskSurfaceRect.Size(), &resultOverflows);
 
   if (resultOverflows || maskSurfaceSize.IsEmpty()) {
     // XXXjwatt we should return an empty surface so we don't paint aMaskedFrame!
@@ -227,14 +253,15 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(gfxContext* aContext,
   RefPtr<DrawTarget> maskDT =
     Factory::CreateDrawTarget(BackendType::CAIRO, maskSurfaceSize,
                               SurfaceFormat::B8G8R8A8);
-  if (!maskDT) {
+  if (!maskDT || !maskDT->IsValid()) {
     return nullptr;
   }
 
   gfxMatrix maskSurfaceMatrix =
     aContext->CurrentMatrix() * gfxMatrix::Translation(-maskSurfaceRect.TopLeft());
 
-  nsRefPtr<gfxContext> tmpCtx = new gfxContext(maskDT);
+  RefPtr<gfxContext> tmpCtx = gfxContext::ForDrawTarget(maskDT);
+  MOZ_ASSERT(tmpCtx); // already checked the draw target above
   tmpCtx->SetMatrix(maskSurfaceMatrix);
 
   mMatrixForChildren = GetMaskTransform(aMaskedFrame) * aMatrix;
@@ -247,7 +274,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(gfxContext* aContext,
       SVGFrame->NotifySVGChanged(nsISVGChildFrame::TRANSFORM_CHANGED);
     }
     gfxMatrix m = mMatrixForChildren;
-    if (kid->GetContent()->IsSVG()) {
+    if (kid->GetContent()->IsSVGElement()) {
       m = static_cast<nsSVGElement*>(kid->GetContent())->
             PrependLocalTransformsTo(m);
     }
@@ -260,22 +287,54 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(gfxContext* aContext,
   }
   RefPtr<DataSourceSurface> maskSurface = maskSnapshot->GetDataSurface();
   DataSourceSurface::MappedSurface map;
-  if (!maskSurface->Map(DataSourceSurface::MapType::READ_WRITE, &map)) {
+  if (!maskSurface->Map(DataSourceSurface::MapType::READ, &map)) {
     return nullptr;
   }
 
-  if (StyleSVGReset()->mMaskType == NS_STYLE_MASK_TYPE_LUMINANCE) {
+  // Create alpha channel mask for output
+  RefPtr<DrawTarget> destMaskDT =
+    Factory::CreateDrawTarget(BackendType::CAIRO, maskSurfaceSize,
+                              SurfaceFormat::A8);
+  if (!destMaskDT) {
+    return nullptr;
+  }
+  RefPtr<SourceSurface> destMaskSnapshot = destMaskDT->Snapshot();
+  if (!destMaskSnapshot) {
+    return nullptr;
+  }
+  RefPtr<DataSourceSurface> destMaskSurface = destMaskSnapshot->GetDataSurface();
+  DataSourceSurface::MappedSurface destMap;
+  if (!destMaskSurface->Map(DataSourceSurface::MapType::READ_WRITE, &destMap)) {
+    return nullptr;
+  }
+
+  uint8_t maskType;
+  if (aMaskOp == NS_STYLE_MASK_MODE_MATCH_SOURCE) {
+    maskType = StyleSVGReset()->mMaskType;
+  } else {
+    maskType = aMaskOp == NS_STYLE_MASK_MODE_LUMINANCE ?
+                 NS_STYLE_MASK_TYPE_LUMINANCE : NS_STYLE_MASK_TYPE_ALPHA;
+  }
+
+  if (maskType == NS_STYLE_MASK_TYPE_LUMINANCE) {
     if (StyleSVG()->mColorInterpolation ==
         NS_STYLE_COLOR_INTERPOLATION_LINEARRGB) {
-      ComputeLinearRGBLuminanceMask(map.mData, map.mStride, maskSurfaceSize, aOpacity);
+      ComputeLinearRGBLuminanceMask(map.mData, map.mStride,
+                                    destMap.mData, destMap.mStride,
+                                    maskSurfaceSize, aOpacity);
     } else {
-      ComputesRGBLuminanceMask(map.mData, map.mStride, maskSurfaceSize, aOpacity);
+      ComputesRGBLuminanceMask(map.mData, map.mStride,
+                               destMap.mData, destMap.mStride,
+                               maskSurfaceSize, aOpacity);
     }
   } else {
-    ComputeAlphaMask(map.mData, map.mStride, maskSurfaceSize, aOpacity);
+      ComputeAlphaMask(map.mData, map.mStride,
+                       destMap.mData, destMap.mStride,
+                       maskSurfaceSize, aOpacity);
   }
 
   maskSurface->Unmap();
+  destMaskSurface->Unmap();
 
   // Moz2D transforms in the opposite direction to Thebes
   if (!maskSurfaceMatrix.Invert()) {
@@ -283,7 +342,7 @@ nsSVGMaskFrame::GetMaskForMaskedFrame(gfxContext* aContext,
   }
 
   *aMaskTransform = ToMatrix(maskSurfaceMatrix);
-  return maskSurface;
+  return destMaskSurface.forget();
 }
 
 nsresult
@@ -301,8 +360,8 @@ nsSVGMaskFrame::AttributeChanged(int32_t  aNameSpaceID,
     nsSVGEffects::InvalidateDirectRenderingObservers(this);
   }
 
-  return nsSVGMaskFrameBase::AttributeChanged(aNameSpaceID,
-                                              aAttribute, aModType);
+  return nsSVGContainerFrame::AttributeChanged(aNameSpaceID,
+                                               aAttribute, aModType);
 }
 
 #ifdef DEBUG
@@ -311,10 +370,10 @@ nsSVGMaskFrame::Init(nsIContent*       aContent,
                      nsContainerFrame* aParent,
                      nsIFrame*         aPrevInFlow)
 {
-  NS_ASSERTION(aContent->IsSVG(nsGkAtoms::mask),
+  NS_ASSERTION(aContent->IsSVGElement(nsGkAtoms::mask),
                "Content is not an SVG mask");
 
-  nsSVGMaskFrameBase::Init(aContent, aParent, aPrevInFlow);
+  nsSVGContainerFrame::Init(aContent, aParent, aPrevInFlow);
 }
 #endif /* DEBUG */
 

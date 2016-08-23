@@ -8,30 +8,33 @@
 #include "jsapi-tests/tests.h"
 
 static bool
-GlobalEnumerate(JSContext *cx, JS::Handle<JSObject*> obj)
+GlobalEnumerate(JSContext* cx, JS::Handle<JSObject*> obj)
 {
     return JS_EnumerateStandardClasses(cx, obj);
 }
 
 static bool
-GlobalResolve(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool *resolvedp)
+GlobalResolve(JSContext* cx, JS::HandleObject obj, JS::HandleId id, bool* resolvedp)
 {
     return JS_ResolveStandardClass(cx, obj, id, resolvedp);
 }
 
 BEGIN_TEST(testRedefineGlobalEval)
 {
+    static const JSClassOps clsOps = {
+        nullptr, nullptr, nullptr, nullptr,
+        GlobalEnumerate, GlobalResolve, nullptr, nullptr,
+        nullptr, nullptr, nullptr,
+        JS_GlobalObjectTraceHook
+    };
+
     static const JSClass cls = {
         "global", JSCLASS_GLOBAL_FLAGS,
-        nullptr, nullptr, nullptr, nullptr,
-        GlobalEnumerate, GlobalResolve, nullptr,
-        nullptr, nullptr, nullptr, nullptr,
-        JS_GlobalObjectTraceHook
+        &clsOps
     };
 
     /* Create the global object. */
     JS::CompartmentOptions options;
-    options.setVersion(JSVERSION_LATEST);
     JS::Rooted<JSObject*> g(cx, JS_NewGlobalObject(cx, &cls, nullptr, JS::FireOnNewGlobalHook, options));
     if (!g)
         return false;
@@ -42,7 +45,7 @@ BEGIN_TEST(testRedefineGlobalEval)
 
     static const char data[] = "Object.defineProperty(this, 'eval', { configurable: false });";
     JS::CompileOptions opts(cx);
-    CHECK(JS::Evaluate(cx, g, opts.setFileAndLine(__FILE__, __LINE__),
+    CHECK(JS::Evaluate(cx, opts.setFileAndLine(__FILE__, __LINE__),
                        data, mozilla::ArrayLength(data) - 1, &v));
 
     return true;

@@ -26,33 +26,22 @@ SharedMemory::SharedMemory()
       max_size_(0) {
 }
 
-SharedMemory::SharedMemory(SharedMemoryHandle handle, bool read_only)
-    : mapped_file_(handle.fd),
-      inode_(0),
-      memory_(NULL),
-      read_only_(read_only),
-      max_size_(0) {
-  struct stat st;
-  if (fstat(handle.fd, &st) == 0) {
-    // If fstat fails, then the file descriptor is invalid and we'll learn this
-    // fact when Map() fails.
-    inode_ = st.st_ino;
-  }
-}
-
-SharedMemory::SharedMemory(SharedMemoryHandle handle, bool read_only,
-                           ProcessHandle process)
-    : mapped_file_(handle.fd),
-      memory_(NULL),
-      read_only_(read_only),
-      max_size_(0) {
-  // We don't handle this case yet (note the ignored parameter); let's die if
-  // someone comes calling.
-  NOTREACHED();
-}
-
 SharedMemory::~SharedMemory() {
   Close();
+}
+
+bool SharedMemory::SetHandle(SharedMemoryHandle handle, bool read_only) {
+  DCHECK(mapped_file_ == -1);
+
+  struct stat st;
+  if (fstat(handle.fd, &st) < 0) {
+    return false;
+  }
+
+  mapped_file_ = handle.fd;
+  inode_ = st.st_ino;
+  read_only_ = read_only;
+  return true;
 }
 
 // static
@@ -93,7 +82,7 @@ bool SharedMemory::Delete(const std::wstring& name) {
 
   FilePath path(WideToUTF8(mem_filename));
   if (file_util::PathExists(path)) {
-    return file_util::Delete(path, false);
+    return file_util::Delete(path);
   }
 
   // Doesn't exist, so success.
@@ -170,7 +159,7 @@ bool SharedMemory::CreateOrOpen(const std::wstring &name,
     // Deleting the file prevents anyone else from mapping it in
     // (making it private), and prevents the need for cleanup (once
     // the last fd is closed, it is truly freed).
-    file_util::Delete(path, false);
+    file_util::Delete(path);
   } else {
     std::wstring mem_filename;
     if (FilenameForMemoryName(name, &mem_filename) == false)
@@ -253,7 +242,7 @@ bool SharedMemory::Unmap() {
   return true;
 }
 
-bool SharedMemory::ShareToProcessCommon(ProcessHandle process,
+bool SharedMemory::ShareToProcessCommon(ProcessId processId,
                                         SharedMemoryHandle *new_handle,
                                         bool close_self) {
   const int new_fd = dup(mapped_file_);
@@ -268,10 +257,12 @@ bool SharedMemory::ShareToProcessCommon(ProcessHandle process,
 }
 
 
-void SharedMemory::Close() {
-  Unmap();
+void SharedMemory::Close(bool unmap_view) {
+  if (unmap_view) {
+    Unmap();
+  }
 
-  if (mapped_file_ > 0) {
+  if (mapped_file_ >= 0) {
     close(mapped_file_);
     mapped_file_ = -1;
   }

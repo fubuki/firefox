@@ -6,7 +6,7 @@ this.EXPORTED_SYMBOLS = [ "SitePermissions" ];
 
 Components.utils.import("resource://gre/modules/Services.jsm");
 
-let gStringBundle =
+var gStringBundle =
   Services.strings.createBundle("chrome://browser/locale/sitePermissions.properties");
 
 this.SitePermissions = {
@@ -85,10 +85,6 @@ this.SitePermissions = {
     }
 
     Services.perms.add(aURI, aPermissionID, aState);
-
-    if (aPermissionID in gPermissionObject &&
-        gPermissionObject[aPermissionID].onChange)
-      gPermissionObject[aPermissionID].onChange(aURI, aState);
   },
 
   /* Removes the saved state of a particular permission for a given URI.
@@ -97,18 +93,15 @@ this.SitePermissions = {
     if (!this.isSupportedURI(aURI))
       return;
 
-    Services.perms.remove(aURI.host, aPermissionID);
-
-    if (aPermissionID in gPermissionObject &&
-        gPermissionObject[aPermissionID].onChange)
-      gPermissionObject[aPermissionID].onChange(aURI, this.UNKNOWN);
+    Services.perms.remove(aURI, aPermissionID);
   },
 
   /* Returns the localized label for the permission with the given ID, to be
    * used in a UI for managing permissions.
    */
   getPermissionLabel: function (aPermissionID) {
-    return gStringBundle.GetStringFromName("permission." + aPermissionID + ".label");
+    let labelID = gPermissionObject[aPermissionID].labelID || aPermissionID;
+    return gStringBundle.GetStringFromName("permission." + labelID + ".label");
   },
 
   /* Returns the localized label for the given permission state, to be used in
@@ -130,7 +123,7 @@ this.SitePermissions = {
   }
 };
 
-let gPermissionObject = {
+var gPermissionObject = {
   /* Holds permission ID => options pairs.
    *
    * Supported options:
@@ -144,8 +137,9 @@ let gPermissionObject = {
    *    Defaults to UNKNOWN, indicating that the user will be asked each time
    *    a page asks for that permissions.
    *
-   *  - onChange
-   *    Called when a permission state changes.
+   *  - labelID
+   *    Use the given ID instead of the permission name for looking up strings.
+   *    e.g. "desktop-notification2" to use permission.desktop-notification2.label
    *
    *  - states
    *    Array of permission states to be exposed to the user.
@@ -172,7 +166,10 @@ let gPermissionObject = {
     }
   },
 
-  "desktop-notification": {},
+  "desktop-notification": {
+    exactHostMatch: true,
+    labelID: "desktop-notification2",
+  },
 
   "camera": {},
   "microphone": {},
@@ -195,14 +192,7 @@ let gPermissionObject = {
     exactHostMatch: true
   },
 
-  "indexedDB": {
-    onChange: function (aURI, aState) {
-      if (aState == SitePermissions.BLOCK)
-        Services.perms.remove(aURI.host, "indexedDB-unlimited");
-    }
-  },
-
-  "fullscreen": {},
+  "indexedDB": {},
 
   "pointerLock": {
     exactHostMatch: true

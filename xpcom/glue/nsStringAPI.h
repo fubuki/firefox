@@ -21,7 +21,7 @@
 
 #include "nsXPCOMStrings.h"
 #include "nsISupportsImpl.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsTArray.h"
 
 /**
@@ -226,7 +226,11 @@ public:
     Replace(aCutStart, aCutLength, nullptr, 0);
   }
 
-  NS_HIDDEN_(void) Truncate() { SetLength(0); }
+  NS_HIDDEN_(void) Truncate(size_type aNewLength = 0)
+  {
+    NS_ASSERTION(aNewLength <= Length(), "Truncate cannot make string longer");
+    SetLength(aNewLength);
+  }
 
   /**
    * Remove all occurences of characters in aSet from the string.
@@ -643,7 +647,11 @@ public:
     Replace(aCutStart, aCutLength, nullptr, 0);
   }
 
-  NS_HIDDEN_(void) Truncate() { SetLength(0); }
+  NS_HIDDEN_(void) Truncate(size_type aNewLength = 0)
+  {
+    NS_ASSERTION(aNewLength <= Length(), "Truncate cannot make string longer");
+    SetLength(aNewLength);
+  }
 
   /**
    * Remove all occurences of characters in aSet from the string.
@@ -1218,7 +1226,7 @@ public:
     NS_UTF16ToCString(aStr, NS_CSTRING_ENCODING_UTF8, *this);
   }
 
-  explicit NS_ConvertUTF16toUTF8(const char16_t* aData,
+  explicit NS_ConvertUTF16toUTF8(const char16ptr_t aData,
                                  uint32_t aLength = UINT32_MAX)
   {
     NS_UTF16ToCString(nsDependentString(aData, aLength),
@@ -1239,7 +1247,7 @@ public:
     NS_UTF16ToCString(aStr, NS_CSTRING_ENCODING_ASCII, *this);
   }
 
-  explicit NS_LossyConvertUTF16toASCII(const char16_t* aData,
+  explicit NS_LossyConvertUTF16toASCII(const char16ptr_t aData,
                                        uint32_t aLength = UINT32_MAX)
   {
     NS_UTF16ToCString(nsDependentString(aData, aLength),
@@ -1446,8 +1454,8 @@ Substring(const nsAString& aStr, uint32_t aStartPos, uint32_t aLength)
 inline const nsDependentSubstring
 Substring(const char16_t* aStart, const char16_t* aEnd)
 {
-  NS_ABORT_IF_FALSE(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
-                    "string too long");
+  MOZ_ASSERT(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
+             "string too long");
   return nsDependentSubstring(aStart, uint32_t(aEnd - aStart));
 }
 
@@ -1485,8 +1493,8 @@ Substring(const nsACString& aStr, uint32_t aStartPos, uint32_t aLength)
 inline const nsDependentCSubstring
 Substring(const char* aStart, const char* aEnd)
 {
-  NS_ABORT_IF_FALSE(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
-                    "string too long");
+  MOZ_ASSERT(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
+             "string too long");
   return nsDependentCSubstring(aStart, uint32_t(aEnd - aStart));
 }
 

@@ -17,8 +17,8 @@ using namespace mozilla;
 
 //#define FCF_NOISY
 
-nsFormControlFrame::nsFormControlFrame(nsStyleContext* aContext) :
-  nsLeafFrame(aContext)
+nsFormControlFrame::nsFormControlFrame(nsStyleContext* aContext)
+  : nsAtomicContainerFrame(aContext)
 {
 }
 
@@ -29,7 +29,7 @@ nsFormControlFrame::~nsFormControlFrame()
 nsIAtom*
 nsFormControlFrame::GetType() const
 {
-  return nsGkAtoms::formControlFrame; 
+  return nsGkAtoms::formControlFrame;
 }
 
 void
@@ -37,14 +37,46 @@ nsFormControlFrame::DestroyFrom(nsIFrame* aDestructRoot)
 {
   // Unregister the access key registered in reflow
   nsFormControlFrame::RegUnRegAccessKey(static_cast<nsIFrame*>(this), false);
-  nsLeafFrame::DestroyFrom(aDestructRoot);
+  nsAtomicContainerFrame::DestroyFrom(aDestructRoot);
 }
 
 NS_QUERYFRAME_HEAD(nsFormControlFrame)
   NS_QUERYFRAME_ENTRY(nsIFormControlFrame)
-NS_QUERYFRAME_TAIL_INHERITING(nsLeafFrame)
+NS_QUERYFRAME_TAIL_INHERITING(nsAtomicContainerFrame)
 
-NS_IMPL_FRAMEARENA_HELPERS(nsFormControlFrame)
+/* virtual */ nscoord
+nsFormControlFrame::GetMinISize(nsRenderingContext *aRenderingContext)
+{
+  nscoord result;
+  DISPLAY_MIN_WIDTH(this, result);
+  result = GetIntrinsicISize();
+  return result;
+}
+
+/* virtual */ nscoord
+nsFormControlFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
+{
+  nscoord result;
+  DISPLAY_PREF_WIDTH(this, result);
+  result = GetIntrinsicISize();
+  return result;
+}
+
+/* virtual */
+LogicalSize
+nsFormControlFrame::ComputeAutoSize(nsRenderingContext *aRenderingContext,
+                                    WritingMode aWM,
+                                    const LogicalSize& aCBSize,
+                                    nscoord aAvailableISize,
+                                    const LogicalSize& aMargin,
+                                    const LogicalSize& aBorder,
+                                    const LogicalSize& aPadding,
+                                    bool aShrinkWrap)
+{
+  const WritingMode wm = GetWritingMode();
+  LogicalSize result(wm, GetIntrinsicISize(), GetIntrinsicBSize());
+  return result.ConvertTo(aWM, wm);
+}
 
 nscoord
 nsFormControlFrame::GetIntrinsicISize()
@@ -70,9 +102,13 @@ nsFormControlFrame::GetLogicalBaseline(WritingMode aWritingMode) const
   NS_ASSERTION(!NS_SUBTREE_DIRTY(this),
                "frame must not be dirty");
   // Treat radio buttons and checkboxes as having an intrinsic baseline
-  // at the bottom of the control (use the bottom content edge rather
-  // than the bottom margin edge).
-  return BSize(aWritingMode) -
+  // at the block-end of the control (use the block-end content edge rather
+  // than the margin edge).
+  // For "inverted" lines (typically in writing-mode:vertical-lr), use the
+  // block-start end instead.
+  return aWritingMode.IsLineInverted()
+    ? GetLogicalUsedBorderAndPadding(aWritingMode).BStart(aWritingMode)
+    : BSize(aWritingMode) -
          GetLogicalUsedBorderAndPadding(aWritingMode).BEnd(aWritingMode);
 }
 
@@ -82,22 +118,34 @@ nsFormControlFrame::Reflow(nsPresContext*          aPresContext,
                            const nsHTMLReflowState& aReflowState,
                            nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsFormControlFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
+  NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
+                 ("enter nsFormControlFrame::Reflow: aMaxSize=%d,%d",
+                  aReflowState.AvailableWidth(), aReflowState.AvailableHeight()));
 
   if (mState & NS_FRAME_FIRST_REFLOW) {
     RegUnRegAccessKey(static_cast<nsIFrame*>(this), true);
   }
 
-  nsLeafFrame::Reflow(aPresContext, aDesiredSize, aReflowState, aStatus);
+  aStatus = NS_FRAME_COMPLETE;
+  aDesiredSize.SetSize(aReflowState.GetWritingMode(),
+                       aReflowState.ComputedSizeWithBorderPadding());
 
   if (nsLayoutUtils::FontSizeInflationEnabled(aPresContext)) {
     float inflation = nsLayoutUtils::FontSizeInflationFor(this);
     aDesiredSize.Width() *= inflation;
     aDesiredSize.Height() *= inflation;
-    aDesiredSize.UnionOverflowAreasWithDesiredBounds();
-    FinishAndStoreOverflow(&aDesiredSize);
   }
+
+  NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS,
+                 ("exit nsFormControlFrame::Reflow: size=%d,%d",
+                  aDesiredSize.Width(), aDesiredSize.Height()));
+  NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
+
+  aDesiredSize.SetOverflowAreasToDesiredBounds();
+  FinishAndStoreOverflow(&aDesiredSize);
 }
 
 nsresult

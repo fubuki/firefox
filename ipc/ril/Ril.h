@@ -7,36 +7,45 @@
 #ifndef mozilla_ipc_Ril_h
 #define mozilla_ipc_Ril_h 1
 
-#include <mozilla/dom/workers/Workers.h>
-#include <mozilla/ipc/StreamSocket.h>
+#include "nsError.h"
+#include "nsTArray.h"
 
 namespace mozilla {
+
+namespace dom {
+namespace workers {
+
+class WorkerCrossThreadDispatcher;
+
+} // namespace workers
+} // namespace dom
+
 namespace ipc {
 
-class RilConsumer MOZ_FINAL : public mozilla::ipc::StreamSocket
+class RilConsumer;
+
+class RilWorker final
 {
 public:
   static nsresult Register(
     unsigned int aClientId,
     mozilla::dom::workers::WorkerCrossThreadDispatcher* aDispatcher);
+
   static void Shutdown();
 
-  ConnectionOrientedSocketIO* GetIO() MOZ_OVERRIDE;
+  // Public for |MakeUnique| Call |Register| instead.
+  RilWorker(mozilla::dom::workers::WorkerCrossThreadDispatcher* aDispatcher);
 
 private:
-  RilConsumer(unsigned long aClientId,
-              mozilla::dom::workers::WorkerCrossThreadDispatcher* aDispatcher);
+  class RegisterConsumerTask;
+  class UnregisterConsumerTask;
 
-  void ReceiveSocketData(nsAutoPtr<UnixSocketRawData>& aMessage) MOZ_OVERRIDE;
+  nsresult RegisterConsumer(unsigned int aClientId);
+  void     UnregisterConsumer(unsigned int aClientId);
 
-  void OnConnectSuccess() MOZ_OVERRIDE;
-  void OnConnectError() MOZ_OVERRIDE;
-  void OnDisconnect() MOZ_OVERRIDE;
+  static nsTArray<UniquePtr<RilWorker>> sRilWorkers;
 
-  nsRefPtr<mozilla::dom::workers::WorkerCrossThreadDispatcher> mDispatcher;
-  unsigned long mClientId;
-  nsCString mAddress;
-  bool mShutdown;
+  RefPtr<mozilla::dom::workers::WorkerCrossThreadDispatcher> mDispatcher;
 };
 
 } // namespace ipc

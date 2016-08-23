@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: sw=2 ts=2 et lcs=trail\:.,tab\:>~ :
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -21,7 +21,7 @@ namespace mozilla {
 namespace dom {
 class SVGAnimationElement;
 class SVGTransform;
-}
+} // namespace dom
 
 /**
  * Class nsSVGAnimatedTransformList
@@ -44,7 +44,9 @@ class nsSVGAnimatedTransformList
   friend class DOMSVGTransformList;
 
 public:
-  nsSVGAnimatedTransformList() : mIsAttrSet(false) { }
+  nsSVGAnimatedTransformList()
+    : mIsAttrSet(false),
+      mHadTransformBeforeLastBaseValChange(false) { }
 
   /**
    * Because it's so important that mBaseVal and its DOMSVGTransformList wrapper
@@ -92,6 +94,21 @@ public:
     return !!mAnimVal;
   }
 
+  /**
+   * Returns true iff "HasTransform" returned true just before our most recent
+   * SetBaseValue/SetBaseValueString/ClearBaseValue change.
+   *
+   * (This is used as part of an optimization in
+   * SVGTransformableElement::GetAttributeChangeHint. That function reports an
+   * inexpensive nsChangeHint when a transform has just modified -- but this
+   * accessor lets it detect cases where the "modification" is actually adding
+   * a transform where we previously had none. These cases require a more
+   * thorough nsChangeHint.)
+   */
+  bool HadTransformBeforeLastBaseValChange() const {
+    return mHadTransformBeforeLastBaseValChange;
+  }
+
   /// Callers own the returned nsISMILAttr
   nsISMILAttr* ToSMILAttr(nsSVGElement* aSVGElement);
 
@@ -105,6 +122,8 @@ private:
   SVGTransformList mBaseVal;
   nsAutoPtr<SVGTransformList> mAnimVal;
   bool mIsAttrSet;
+   // (See documentation for accessor, HadTransformBeforeLastBaseValChange.)
+  bool mHadTransformBeforeLastBaseValChange;
 
   struct SMILAnimatedTransformList : public nsISMILAttr
   {
@@ -119,10 +138,10 @@ private:
     virtual nsresult ValueFromString(const nsAString& aStr,
                                      const dom::SVGAnimationElement* aSrcElement,
                                      nsSMILValue& aValue,
-                                     bool& aPreventCachingOfSandwich) const MOZ_OVERRIDE;
-    virtual nsSMILValue GetBaseValue() const MOZ_OVERRIDE;
-    virtual void ClearAnimValue() MOZ_OVERRIDE;
-    virtual nsresult SetAnimValue(const nsSMILValue& aValue) MOZ_OVERRIDE;
+                                     bool& aPreventCachingOfSandwich) const override;
+    virtual nsSMILValue GetBaseValue() const override;
+    virtual void ClearAnimValue() override;
+    virtual nsresult SetAnimValue(const nsSMILValue& aValue) override;
 
   protected:
     static void ParseValue(const nsAString& aSpec,

@@ -89,6 +89,8 @@
 #elif defined(_WIN32)
 #  if defined(_M_IX86)
 #    define MOZ_LITTLE_ENDIAN 1
+#  elif defined(_M_ARM)
+#    define MOZ_LITTLE_ENDIAN 1
 #  else
 #    error "CPU type is unknown"
 #  endif
@@ -148,11 +150,9 @@
 #    define MOZ_HAVE_BUILTIN_BYTESWAP16 __builtin_bswap16
 #  endif
 #elif defined(__GNUC__)
-#  if MOZ_GCC_VERSION_AT_LEAST(4, 8, 0)
-#    define MOZ_HAVE_BUILTIN_BYTESWAP16 __builtin_bswap16
-#  endif
+#  define MOZ_HAVE_BUILTIN_BYTESWAP16 __builtin_bswap16
 #elif defined(_MSC_VER)
-#    define MOZ_HAVE_BUILTIN_BYTESWAP16 _byteswap_ushort
+#  define MOZ_HAVE_BUILTIN_BYTESWAP16 _byteswap_ushort
 #endif
 
 namespace mozilla {
@@ -643,15 +643,15 @@ public:
 
 } /* namespace detail */
 
-class LittleEndian MOZ_FINAL : public detail::EndianReadWrite<detail::Little>
+class LittleEndian final : public detail::EndianReadWrite<detail::Little>
 {};
 
-class BigEndian MOZ_FINAL : public detail::EndianReadWrite<detail::Big>
+class BigEndian final : public detail::EndianReadWrite<detail::Big>
 {};
 
 typedef BigEndian NetworkEndian;
 
-class NativeEndian MOZ_FINAL : public detail::Endian<MOZ_NATIVE_ENDIANNESS>
+class NativeEndian final : public detail::Endian<MOZ_NATIVE_ENDIANNESS>
 {
 private:
   typedef detail::Endian<MOZ_NATIVE_ENDIANNESS> super;

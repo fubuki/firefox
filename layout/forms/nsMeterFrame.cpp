@@ -19,7 +19,10 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLMeterElement.h"
 #include "nsContentList.h"
+#include "nsCSSPseudoElements.h"
 #include "nsStyleSet.h"
+#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsThemeConstants.h"
 #include <algorithm>
 
@@ -56,6 +59,12 @@ nsMeterFrame::DestroyFrom(nsIFrame* aDestructRoot)
   nsContainerFrame::DestroyFrom(aDestructRoot);
 }
 
+nsIAtom*
+nsMeterFrame::GetType() const
+{
+  return nsGkAtoms::meterFrame;
+}
+
 nsresult
 nsMeterFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 {
@@ -66,8 +75,8 @@ nsMeterFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
   mBarDiv = doc->CreateHTMLElement(nsGkAtoms::div);
 
   // Associate ::-moz-meter-bar pseudo-element to the anonymous child.
-  nsCSSPseudoElements::Type pseudoType = nsCSSPseudoElements::ePseudo_mozMeterBar;
-  nsRefPtr<nsStyleContext> newStyleContext = PresContext()->StyleSet()->
+  CSSPseudoElementType pseudoType = CSSPseudoElementType::mozMeterBar;
+  RefPtr<nsStyleContext> newStyleContext = PresContext()->StyleSet()->
     ResolvePseudoElementStyle(mContent->AsElement(), pseudoType,
                               StyleContext(), mBarDiv->AsElement());
 
@@ -95,10 +104,11 @@ NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 void
 nsMeterFrame::Reflow(nsPresContext*           aPresContext,
-                                   nsHTMLReflowMetrics&     aDesiredSize,
-                                   const nsHTMLReflowState& aReflowState,
-                                   nsReflowStatus&          aStatus)
+                     nsHTMLReflowMetrics&     aDesiredSize,
+                     const nsHTMLReflowState& aReflowState,
+                     nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsMeterFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
 
@@ -134,7 +144,7 @@ nsMeterFrame::ReflowBarFrame(nsIFrame*                aBarFrame,
                              const nsHTMLReflowState& aReflowState,
                              nsReflowStatus&          aStatus)
 {
-  bool vertical = StyleDisplay()->mOrient == NS_STYLE_ORIENT_VERTICAL;
+  bool vertical = ResolvedOrientationIsVertical();
   WritingMode wm = aBarFrame->GetWritingMode();
   LogicalSize availSize = aReflowState.ComputedSize(wm);
   availSize.BSize(wm) = NS_UNCONSTRAINEDSIZE;
@@ -157,7 +167,7 @@ nsMeterFrame::ReflowBarFrame(nsIFrame*                aBarFrame,
 
   size = NSToCoordRound(size * position);
 
-  if (!vertical && StyleVisibility()->mDirection == NS_STYLE_DIRECTION_RTL) {
+  if (!vertical && (wm.IsVertical() ? wm.IsVerticalRL() : !wm.IsBidiLTR())) {
     xoffset += aReflowState.ComputedWidth() - size;
   }
 
@@ -220,19 +230,17 @@ nsMeterFrame::ComputeAutoSize(nsRenderingContext *aRenderingContext,
                               const LogicalSize& aPadding,
                               bool aShrinkWrap)
 {
-  nsRefPtr<nsFontMetrics> fontMet;
-  NS_ENSURE_SUCCESS(nsLayoutUtils::GetFontMetricsForFrame(this,
-                                                          getter_AddRefs(fontMet)),
-                    LogicalSize(aWM));
+  RefPtr<nsFontMetrics> fontMet =
+    nsLayoutUtils::GetFontMetricsForFrame(this, 1.0f);
 
   const WritingMode wm = GetWritingMode();
   LogicalSize autoSize(wm);
   autoSize.BSize(wm) = autoSize.ISize(wm) = fontMet->Font().size; // 1em
 
-  if (StyleDisplay()->mOrient == NS_STYLE_ORIENT_VERTICAL) {
-    autoSize.Height(wm) *= 5; // 5em
+  if (ResolvedOrientationIsVertical() == wm.IsVertical()) {
+    autoSize.ISize(wm) *= 5; // 5em
   } else {
-    autoSize.Width(wm) *= 5; // 5em
+    autoSize.BSize(wm) *= 5; // 5em
   }
 
   return autoSize.ConvertTo(aWM, wm);
@@ -241,19 +249,17 @@ nsMeterFrame::ComputeAutoSize(nsRenderingContext *aRenderingContext,
 nscoord
 nsMeterFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 {
-  nsRefPtr<nsFontMetrics> fontMet;
-  NS_ENSURE_SUCCESS(
-      nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fontMet)), 0);
+  RefPtr<nsFontMetrics> fontMet =
+    nsLayoutUtils::GetFontMetricsForFrame(this, 1.0f);
 
-  nscoord minWidth = fontMet->Font().size; // 1em
+  nscoord minISize = fontMet->Font().size; // 1em
 
-  if (StyleDisplay()->mOrient == NS_STYLE_ORIENT_AUTO ||
-      StyleDisplay()->mOrient == NS_STYLE_ORIENT_HORIZONTAL) {
-    // The orientation is horizontal
-    minWidth *= 5; // 5em
+  if (ResolvedOrientationIsVertical() == GetWritingMode().IsVertical()) {
+    // The orientation is inline
+    minISize *= 5; // 5em
   }
 
-  return minWidth;
+  return minISize;
 }
 
 nscoord
@@ -265,22 +271,25 @@ nsMeterFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 bool
 nsMeterFrame::ShouldUseNativeStyle() const
 {
+  nsIFrame* barFrame = mBarDiv->GetPrimaryFrame();
+
   // Use the native style if these conditions are satisfied:
   // - both frames use the native appearance;
   // - neither frame has author specified rules setting the border or the
   //   background.
   return StyleDisplay()->mAppearance == NS_THEME_METERBAR &&
-         mBarDiv->GetPrimaryFrame()->StyleDisplay()->mAppearance == NS_THEME_METERBAR_CHUNK &&
-         !PresContext()->HasAuthorSpecifiedRules(const_cast<nsMeterFrame*>(this),
+         !PresContext()->HasAuthorSpecifiedRules(this,
                                                  NS_AUTHOR_SPECIFIED_BORDER | NS_AUTHOR_SPECIFIED_BACKGROUND) &&
-         !PresContext()->HasAuthorSpecifiedRules(mBarDiv->GetPrimaryFrame(),
+         barFrame &&
+         barFrame->StyleDisplay()->mAppearance == NS_THEME_METERBAR_CHUNK &&
+         !PresContext()->HasAuthorSpecifiedRules(barFrame,
                                                  NS_AUTHOR_SPECIFIED_BORDER | NS_AUTHOR_SPECIFIED_BACKGROUND);
 }
 
 Element*
-nsMeterFrame::GetPseudoElement(nsCSSPseudoElements::Type aType)
+nsMeterFrame::GetPseudoElement(CSSPseudoElementType aType)
 {
-  if (aType == nsCSSPseudoElements::ePseudo_mozMeterBar) {
+  if (aType == CSSPseudoElementType::mozMeterBar) {
     return mBarDiv;
   }
 

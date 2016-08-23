@@ -22,7 +22,6 @@
 class nsINode;
 class nsIDOMNode;
 class nsIURI;
-class nsIXMLContentSink;
 class txStylesheet;
 class txResultRecycler;
 class txIGlobalParameter;
@@ -34,8 +33,8 @@ class Document;
 class DocumentFragment;
 class GlobalObject;
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 /* bacd8ad0-552f-11d3-a9f7-000064657374 */
 #define TRANSFORMIIX_XSLT_PROCESSOR_CID   \
@@ -49,11 +48,11 @@ class GlobalObject;
 /**
  * txMozillaXSLTProcessor is a front-end to the XSLT Processor.
  */
-class txMozillaXSLTProcessor MOZ_FINAL : public nsIXSLTProcessor,
-                                         public nsIXSLTProcessorPrivate,
-                                         public nsIDocumentTransformer,
-                                         public nsStubMutationObserver,
-                                         public nsWrapperCache
+class txMozillaXSLTProcessor final : public nsIXSLTProcessor,
+                                     public nsIXSLTProcessorPrivate,
+                                     public nsIDocumentTransformer,
+                                     public nsStubMutationObserver,
+                                     public nsWrapperCache
 {
 public:
     /**
@@ -73,17 +72,17 @@ public:
     NS_DECL_NSIXSLTPROCESSORPRIVATE
 
     // nsIDocumentTransformer interface
-    NS_IMETHOD SetTransformObserver(nsITransformObserver* aObserver) MOZ_OVERRIDE;
-    NS_IMETHOD LoadStyleSheet(nsIURI* aUri, nsIDocument* aLoaderDocument) MOZ_OVERRIDE;
-    NS_IMETHOD SetSourceContentModel(nsIDOMNode* aSource) MOZ_OVERRIDE;
-    NS_IMETHOD CancelLoads() MOZ_OVERRIDE {return NS_OK;}
+    NS_IMETHOD SetTransformObserver(nsITransformObserver* aObserver) override;
+    NS_IMETHOD LoadStyleSheet(nsIURI* aUri, nsIDocument* aLoaderDocument) override;
+    NS_IMETHOD SetSourceContentModel(nsIDOMNode* aSource) override;
+    NS_IMETHOD CancelLoads() override {return NS_OK;}
     NS_IMETHOD AddXSLTParamNamespace(const nsString& aPrefix,
-                                     const nsString& aNamespace) MOZ_OVERRIDE;
+                                     const nsString& aNamespace) override;
     NS_IMETHOD AddXSLTParam(const nsString& aName,
                             const nsString& aNamespace,
                             const nsString& aSelect,
                             const nsString& aValue,
-                            nsIDOMNode* aContext) MOZ_OVERRIDE;
+                            nsIDOMNode* aContext) override;
 
     // nsIMutationObserver interface
     NS_DECL_NSIMUTATIONOBSERVER_CHARACTERDATACHANGED
@@ -94,7 +93,7 @@ public:
     NS_DECL_NSIMUTATIONOBSERVER_NODEWILLBEDESTROYED
 
     // nsWrapperCache
-    virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+    virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
     // WebIDL
     nsISupports*
@@ -169,7 +168,7 @@ private:
 
     nsCOMPtr<nsISupports> mOwner;
 
-    nsRefPtr<txStylesheet> mStylesheet;
+    RefPtr<txStylesheet> mStylesheet;
     nsIDocument* mStylesheetDocument; // weak
     nsCOMPtr<nsIContent> mEmbeddedStylesheetRoot;
 
@@ -180,7 +179,7 @@ private:
     nsCOMPtr<nsITransformObserver> mObserver;
     txOwningExpandedNameMap<txIGlobalParameter> mVariables;
     txNamespaceMap mParamNamespaceMap;
-    nsRefPtr<txResultRecycler> mRecycler;
+    RefPtr<txResultRecycler> mRecycler;
 
     uint32_t mFlags;
 };

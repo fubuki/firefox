@@ -15,7 +15,7 @@
 /**
  * A single result of a query from mozstorage
  */
-class nsXULTemplateResultStorage MOZ_FINAL : public nsIXULTemplateResult
+class nsXULTemplateResultStorage final : public nsIXULTemplateResult
 {
 public:
     NS_DECL_ISUPPORTS
@@ -28,7 +28,7 @@ protected:
 
     ~nsXULTemplateResultStorage();
 
-    nsRefPtr<nsXULTemplateResultSetStorage> mResultSet;
+    RefPtr<nsXULTemplateResultSetStorage> mResultSet;
 
     nsCOMArray<nsIVariant> mValues;
 

@@ -6,11 +6,9 @@
 #ifndef GFX_IMAGETYPES_H
 #define GFX_IMAGETYPES_H
 
-#include "mozilla/TypedEnum.h"
-
 namespace mozilla {
 
-MOZ_BEGIN_ENUM_CLASS(ImageFormat)
+enum class ImageFormat {
   /**
    * The PLANAR_YCBCR format creates a PlanarYCbCrImage. All backends should
    * support this format, because the Ogg video decoder depends on it.
@@ -43,7 +41,7 @@ MOZ_BEGIN_ENUM_CLASS(ImageFormat)
   SHARED_RGB,
 
   /**
-   * The CAIRO_SURFACE format creates a CairoImage. All backends should
+   * The CAIRO_SURFACE format creates a SourceSurfaceImage. All backends should
    * support this format, because video rendering sometimes requires it.
    *
    * This format is useful even though a PaintedLayer could be used.
@@ -83,17 +81,28 @@ MOZ_BEGIN_ENUM_CLASS(ImageFormat)
    * An Image type carries an opaque handle once for each stream.
    * The opaque handle would be a platform specific identifier.
    */
-  OVERLAY_IMAGE
-MOZ_END_ENUM_CLASS(ImageFormat)
+  OVERLAY_IMAGE,
 
-MOZ_BEGIN_ENUM_CLASS(StereoMode)
+  /**
+   * A share handle to a ID3D11Texture2D.
+   */
+  D3D11_SHARE_HANDLE_TEXTURE,
+
+  /**
+   * A wrapper around a drawable TextureClient.
+   */
+  TEXTURE_WRAPPER
+};
+
+enum class StereoMode {
   MONO,
   LEFT_RIGHT,
   RIGHT_LEFT,
   BOTTOM_TOP,
-  TOP_BOTTOM
-MOZ_END_ENUM_CLASS(StereoMode)
+  TOP_BOTTOM,
+  MAX,
+};
 
-} // namespace
+} // namespace mozilla
 
 #endif

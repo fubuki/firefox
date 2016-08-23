@@ -5,31 +5,24 @@
 
 #include "nsLanguageAtomService.h"
 #include "nsILocaleService.h"
+#include "nsUConvPropertySearch.h"
 #include "nsUnicharUtils.h"
 #include "nsIAtom.h"
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/Services.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/dom/EncodingUtils.h"
+
+using namespace mozilla;
+
+static const nsUConvProp kLangGroups[] = {
+#include "langGroups.properties.h"
+};
 
 NS_IMPL_ISUPPORTS(nsLanguageAtomService, nsILanguageAtomService)
 
 nsLanguageAtomService::nsLanguageAtomService()
 {
-}
-
-nsresult
-nsLanguageAtomService::InitLangGroupTable()
-{
-  if (mLangGroups)
-    return NS_OK;
-
-  nsCOMPtr<nsIStringBundleService> bundleService =
-    mozilla::services::GetStringBundleService();
-  if (!bundleService)
-    return NS_ERROR_FAILURE;
-
-  return bundleService->CreateBundle("resource://gre/res/langGroups.properties",
-                                     getter_AddRefs(mLangGroups));
 }
 
 nsIAtom*
@@ -39,7 +32,7 @@ nsLanguageAtomService::LookupLanguage(const nsACString &aLanguage,
   nsAutoCString lowered(aLanguage);
   ToLowerCase(lowered);
 
-  nsCOMPtr<nsIAtom> lang = do_GetAtom(lowered);
+  nsCOMPtr<nsIAtom> lang = NS_Atomize(lowered);
   return GetLanguageGroup(lang, aError);
 }
 
@@ -48,7 +41,7 @@ nsLanguageAtomService::LookupCharSet(const nsACString& aCharSet)
 {
   nsAutoCString group;
   mozilla::dom::EncodingUtils::LangGroupForEncoding(aCharSet, group);
-  return do_GetAtom(group);
+  return NS_Atomize(group);
 }
 
 nsIAtom*
@@ -76,7 +69,7 @@ nsLanguageAtomService::GetLocaleLanguage(nsresult *aError)
         break;
 
       ToLowerCase(loc); // use lowercase for all language atoms
-      mLocaleLanguage = do_GetAtom(loc);
+      mLocaleLanguage = NS_Atomize(loc);
     }
   } while (0);
 
@@ -96,21 +89,13 @@ nsLanguageAtomService::GetLanguageGroup(nsIAtom *aLanguage,
   retVal = mLangToGroup.GetWeak(aLanguage);
 
   if (!retVal) {
-    if (!mLangGroups) {
-      if (NS_FAILED(InitLangGroupTable())) {
-        if (aError) {
-          *aError = NS_ERROR_FAILURE;
-        }
-        return nullptr;
-      }
-    }
+    nsAutoCString langStr;
+    aLanguage->ToUTF8String(langStr);
 
-    nsAutoString langStr;
-    aLanguage->ToString(langStr);
-
-    nsXPIDLString langGroupStr;
-    res = mLangGroups->GetStringFromName(langStr.get(),
-                                         getter_Copies(langGroupStr));
+    nsAutoCString langGroupStr;
+    res = nsUConvPropertySearch::SearchPropertyValue(kLangGroups,
+                                                     ArrayLength(kLangGroups),
+                                                     langStr, langGroupStr);
     while (NS_FAILED(res)) {
       int32_t hyphen = langStr.RFindChar('-');
       if (hyphen <= 0) {
@@ -118,11 +103,12 @@ nsLanguageAtomService::GetLanguageGroup(nsIAtom *aLanguage,
         break;
       }
       langStr.Truncate(hyphen);
-      res = mLangGroups->GetStringFromName(langStr.get(),
-                                           getter_Copies(langGroupStr));
+      res = nsUConvPropertySearch::SearchPropertyValue(kLangGroups,
+                                                       ArrayLength(kLangGroups),
+                                                       langStr, langGroupStr);
     }
 
-    nsCOMPtr<nsIAtom> langGroup = do_GetAtom(langGroupStr);
+    nsCOMPtr<nsIAtom> langGroup = NS_Atomize(langGroupStr);
 
     // The hashtable will keep an owning reference to the atom
     mLangToGroup.Put(aLanguage, langGroup);

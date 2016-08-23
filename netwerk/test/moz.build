@@ -6,13 +6,12 @@
 
 TEST_DIRS += ['httpserver']
 
-FAIL_ON_WARNINGS = True
-
 BROWSER_CHROME_MANIFESTS += ['browser/browser.ini']
 MOCHITEST_MANIFESTS += ['mochitests/mochitest.ini']
 
 XPCSHELL_TESTS_MANIFESTS += [
     'unit/xpcshell.ini',
+    'unit/xpcshell_b2g.ini',
     'unit_ipc/xpcshell.ini',
 ]
 
@@ -20,11 +19,9 @@ GeckoSimplePrograms([
     'PropertiesTest',
     'ReadNTLM',
     'TestBlockingSocket',
-    'TestCallbacks',
     'TestDNS',
     'TestIncrementalDownload',
     'TestOpen',
-    'TestPageLoad',
     'TestProtocols',
     'TestServ',
     'TestStandardURL',
@@ -38,9 +35,7 @@ GeckoSimplePrograms([
 #SIMPLE_PROGRAMS += [
 #    TestIDN',
 #    TestIOThreads',
-#    TestPerf',
 #    TestSocketTransport',
-#    TestStreamChannel',
 #    TestStreamPump',
 #    TestStreamTransport',
 #    TestUDPSocketProvider',
@@ -49,7 +44,6 @@ GeckoSimplePrograms([
 CppUnitTests([
     'TestBind',
     'TestCookie',
-    'TestSTSParser',
     'TestUDPSocket',
 ])
 
@@ -58,4 +52,13 @@ RESOURCE_FILES += [
     'urlparse_unx.dat',
 ]
 
+USE_LIBS += ['static:js']
+
+if CONFIG['ENABLE_INTL_API'] and CONFIG['MOZ_ICU_DATA_ARCHIVE']:
+    # The ICU libraries linked into libmozjs will not include the ICU data,
+    # so link it directly.
+    USE_LIBS += ['icudata']
+
 CXXFLAGS += CONFIG['TK_CFLAGS']
+
+include('/ipc/chromium/chromium-config.mozbuild')

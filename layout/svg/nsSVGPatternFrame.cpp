@@ -23,7 +23,6 @@
 #include "nsSVGUtils.h"
 #include "nsSVGAnimatedTransformList.h"
 #include "SVGContentUtils.h"
-#include "gfxColor.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -32,7 +31,7 @@ using namespace mozilla::gfx;
 //----------------------------------------------------------------------
 // Helper classes
 
-class MOZ_STACK_CLASS nsSVGPatternFrame::AutoPatternReferencer
+class MOZ_RAII nsSVGPatternFrame::AutoPatternReferencer
 {
 public:
   explicit AutoPatternReferencer(nsSVGPatternFrame *aFrame
@@ -42,7 +41,7 @@ public:
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     // Reference loops should normally be detected in advance and handled, so
     // we're not expecting to encounter them here
-    NS_ABORT_IF_FALSE(!mFrame->mLoopFlag, "Undetected reference loop!");
+    MOZ_ASSERT(!mFrame->mLoopFlag, "Undetected reference loop!");
     mFrame->mLoopFlag = true;
   }
   ~AutoPatternReferencer() {
@@ -56,10 +55,10 @@ private:
 //----------------------------------------------------------------------
 // Implementation
 
-nsSVGPatternFrame::nsSVGPatternFrame(nsStyleContext* aContext) :
-  nsSVGPatternFrameBase(aContext),
-  mLoopFlag(false),
-  mNoHRefURI(false)
+nsSVGPatternFrame::nsSVGPatternFrame(nsStyleContext* aContext)
+  : nsSVGPaintServerFrame(aContext)
+  , mLoopFlag(false)
+  , mNoHRefURI(false)
 {
 }
 
@@ -95,7 +94,7 @@ nsSVGPatternFrame::AttributeChanged(int32_t         aNameSpaceID,
     nsSVGEffects::InvalidateDirectRenderingObservers(this);
   }
 
-  return nsSVGPatternFrameBase::AttributeChanged(aNameSpaceID,
+  return nsSVGPaintServerFrame::AttributeChanged(aNameSpaceID,
                                                  aAttribute, aModType);
 }
 
@@ -105,9 +104,9 @@ nsSVGPatternFrame::Init(nsIContent*       aContent,
                         nsContainerFrame* aParent,
                         nsIFrame*         aPrevInFlow)
 {
-  NS_ASSERTION(aContent->IsSVG(nsGkAtoms::pattern), "Content is not an SVG pattern");
+  NS_ASSERTION(aContent->IsSVGElement(nsGkAtoms::pattern), "Content is not an SVG pattern");
 
-  nsSVGPatternFrameBase::Init(aContent, aParent, aPrevInFlow);
+  nsSVGPaintServerFrame::Init(aContent, aParent, aPrevInFlow);
 }
 #endif /* DEBUG */
 
@@ -229,7 +228,7 @@ GetTargetGeometry(gfxRect *aBBox,
   return NS_OK;
 }
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
                                 Matrix* patternMatrix,
                                 const Matrix &aContextMatrix,
@@ -346,7 +345,7 @@ nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
   bool resultOverflows;
   IntSize surfaceSize =
     nsSVGUtils::ConvertToSurfaceSize(
-      transformedBBox.Size(), &resultOverflows).ToIntSize();
+      transformedBBox.Size(), &resultOverflows);
 
   // 0 disables rendering, < 0 is an error
   if (surfaceSize.width <= 0 || surfaceSize.height <= 0) {
@@ -361,9 +360,9 @@ nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
       patternHeight != surfaceSize.height) {
     // scale drawing to pattern surface size
     gfxMatrix tempTM =
-      gfxMatrix(surfaceSize.width / patternWidth, 0.0f,
-                0.0f, surfaceSize.height / patternHeight,
-                0.0f, 0.0f);
+      gfxMatrix(surfaceSize.width / patternWidth, 0.0,
+                0.0, surfaceSize.height / patternHeight,
+                0.0, 0.0);
     patternWithChildren->mCTM->PreMultiply(tempTM);
 
     // and rescale pattern to compensate
@@ -373,16 +372,17 @@ nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
 
   RefPtr<DrawTarget> dt =
     aDrawTarget->CreateSimilarDrawTarget(surfaceSize, SurfaceFormat::B8G8R8A8);
-  if (!dt) {
+  if (!dt || !dt->IsValid()) {
     return nullptr;
   }
   dt->ClearRect(Rect(0, 0, surfaceSize.width, surfaceSize.height));
 
-  nsRefPtr<gfxContext> gfx = new gfxContext(dt);
+  RefPtr<gfxContext> gfx = gfxContext::ForDrawTarget(dt);
+  MOZ_ASSERT(gfx); // already checked the draw target above
 
   if (aGraphicOpacity != 1.0f) {
     gfx->Save();
-    gfx->PushGroup(gfxContentType::COLOR_ALPHA);
+    gfx->PushGroupForBlendBack(gfxContentType::COLOR_ALPHA, aGraphicOpacity);
   }
 
   // OK, now render -- note that we use "firstKid", which
@@ -406,9 +406,9 @@ nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
         SVGFrame->NotifySVGChanged(nsISVGChildFrame::TRANSFORM_CHANGED);
       }
       gfxMatrix tm = *(patternWithChildren->mCTM);
-      if (kid->GetContent()->IsSVG()) {
+      if (kid->GetContent()->IsSVGElement()) {
         tm = static_cast<nsSVGElement*>(kid->GetContent())->
-              PrependLocalTransformsTo(tm, nsSVGElement::eUserSpaceToParent);
+               PrependLocalTransformsTo(tm, eUserSpaceToParent);
       }
       nsSVGUtils::PaintFrameWithEffects(kid, *gfx, tm);
     }
@@ -418,8 +418,7 @@ nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
   patternWithChildren->mSource = nullptr;
 
   if (aGraphicOpacity != 1.0f) {
-    gfx->PopGroupToSource();
-    gfx->Paint(aGraphicOpacity);
+    gfx->PopGroupAndBlend();
     gfx->Restore();
   }
 
@@ -564,7 +563,7 @@ nsSVGPatternFrame::GetReferencedPattern()
     nsCOMPtr<nsIURI> targetURI;
     nsCOMPtr<nsIURI> base = mContent->GetBaseURI();
     nsContentUtils::NewURIWithDocumentCharset(getter_AddRefs(targetURI), href,
-                                              mContent->GetCurrentDoc(), base);
+                                              mContent->GetUncomposedDoc(), base);
 
     property =
       nsSVGEffects::GetPaintingProperty(targetURI, this, nsSVGEffects::HrefProperty());
@@ -639,23 +638,23 @@ nsSVGPatternFrame::ConstructCTM(const nsSVGViewBox& aViewBox,
                                 const Matrix &callerCTM,
                                 nsIFrame *aTarget)
 {
-  gfxMatrix tCTM;
   SVGSVGElement *ctx = nullptr;
   nsIContent* targetContent = aTarget->GetContent();
+  gfxFloat scaleX, scaleY;
 
   // The objectBoundingBox conversion must be handled in the CTM:
   if (IncludeBBoxScale(aViewBox, aPatternContentUnits, aPatternUnits)) {
-    tCTM.Scale(callerBBox.Width(), callerBBox.Height());
+    scaleX = callerBBox.Width();
+    scaleY = callerBBox.Height();
   } else {
-    if (targetContent->IsSVG()) {
+    if (targetContent->IsSVGElement()) {
       ctx = static_cast<nsSVGElement*>(targetContent)->GetCtx();
     }
-    float scale = MaxExpansion(callerCTM);
-    tCTM.Scale(scale, scale);
+    scaleX = scaleY = MaxExpansion(callerCTM);
   }
 
   if (!aViewBox.IsExplicitlySet()) {
-    return tCTM;
+    return gfxMatrix(scaleX, 0.0, 0.0, scaleY, 0.0, 0.0);
   }
   const nsSVGViewBoxRect viewBoxRect = aViewBox.GetAnimValue();
 
@@ -664,7 +663,7 @@ nsSVGPatternFrame::ConstructCTM(const nsSVGViewBox& aViewBox,
   }
 
   float viewportWidth, viewportHeight;
-  if (targetContent->IsSVG()) {
+  if (targetContent->IsSVGElement()) {
     // If we're dealing with an SVG target only retrieve the context once.
     // Calling the nsIFrame* variant of GetAnimValue would look it up on
     // every call.
@@ -685,12 +684,12 @@ nsSVGPatternFrame::ConstructCTM(const nsSVGViewBox& aViewBox,
   }
 
   Matrix tm = SVGContentUtils::GetViewBoxTransform(
-    viewportWidth, viewportHeight,
+    viewportWidth * scaleX, viewportHeight * scaleY,
     viewBoxRect.x, viewBoxRect.y,
     viewBoxRect.width, viewBoxRect.height,
     GetPreserveAspectRatio());
 
-  return ThebesMatrix(tm) * tCTM;
+  return ThebesMatrix(tm);
 }
 
 //----------------------------------------------------------------------
@@ -705,7 +704,7 @@ nsSVGPatternFrame::GetPaintServerPattern(nsIFrame *aSource,
                                          const gfxRect *aOverrideBounds)
 {
   if (aGraphicOpacity == 0.0f) {
-    nsRefPtr<gfxPattern> pattern = new gfxPattern(gfxRGBA(0, 0, 0, 0));
+    RefPtr<gfxPattern> pattern = new gfxPattern(Color());
     return pattern.forget();
   }
 
@@ -719,12 +718,12 @@ nsSVGPatternFrame::GetPaintServerPattern(nsIFrame *aSource,
     return nullptr;
   }
 
-  nsRefPtr<gfxPattern> pattern = new gfxPattern(surface, pMatrix);
+  RefPtr<gfxPattern> pattern = new gfxPattern(surface, pMatrix);
 
   if (!pattern || pattern->CairoStatus())
     return nullptr;
 
-  pattern->SetExtend(gfxPattern::EXTEND_REPEAT);
+  pattern->SetExtend(ExtendMode::REPEAT);
   return pattern.forget();
 }
 

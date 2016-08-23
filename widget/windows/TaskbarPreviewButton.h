@@ -12,8 +12,8 @@
 #include <shobjidl.h>
 #undef LogSeverity // SetupAPI.h #defines this as DWORD
 
+#include "mozilla/RefPtr.h"
 #include <nsITaskbarPreviewButton.h>
-#include <nsAutoPtr.h>
 #include <nsString.h>
 #include <nsWeakReference.h>
 
@@ -35,7 +35,7 @@ private:
   THUMBBUTTON&            Button();
   nsresult                Update();
 
-  nsRefPtr<TaskbarWindowPreview> mPreview;
+  RefPtr<TaskbarWindowPreview> mPreview;
   uint32_t                mIndex;
   nsString                mTooltip;
   nsCOMPtr<imgIContainer> mImage;

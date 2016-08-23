@@ -22,19 +22,21 @@ class X11DataTextureSourceBasic : public DataTextureSource
 public:
   X11DataTextureSourceBasic() {};
 
+  virtual const char* Name() const override { return "X11DataTextureSourceBasic"; }
+
   virtual bool Update(gfx::DataSourceSurface* aSurface,
                       nsIntRegion* aDestRegion = nullptr,
-                      gfx::IntPoint* aSrcOffset = nullptr) MOZ_OVERRIDE;
+                      gfx::IntPoint* aSrcOffset = nullptr) override;
 
-  virtual TextureSourceBasic* AsSourceBasic() MOZ_OVERRIDE;
+  virtual TextureSourceBasic* AsSourceBasic() override;
 
-  virtual gfx::SourceSurface* GetSurface(gfx::DrawTarget* aTarget) MOZ_OVERRIDE;
+  virtual gfx::SourceSurface* GetSurface(gfx::DrawTarget* aTarget) override;
 
-  virtual void DeallocateDeviceData() MOZ_OVERRIDE;
+  virtual void DeallocateDeviceData() override;
 
-  virtual gfx::IntSize GetSize() const MOZ_OVERRIDE;
+  virtual gfx::IntSize GetSize() const override;
 
-  virtual gfx::SurfaceFormat GetFormat() const MOZ_OVERRIDE;
+  virtual gfx::SurfaceFormat GetFormat() const override;
 
 private:
   // We are going to buffer layer content on this xlib draw target
@@ -44,11 +46,17 @@ private:
 class X11BasicCompositor : public BasicCompositor
 {
 public:
+  explicit X11BasicCompositor(CompositorBridgeParent* aParent, nsIWidget *aWidget)
+    : BasicCompositor(aParent, aWidget)
+  {}
 
-  explicit X11BasicCompositor(nsIWidget *aWidget) : BasicCompositor(aWidget) {}
+  virtual already_AddRefed<DataTextureSource>
+  CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) override;
 
-  virtual TemporaryRef<DataTextureSource>
-  CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) MOZ_OVERRIDE;
+  virtual already_AddRefed<DataTextureSource>
+  CreateDataTextureSourceAround(gfx::DataSourceSurface* aSurface) override { return nullptr; }
+
+  virtual void EndFrame() override;
 };
 
 } // namespace layers

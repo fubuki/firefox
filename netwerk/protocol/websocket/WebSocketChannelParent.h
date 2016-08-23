@@ -35,35 +35,39 @@ class WebSocketChannelParent : public PWebSocketParent,
 
   WebSocketChannelParent(nsIAuthPromptProvider* aAuthProvider,
                          nsILoadContext* aLoadContext,
-                         PBOverrideStatus aOverrideStatus);
+                         PBOverrideStatus aOverrideStatus,
+                         uint32_t aSerial);
 
  private:
   bool RecvAsyncOpen(const URIParams& aURI,
                      const nsCString& aOrigin,
+                     const uint64_t& aInnerWindowID,
                      const nsCString& aProtocol,
                      const bool& aSecure,
                      const uint32_t& aPingInterval,
                      const bool& aClientSetPingInterval,
                      const uint32_t& aPingTimeout,
-                     const bool& aClientSetPingTimeout) MOZ_OVERRIDE;
-  bool RecvClose(const uint16_t & code, const nsCString & reason) MOZ_OVERRIDE;
-  bool RecvSendMsg(const nsCString& aMsg) MOZ_OVERRIDE;
-  bool RecvSendBinaryMsg(const nsCString& aMsg) MOZ_OVERRIDE;
+                     const bool& aClientSetPingTimeout,
+                     const OptionalLoadInfoArgs& aLoadInfoArgs) override;
+  bool RecvClose(const uint16_t & code, const nsCString & reason) override;
+  bool RecvSendMsg(const nsCString& aMsg) override;
+  bool RecvSendBinaryMsg(const nsCString& aMsg) override;
   bool RecvSendBinaryStream(const InputStreamParams& aStream,
-                            const uint32_t& aLength) MOZ_OVERRIDE;
-  bool RecvDeleteSelf() MOZ_OVERRIDE;
+                            const uint32_t& aLength) override;
+  bool RecvDeleteSelf() override;
 
-  void ActorDestroy(ActorDestroyReason why) MOZ_OVERRIDE;
+  void ActorDestroy(ActorDestroyReason why) override;
 
-  void OfflineDisconnect() MOZ_OVERRIDE;
-  uint32_t GetAppId() MOZ_OVERRIDE;
-  nsRefPtr<OfflineObserver> mObserver;
+  void OfflineDisconnect() override;
+  uint32_t GetAppId() override;
+  RefPtr<OfflineObserver> mObserver;
 
   nsCOMPtr<nsIAuthPromptProvider> mAuthProvider;
   nsCOMPtr<nsIWebSocketChannel> mChannel;
   nsCOMPtr<nsILoadContext> mLoadContext;
   bool mIPCOpen;
 
+  uint32_t mSerial;
 };
 
 } // namespace net

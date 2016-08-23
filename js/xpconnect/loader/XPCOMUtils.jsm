@@ -144,11 +144,12 @@ this.XPCOMUtils = {
         countRef.value = _interfaces.length;
         return _interfaces;
       },
-      getHelperForLanguage: function XPCU_getHelperForLanguage(language) null,
+      getScriptableHelper: function XPCU_getScriptableHelper() {
+        return null;
+      },
       contractID: classInfo.contractID,
       classDescription: classInfo.classDescription,
       classID: classInfo.classID,
-      implementationLanguage: Ci.nsIProgrammingLanguage.JAVASCRIPT,
       flags: classInfo.flags,
       QueryInterface: this.generateQI([Ci.nsIClassInfo])
     };
@@ -189,8 +190,19 @@ this.XPCOMUtils = {
   {
     Object.defineProperty(aObject, aName, {
       get: function () {
+        // Redefine this accessor property as a data property.
+        // Delete it first, to rule out "too much recursion" in case aObject is
+        // a proxy whose defineProperty handler might unwittingly trigger this
+        // getter again.
         delete aObject[aName];
-        return aObject[aName] = aLambda.apply(aObject);
+        let value = aLambda.apply(aObject);
+        Object.defineProperty(aObject, aName, {
+          value,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+        return value;
       },
       configurable: true,
       enumerable: true
@@ -221,7 +233,9 @@ this.XPCOMUtils = {
 
   /**
    * Defines a getter on a specified object for a module.  The module will not
-   * be imported until first use.
+   * be imported until first use. The getter allows to execute setup and
+   * teardown code (e.g.  to register/unregister to services) and accepts
+   * a proxy object which acts on behalf of the module until it is imported.
    *
    * @param aObject
    *        The object to define the lazy getter on.
@@ -232,20 +246,97 @@ this.XPCOMUtils = {
    * @param aSymbol
    *        The name of the symbol exported by the module.
    *        This parameter is optional and defaults to aName.
+   * @param aPreLambda
+   *        A function that is executed when the proxy is set up.
+   *        This will only ever be called once.
+   * @param aPostLambda
+   *        A function that is executed when the module has been imported to
+   *        run optional teardown procedures on the proxy object.
+   *        This will only ever be called once.
+   * @param aProxy
+   *        An object which acts on behalf of the module to be imported until
+   *        the module has been imported.
    */
-  defineLazyModuleGetter: function XPCU_defineLazyModuleGetter(aObject, aName,
-                                                               aResource,
-                                                               aSymbol)
+  defineLazyModuleGetter: function XPCU_defineLazyModuleGetter(
+                                   aObject, aName, aResource, aSymbol,
+                                   aPreLambda, aPostLambda, aProxy)
   {
+    let proxy = aProxy || {};
+
+    if (typeof(aPreLambda) === "function") {
+      aPreLambda.apply(proxy);
+    }
+
     this.defineLazyGetter(aObject, aName, function XPCU_moduleLambda() {
       var temp = {};
       try {
         Cu.import(aResource, temp);
+
+        if (typeof(aPostLambda) === "function") {
+          aPostLambda.apply(proxy);
+        }
       } catch (ex) {
         Cu.reportError("Failed to load module " + aResource + ".");
         throw ex;
       }
       return temp[aSymbol || aName];
+    });
+  },
+
+  /**
+   * Defines a getter on a specified object for preference value. The
+   * preference is read the first time that the property is accessed,
+   * and is thereafter kept up-to-date using a preference observer.
+   *
+   * @param aObject
+   *        The object to define the lazy getter on.
+   * @param aName
+   *        The name of the getter property to define on aObject.
+   * @param aPreference
+   *        The name of the preference to read.
+   * @param aDefaultValue
+   *        The default value to use, if the preference is not defined.
+   */
+  defineLazyPreferenceGetter: function XPCU_defineLazyPreferenceGetter(
+                                   aObject, aName, aPreference, aDefaultValue = null)
+  {
+    // Note: We need to keep a reference to this observer alive as long
+    // as aObject is alive. This means that all of our getters need to
+    // explicitly close over the variable that holds the object, and we
+    // cannot define a value in place of a getter after we read the
+    // preference.
+    let observer = {
+      QueryInterface: this.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
+
+      value: undefined,
+
+      observe(subject, topic, data) {
+        if (data == aPreference) {
+          this.value = undefined;
+        }
+      },
+    }
+
+    let defineGetter = get => {
+      Object.defineProperty(aObject, aName, {
+        configurable: true,
+        enumerable: true,
+        get,
+      });
+    };
+
+    function lazyGetter() {
+      if (observer.value === undefined) {
+        observer.value = Preferences.get(aPreference, aDefaultValue);
+      }
+      return observer.value;
+    }
+
+    defineGetter(() => {
+      Services.prefs.addObserver(aPreference, observer, true);
+
+      defineGetter(lazyGetter);
+      return lazyGetter();
     });
   },
 
@@ -290,7 +381,8 @@ this.XPCOMUtils = {
           if (outer)
             throw Cr.NS_ERROR_NO_AGGREGATION;
           return (new component()).QueryInterface(iid);
-        }
+        },
+        QueryInterface: XPCOMUtils.generateQI([Ci.nsIFactory])
       }
     }
     return factory;
@@ -334,7 +426,23 @@ this.XPCOMUtils = {
       QueryInterface: XPCOMUtils.generateQI([Ci.nsIFactory])
     };
   },
+
+  /**
+   * Defines a non-writable property on an object.
+   */
+  defineConstant: function XPCOMUtils__defineConstant(aObj, aName, aValue) {
+    Object.defineProperty(aObj, aName, {
+      value: aValue,
+      enumerable: true,
+      writable: false
+    });
+  },
 };
+
+XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
+                                  "resource://gre/modules/Preferences.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
 
 /**
  * Helper for XPCOMUtils.generateQI to avoid leaks - see bug 381651#c1

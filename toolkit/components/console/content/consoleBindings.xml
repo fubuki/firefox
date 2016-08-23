@@ -12,7 +12,7 @@
           xmlns:xbl="http://www.mozilla.org/xbl">
 
   <binding id="console-box" extends="xul:box">
-    <content>  
+    <content>
       <xul:stringbundle src="chrome://global/locale/console.properties" role="string-bundle"/>
       <xul:vbox class="console-box-internal">
         <xul:vbox class="console-rows" role="console-rows" xbl:inherits="dir=sortOrder"/>
@@ -89,7 +89,7 @@
           this.mCount = 0;
 
           this.mConsoleListener = {
-            console: this, 
+            console: this,
             observe : function(aObject) {
               // The message can arrive a little bit after the xbl binding has been
               // unbind. So node.appendItem will not be available anymore.
@@ -221,12 +221,12 @@
           var row = this.createConsoleRow();
           var nsIScriptError = Components.interfaces.nsIScriptError;
 
-          // Is this error actually just a non-fatal warning?
-          var warning = aObject.flags & nsIScriptError.warningFlag != 0;
+          // nsIConsoleMessage constants: debug, info, warn, error
+          var typetext = ["typeMessage", "typeMessage", "typeWarning", "typeError"][aObject.logLevel];
+          var type = ["message", "message", "warning", "error"][aObject.logLevel];
 
-          var typetext = warning ? "typeWarning" : "typeError";
           row.setAttribute("typetext", this.mStrBundle.getString(typetext));
-          row.setAttribute("type", warning ? "warning" : "error");
+          row.setAttribute("type", type);
           row.setAttribute("msg", aObject.errorMessage);
           row.setAttribute("category", aObject.category);
           row.setAttribute("time", this.properFormatTime(aObject.timeStamp));
@@ -295,7 +295,7 @@
             const clipI = Components.interfaces.nsIClipboardHelper;
             var clipboard = Components.classes[clipURI].getService(clipI);
 
-            clipboard.copyString(this.mSelectedItem.toString(), document);
+            clipboard.copyString(this.mSelectedItem.toString());
           } catch (ex) {
             // Unable to copy anything, die quietly
           }
@@ -360,7 +360,7 @@
       </method>
 
       <!-- UTILITY FUNCTIONS -->
-      
+
       <method name="repeatChar">
         <parameter name="aChar"/>
         <parameter name="aCol"/>
@@ -390,9 +390,9 @@
           });
         ]]></body>
       </method>
-          
-      <constructor> this.init(); </constructor>
-      <destructor> this.destroy(); </destructor>
+
+      <constructor>this.init();</constructor>
+      <destructor>this.destroy();</destructor>
 
       <!-- Command controller for the copy command -->
       <field name="_controller"><![CDATA[({
@@ -538,7 +538,7 @@
           var url = document.getBindingParent(this).mSourceName;
           url = url.substring(url.lastIndexOf(" ") + 1);
           var line = getAttribute("line");
-          gViewSourceUtils.viewSource(url, null, null, line);
+          gViewSourceUtils.viewSource({URL: url, lineNumber: line});
         ]]>
       </handler>
     </handlers>

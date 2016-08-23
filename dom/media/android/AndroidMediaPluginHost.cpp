@@ -4,13 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "mozilla/Preferences.h"
-#include "mozilla/dom/TimeRanges.h"
 #include "MediaResource.h"
 #include "mozilla/dom/HTMLMediaElement.h"
+#include "mozilla/Services.h"
 #include "AndroidMediaPluginHost.h"
 #include "nsXPCOMStrings.h"
 #include "nsISeekableStream.h"
-#include "AndroidMediaReader.h"
 #include "nsIGfxInfo.h"
 #include "gfxCrashReporterUtils.h"
 #include "prmem.h"
@@ -112,10 +111,11 @@ static bool IsOmxSupported()
   ScopedGfxFeatureReporter reporter("Stagefright", forceEnabled);
 
   if (!forceEnabled) {
-    nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
+    nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
     if (gfxInfo) {
       int32_t status;
-      if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_STAGEFRIGHT, &status))) {
+      nsCString discardFailure;
+      if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_STAGEFRIGHT, discardFailure, &status))) {
         if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
           NS_WARNING("XXX stagefright blacklisted\n");
           return false;
@@ -175,27 +175,8 @@ static const char* GetOmxLibraryName()
   if (version >= 17) {
     return "libomxpluginkk.so";
   }
-  else if (version == 13 || version == 12 || version == 11) {
-    return "libomxpluginhc.so";
-  }
-  else if (version == 10 && release_version >= NS_LITERAL_STRING("2.3.6")) {
-    // Gingerbread versions from 2.3.6 and above have a different DataSource
-    // layout to those on 2.3.5 and below.
-    return "libomxplugingb.so";
-  }
-  else if (version == 10 && release_version >= NS_LITERAL_STRING("2.3.4") &&
-           device.Find("HTC") == 0) {
-    // HTC devices running Gingerbread 2.3.4+ (HTC Desire HD, HTC Evo Design, etc) seem to
-    // use a newer version of Gingerbread libstagefright than other 2.3.4 devices.
-    return "libomxplugingb.so";
-  }
-  else if (version == 9 || (version == 10 && release_version <= NS_LITERAL_STRING("2.3.5"))) {
-    // Gingerbread versions from 2.3.5 and below have a different DataSource
-    // than 2.3.6 and above.
-    return "libomxplugingb235.so";
-  }
-  else if (version < 9) {
-    // Below Gingerbread not supported
+  else if (version < 14) {
+    // Below Honeycomb not supported
     return nullptr;
   }
 
@@ -211,6 +192,7 @@ static const char* GetOmxLibraryName()
 
 AndroidMediaPluginHost::AndroidMediaPluginHost() {
   MOZ_COUNT_CTOR(AndroidMediaPluginHost);
+  MOZ_ASSERT(NS_IsMainThread());
 
   mResourceServer = AndroidMediaResourceServer::Start();
 
@@ -287,7 +269,6 @@ MPAPI::Decoder *AndroidMediaPluginHost::CreateDecoder(MediaResource *aResource, 
 
     decoder->mResource = strdup(url.get());
     if (plugin->CreateDecoder(&sPluginHost, decoder, chars, len)) {
-      aResource->AddRef();
       return decoder.forget();
     }
   }
@@ -309,11 +290,18 @@ void AndroidMediaPluginHost::DestroyDecoder(Decoder *aDecoder)
 }
 
 AndroidMediaPluginHost *sAndroidMediaPluginHost = nullptr;
-AndroidMediaPluginHost *GetAndroidMediaPluginHost()
+AndroidMediaPluginHost *EnsureAndroidMediaPluginHost()
 {
+  MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
   if (!sAndroidMediaPluginHost) {
     sAndroidMediaPluginHost = new AndroidMediaPluginHost();
   }
+  return sAndroidMediaPluginHost;
+}
+
+AndroidMediaPluginHost *GetAndroidMediaPluginHost()
+{
+  MOZ_ASSERT(sAndroidMediaPluginHost);
   return sAndroidMediaPluginHost;
 }
 

@@ -6,13 +6,16 @@
 #ifndef KeyboardLayout_h__
 #define KeyboardLayout_h__
 
+#include "mozilla/RefPtr.h"
 #include "nscore.h"
-#include "nsAutoPtr.h"
 #include "nsString.h"
 #include "nsWindowBase.h"
 #include "nsWindowDefs.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/TextEventDispatcher.h"
+#include "mozilla/widget/WinMessages.h"
+#include "mozilla/widget/WinModifierKeyState.h"
 #include <windows.h>
 
 #define NS_NUM_OF_KEYS          70
@@ -37,7 +40,6 @@
 #define VK_OEM_CLEAR            0xFE
 
 class nsIIdleServiceInternal;
-struct nsModifierKeyState;
 
 namespace mozilla {
 namespace widget {
@@ -54,40 +56,6 @@ static const uint32_t sModifierKeyMap[][3] = {
 };
 
 class KeyboardLayout;
-
-class ModifierKeyState
-{
-public:
-  ModifierKeyState();
-  ModifierKeyState(bool aIsShiftDown, bool aIsControlDown, bool aIsAltDown);
-  ModifierKeyState(Modifiers aModifiers);
-
-  MOZ_ALWAYS_INLINE void Update();
-
-  MOZ_ALWAYS_INLINE void Unset(Modifiers aRemovingModifiers);
-  void Set(Modifiers aAddingModifiers);
-
-  void InitInputEvent(WidgetInputEvent& aInputEvent) const;
-
-  bool IsShift() const;
-  bool IsControl() const;
-  MOZ_ALWAYS_INLINE bool IsAlt() const;
-  MOZ_ALWAYS_INLINE bool IsAltGr() const;
-  MOZ_ALWAYS_INLINE bool IsWin() const;
-
-  MOZ_ALWAYS_INLINE bool IsCapsLocked() const;
-  MOZ_ALWAYS_INLINE bool IsNumLocked() const;
-  MOZ_ALWAYS_INLINE bool IsScrollLocked() const;
-
-  MOZ_ALWAYS_INLINE Modifiers GetModifiers() const;
-
-private:
-  Modifiers mModifiers;
-
-  MOZ_ALWAYS_INLINE void EnsureAltGr();
-
-  void InitMouseEvent(WidgetInputEvent& aMouseEvent) const;
-};
 
 struct UniCharsAndModifiers
 {
@@ -203,7 +171,7 @@ public:
   UniCharsAndModifiers GetUniChars(ShiftState aShiftState) const;
 };
 
-class MOZ_STACK_CLASS NativeKey
+class MOZ_STACK_CLASS NativeKey final
 {
   friend class KeyboardLayout;
 
@@ -236,7 +204,10 @@ public:
   NativeKey(nsWindowBase* aWidget,
             const MSG& aMessage,
             const ModifierKeyState& aModKeyState,
+            HKL aOverrideKeyboardLayout = 0,
             nsTArray<FakeCharMsg>* aFakeCharMsgs = nullptr);
+
+  ~NativeKey();
 
   /**
    * Handle WM_KEYDOWN message or WM_SYSKEYDOWN message.  The instance must be
@@ -266,8 +237,16 @@ public:
    */
   bool HandleAppCommandMessage() const;
 
+  /**
+   * Callback of TextEventDispatcherListener::WillDispatchKeyboardEvent().
+   * This method sets alternative char codes of aKeyboardEvent.
+   */
+  void WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
+                                 uint32_t aIndex);
+
 private:
-  nsRefPtr<nsWindowBase> mWidget;
+  RefPtr<nsWindowBase> mWidget;
+  RefPtr<TextEventDispatcher> mDispatcher;
   HKL mKeyboardLayout;
   MSG mMsg;
 
@@ -289,6 +268,26 @@ private:
   // indicates both the dead characters and the base characters.
   UniCharsAndModifiers mCommittedCharsAndModifiers;
 
+  // Following strings are computed by
+  // ComputeInputtingStringWithKeyboardLayout() which is typically called
+  // before dispatching keydown event.
+  // mInputtingStringAndModifiers's string is the string to be
+  // inputted into the focused editor and its modifier state is proper
+  // modifier state for inputting the string into the editor.
+  UniCharsAndModifiers mInputtingStringAndModifiers;
+  // mShiftedString is the string to be inputted into the editor with
+  // current modifier state with active shift state.
+  UniCharsAndModifiers mShiftedString;
+  // mUnshiftedString is the string to be inputted into the editor with
+  // current modifier state without shift state.
+  UniCharsAndModifiers mUnshiftedString;
+  // Following integers are computed by
+  // ComputeInputtingStringWithKeyboardLayout() which is typically called
+  // before dispatching keydown event.  The meaning of these values is same
+  // as charCode.
+  uint32_t mShiftedLatinChar;
+  uint32_t mUnshiftedLatinChar;
+
   WORD    mScanCode;
   bool    mIsExtended;
   bool    mIsDeadKey;
@@ -297,6 +296,9 @@ private:
   // Please note that the event may not cause any text input even if this
   // is true.  E.g., it might be dead key state or Ctrl key may be pressed.
   bool    mIsPrintableKey;
+  // mIsOverridingKeyboardLayout is true if the instance temporarily overriding
+  // keyboard layout with specified by the constructor.
+  bool    mIsOverridingKeyboardLayout;
 
   nsTArray<FakeCharMsg>* mFakeCharMsgs;
 
@@ -314,6 +316,12 @@ private:
   void InitWithAppCommand();
 
   /**
+   * Returns true if aChar is a control character which shouldn't be inputted
+   * into focused text editor.
+   */
+  bool IsControlChar(char16_t aChar) const;
+
+  /**
    * Returns true if the key event is caused by auto repeat.
    */
   bool IsRepeat() const
@@ -325,6 +333,7 @@ private:
       case WM_SYSCHAR:
       case WM_DEADCHAR:
       case WM_SYSDEADCHAR:
+      case MOZ_WM_KEYDOWN:
         return ((mMsg.lParam & (1 << 30)) != 0);
       case WM_APPCOMMAND:
         if (mVirtualKeyCode) {
@@ -360,11 +369,15 @@ private:
 
   bool IsKeyDownMessage() const
   {
-    return (mMsg.message == WM_KEYDOWN || mMsg.message == WM_SYSKEYDOWN);
+    return (mMsg.message == WM_KEYDOWN ||
+            mMsg.message == WM_SYSKEYDOWN ||
+            mMsg.message == MOZ_WM_KEYDOWN);
   }
   bool IsKeyUpMessage() const
   {
-    return (mMsg.message == WM_KEYUP || mMsg.message == WM_SYSKEYUP);
+    return (mMsg.message == WM_KEYUP ||
+            mMsg.message == WM_SYSKEYUP ||
+            mMsg.message == MOZ_WM_KEYUP);
   }
   bool IsPrintableCharMessage(const MSG& aMSG) const
   {
@@ -400,6 +413,11 @@ private:
   }
   bool MayBeSameCharMessage(const MSG& aCharMsg1, const MSG& aCharMsg2) const;
   bool IsFollowedByDeadCharMessage() const;
+  bool IsKeyMessageOnPlugin() const
+  {
+    return (mMsg.message == MOZ_WM_KEYDOWN ||
+            mMsg.message == MOZ_WM_KEYUP);
+  }
 
   /**
    * GetFollowingCharMessage() returns following char message of handling
@@ -408,8 +426,11 @@ private:
    *
    * WARNING: Even if this returns true, aCharMsg may be WM_NULL or its
    *          hwnd may be different window.
+   *
+   * @param aRemove     true if the found message should be removed from the
+   *                    queue.  Otherwise, false.
    */
-  bool GetFollowingCharMessage(MSG& aCharMsg) const;
+  bool GetFollowingCharMessage(MSG& aCharMsg, bool aRemove = true) const;
 
   /**
    * Whether the key event can compute virtual keycode from the scancode value.
@@ -439,9 +460,11 @@ private:
   /**
    * Initializes the aKeyEvent with the information stored in the instance.
    */
-  void InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
-                    const ModifierKeyState& aModKeyState) const;
-  void InitKeyEvent(WidgetKeyboardEvent& aKeyEvent) const;
+  nsEventStatus InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
+                             const ModifierKeyState& aModKeyState,
+                             const MSG* aMsgSentToPlugin = nullptr) const;
+  nsEventStatus InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
+                             const MSG* aMsgSentToPlugin = nullptr) const;
 
   /**
    * Dispatches a command event for aEventCommand.
@@ -450,17 +473,11 @@ private:
   bool DispatchCommandEvent(uint32_t aEventCommand) const;
 
   /**
-   * Dispatches the key event.  Returns true if the event is consumed.
-   * Otherwise, false.
+   * DispatchKeyPressEventsWithoutCharMessage() dispatches keypress event(s)
+   * without char messages.  So, this should be used only when there are no
+   * following char messages.
    */
-  bool DispatchKeyEvent(WidgetKeyboardEvent& aKeyEvent,
-                        const MSG* aMsgSentToPlugin = nullptr) const;
-
-  /**
-   * DispatchKeyPressEventsWithKeyboardLayout() dispatches keypress event(s)
-   * with the information provided by KeyboardLayout class.
-   */
-  bool DispatchKeyPressEventsWithKeyboardLayout() const;
+  bool DispatchKeyPressEventsWithoutCharMessage() const;
 
   /**
    * Remove all following WM_CHAR, WM_SYSCHAR and WM_DEADCHAR messages for the
@@ -485,6 +502,13 @@ private:
    * or Backspace.
    */
   bool NeedsToHandleWithoutFollowingCharMessages() const;
+
+  /**
+   * ComputeInputtingStringWithKeyboardLayout() computes string to be inputted
+   * with the key and the modifier state, without shift state and with shift
+   * state.
+   */
+  void ComputeInputtingStringWithKeyboardLayout();
 };
 
 class KeyboardLayout
@@ -641,14 +665,14 @@ public:
   /*
    * If a window receives WM_KEYDOWN message or WM_SYSKEYDOWM message which is
    * a redirected message, NativeKey::DispatchKeyDownAndKeyPressEvent()
-   * prevents to dispatch NS_KEY_DOWN event because it has been dispatched
+   * prevents to dispatch eKeyDown event because it has been dispatched
    * before the message was redirected.  However, in some cases, WM_*KEYDOWN
    * message handler may not handle actually.  Then, the message handler needs
    * to forget the redirected message and remove WM_CHAR message or WM_SYSCHAR
    * message for the redirected keydown message.  AutoFlusher class is a helper
    * class for doing it.  This must be created in the stack.
    */
-  class MOZ_STACK_CLASS AutoFlusher MOZ_FINAL
+  class MOZ_STACK_CLASS AutoFlusher final
   {
   public:
     AutoFlusher(nsWindowBase* aWidget, const MSG &aMsg) :
@@ -674,7 +698,7 @@ public:
 
   private:
     bool mCancel;
-    nsRefPtr<nsWindowBase> mWidget;
+    RefPtr<nsWindowBase> mWidget;
     const MSG &mMsg;
   };
 

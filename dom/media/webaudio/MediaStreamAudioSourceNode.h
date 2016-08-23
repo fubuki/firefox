@@ -15,7 +15,7 @@ namespace mozilla {
 
 namespace dom {
 
-class MediaStreamAudioSourceNodeEngine : public AudioNodeEngine
+class MediaStreamAudioSourceNodeEngine final : public AudioNodeEngine
 {
 public:
   explicit MediaStreamAudioSourceNodeEngine(AudioNode* aNode)
@@ -25,7 +25,7 @@ public:
   enum Parameters {
     ENABLE
   };
-  virtual void SetInt32Parameter(uint32_t aIndex, int32_t aValue) MOZ_OVERRIDE
+  void SetInt32Parameter(uint32_t aIndex, int32_t aValue) override
   {
     switch (aIndex) {
     case ENABLE:
@@ -35,44 +35,66 @@ public:
       NS_ERROR("MediaStreamAudioSourceNodeEngine bad parameter index");
     }
   }
+
 private:
   bool mEnabled;
 };
 
 class MediaStreamAudioSourceNode : public AudioNode,
-                                   public DOMMediaStream::PrincipalChangeObserver
+                                   public DOMMediaStream::TrackListener,
+                                   public PrincipalChangeObserver<MediaStreamTrack>
 {
 public:
-  MediaStreamAudioSourceNode(AudioContext* aContext, DOMMediaStream* aMediaStream);
+  static already_AddRefed<MediaStreamAudioSourceNode>
+  Create(AudioContext* aContext, DOMMediaStream* aStream, ErrorResult& aRv);
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(MediaStreamAudioSourceNode, AudioNode)
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual void DestroyMediaStream() MOZ_OVERRIDE;
+  void DestroyMediaStream() override;
 
-  virtual uint16_t NumberOfInputs() const MOZ_OVERRIDE { return 0; }
+  uint16_t NumberOfInputs() const override { return 0; }
 
-  virtual const char* NodeType() const MOZ_OVERRIDE
+  const char* NodeType() const override
   {
     return "MediaStreamAudioSourceNode";
   }
 
-  virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
-  virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const MOZ_OVERRIDE;
+  size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override;
+  size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override;
 
-  virtual void PrincipalChanged(DOMMediaStream* aMediaStream) MOZ_OVERRIDE;
+  // Attaches to aTrack so that its audio content will be used as input.
+  void AttachToTrack(const RefPtr<MediaStreamTrack>& aTrack);
+
+  // Detaches from the currently attached track if there is one.
+  void DetachFromTrack();
+
+  // Attaches to the first available audio track in aMediaStream.
+  void AttachToFirstTrack(const RefPtr<DOMMediaStream>& aMediaStream);
+
+  // From DOMMediaStream::TrackListener.
+  void NotifyTrackAdded(const RefPtr<MediaStreamTrack>& aTrack) override;
+  void NotifyTrackRemoved(const RefPtr<MediaStreamTrack>& aTrack) override;
+
+  // From PrincipalChangeObserver<MediaStreamTrack>.
+  void PrincipalChanged(MediaStreamTrack* aMediaStreamTrack) override;
 
 protected:
+  explicit MediaStreamAudioSourceNode(AudioContext* aContext);
+  void Init(DOMMediaStream* aMediaStream, ErrorResult& aRv);
   virtual ~MediaStreamAudioSourceNode();
 
 private:
-  nsRefPtr<MediaInputPort> mInputPort;
-  nsRefPtr<DOMMediaStream> mInputStream;
+  RefPtr<MediaInputPort> mInputPort;
+  RefPtr<DOMMediaStream> mInputStream;
+
+  // On construction we set this to the first audio track of mInputStream.
+  RefPtr<MediaStreamTrack> mInputTrack;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif

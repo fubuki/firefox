@@ -13,6 +13,7 @@
 #include "NotificationController.h"
 #include "States.h"
 #include "nsIScrollableFrame.h"
+#include "nsIDocumentInlines.h"
 
 #ifdef A11Y_LOG
 #include "Logging.h"
@@ -20,6 +21,18 @@
 
 namespace mozilla {
 namespace a11y {
+
+inline Accessible*
+DocAccessible::AccessibleOrTrueContainer(nsINode* aNode) const
+{
+  // HTML comboboxes have no-content list accessible as an intermediate
+  // containing all options.
+  Accessible* container = GetAccessibleOrContainer(aNode);
+  if (container && container->IsHTMLCombobox()) {
+    return container->FirstChild();
+  }
+  return container;
+}
 
 inline nsIAccessiblePivot*
 DocAccessible::VirtualCursor()
@@ -45,7 +58,7 @@ DocAccessible::FireDelayedEvent(AccEvent* aEvent)
 inline void
 DocAccessible::FireDelayedEvent(uint32_t aEventType, Accessible* aTarget)
 {
-  nsRefPtr<AccEvent> event = new AccEvent(aEventType, aTarget);
+  RefPtr<AccEvent> event = new AccEvent(aEventType, aTarget);
   FireDelayedEvent(event);
 }
 
@@ -75,6 +88,19 @@ DocAccessible::UpdateText(nsIContent* aTextNode)
   // Ignore the notification if initial tree construction hasn't been done yet.
   if (mNotificationController && HasLoadState(eTreeConstructed))
     mNotificationController->ScheduleTextUpdate(aTextNode);
+}
+
+inline void
+DocAccessible::UpdateRootElIfNeeded()
+{
+  dom::Element* rootEl = mDocumentNode->GetBodyElement();
+  if (!rootEl) {
+    rootEl = mDocumentNode->GetRootElement();
+  }
+  if (rootEl != mContent) {
+    mContent = rootEl;
+    SetRoleMapEntry(aria::GetRoleMap(rootEl));
+  }
 }
 
 inline void
@@ -113,7 +139,7 @@ DocAccessible::NotifyOfLoad(uint32_t aLoadEventType)
   // If the document is loaded completely then network activity was presumingly
   // caused by file loading. Fire busy state change event.
   if (HasLoadState(eCompletelyLoaded) && IsLoadEventTarget()) {
-    nsRefPtr<AccEvent> stateEvent =
+    RefPtr<AccEvent> stateEvent =
       new AccStateChangeEvent(this, states::BUSY, false);
     FireDelayedEvent(stateEvent);
   }
@@ -124,7 +150,7 @@ DocAccessible::MaybeNotifyOfValueChange(Accessible* aAccessible)
 {
   a11y::role role = aAccessible->Role();
   if (role == roles::ENTRY || role == roles::COMBOBOX)
-    FireDelayedEvent(nsIAccessibleEvent::EVENT_VALUE_CHANGE, aAccessible);
+    FireDelayedEvent(nsIAccessibleEvent::EVENT_TEXT_VALUE_CHANGE, aAccessible);
 }
 
 inline Accessible*

@@ -132,14 +132,13 @@ ImageAccessible::DoAction(uint8_t aIndex)
   NS_ConvertUTF8toUTF16 spec(utf8spec);
 
   nsIDocument* document = mContent->OwnerDoc();
-  nsCOMPtr<nsPIDOMWindow> piWindow = document->GetWindow();
-  nsCOMPtr<nsIDOMWindow> win = do_QueryInterface(piWindow);
-  if (!win)
+  nsCOMPtr<nsPIDOMWindowOuter> piWindow = document->GetWindow();
+  if (!piWindow)
     return false;
 
-  nsCOMPtr<nsIDOMWindow> tmp;
-  return NS_SUCCEEDED(win->Open(spec, EmptyString(), EmptyString(),
-                                getter_AddRefs(tmp)));
+  nsCOMPtr<nsPIDOMWindowOuter> tmp;
+  return NS_SUCCEEDED(piWindow->Open(spec, EmptyString(), EmptyString(),
+                                     getter_AddRefs(tmp)));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -199,7 +198,8 @@ ImageAccessible::GetLongDescURI() const
   if (document) {
     IDRefsIterator iter(document, mContent, nsGkAtoms::aria_describedby);
     while (nsIContent* target = iter.NextElem()) {
-      if ((target->IsHTML(nsGkAtoms::a) || target->IsHTML(nsGkAtoms::area)) &&
+      if ((target->IsHTMLElement(nsGkAtoms::a) ||
+           target->IsHTMLElement(nsGkAtoms::area)) &&
           target->HasAttr(kNameSpaceID_None, nsGkAtoms::href)) {
         nsGenericHTMLElement* element =
           nsGenericHTMLElement::FromContent(target);

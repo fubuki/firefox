@@ -5,10 +5,10 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1089880
 -->
 <head>
   <title>Test for Bug 1089880</title>
-  <script type="application/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
-  <script type="application/javascript" src="chrome://mochikit/content/tests/SimpleTest/WindowSnapshot.js"></script>
+  <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
+  <script type="application/javascript" src="/tests/SimpleTest/WindowSnapshot.js"></script>
   <script type="application/javascript" src="imgutils.js"></script>
-  <link rel="stylesheet" type="text/css" href="chrome://mochikit/content/tests/SimpleTest/test.css" />
+  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 </head>
 <body>
 <a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1089880">Mozilla Bug 1089880</a>
@@ -19,12 +19,13 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1089880
 <script type="application/javascript;version=1.8">
 /** Test for Bug 1089880 **/
 
+SimpleTest.requestFlakyTimeout("Early failure timeout");
 SimpleTest.waitForExplicitFinish();
 
 const FAILURE_TIMEOUT = 120000; // Fail early after 120 seconds (2 minutes)
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
+const Cc = SpecialPowers.Cc;
+const Ci = SpecialPowers.Ci;
 const gContent = document.getElementById("content");
 
 var gCanvas;
@@ -48,13 +49,18 @@ function testFiles() {
   // GIFs with padding on the first frame are always transparent.
   yield ["first-frame-padding.gif", true];
 
-  // JPEGs and BMPs are never transparent.
+  // JPEGs are never transparent.
   yield ["damon.jpg", false];
+
+  // Most BMPs are not transparent. (The TestMetadata GTest, which will
+  // eventually replace this test totally, has coverage for the kinds that can be
+  // transparent.)
   yield ["opaque.bmp", false];
 
   // ICO files which contain BMPs have an additional type of transparency - the
-  // AND mask - that warrants separate testing.
-  yield ["ico-bmp-opaque.ico", false];
+  // AND mask - that warrants separate testing. (Although, after bug 1201796,
+  // all ICOs are considered transparent.)
+  yield ["ico-bmp-opaque.ico", true];
   yield ["ico-bmp-transparent.ico", true];
 
   // SVGs are always transparent.
@@ -119,7 +125,7 @@ function cleanUpAndFinish() {
     return;
   }
   gIsTestFinished = true;
-  let imgLoadingContent = gImg.QueryInterface(Ci.nsIImageLoadingContent);
+  let imgLoadingContent = SpecialPowers.wrap(gImg).QueryInterface(Ci.nsIImageLoadingContent);
   imgLoadingContent.removeObserver(gMyDecoderObserver);
   SimpleTest.finish();
 }
@@ -138,8 +144,8 @@ function main() {
   observer.decodeComplete = onDecodeComplete;
   gMyDecoderObserver =
     Cc["@mozilla.org/image/tools;1"].getService(Ci.imgITools)
-      .createScriptedObserver(observer);
-  let imgLoadingContent = gImg.QueryInterface(Ci.nsIImageLoadingContent);
+      .createScriptedObserver(SpecialPowers.wrapCallbackObject(observer));
+  let imgLoadingContent = SpecialPowers.wrap(gImg).QueryInterface(Ci.nsIImageLoadingContent);
   imgLoadingContent.addObserver(gMyDecoderObserver);
 
   // We want to test the cold loading behavior, so clear cache in case an

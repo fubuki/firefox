@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* vim:set ts=4 sw=4 sts=4 ci et: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,10 +13,10 @@
 #include "mozilla/IOInterposer.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/ProcessedStack.h"
-#include "mozilla/Scoped.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "nsPrintfCString.h"
-#include "nsStackWalk.h"
+#include "mozilla/StackWalk.h"
 #include "nsTraceRefcnt.h"
 #include "plstr.h"
 #include "prio.h"
@@ -31,6 +31,7 @@
 #include <aio.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #ifdef MOZ_REPLACE_MALLOC
 #include "replace_malloc_bridge.h"
@@ -80,13 +81,13 @@ public:
   }
 
   // Custom implementation of IOInterposeObserver::Observation::Filename
-  const char16_t* Filename() MOZ_OVERRIDE;
+  const char16_t* Filename() override;
 
   ~MacIOAutoObservation()
   {
     Report();
     if (mFilename) {
-      NS_Free(mFilename);
+      free(mFilename);
       mFilename = nullptr;
     }
   }
@@ -180,7 +181,7 @@ IsValidWrite(int aFd, const void* aWbuf, size_t aCount)
   // content. This is needed because dbm doesn't keep track of dirty bits
   // and can end up writing the same data to disk twice. Once when the
   // user (nss) asks it to sync and once when closing the database.
-  ScopedFreePtr<void> wbuf2(malloc(aCount));
+  auto wbuf2 = MakeUniqueFallible<char[]>(aCount);
   if (!wbuf2) {
     return true;
   }
@@ -188,11 +189,11 @@ IsValidWrite(int aFd, const void* aWbuf, size_t aCount)
   if (pos == -1) {
     return true;
   }
-  ssize_t r = read(aFd, wbuf2, aCount);
+  ssize_t r = read(aFd, wbuf2.get(), aCount);
   if (r < 0 || (size_t)r != aCount) {
     return true;
   }
-  int cmp = memcmp(aWbuf, wbuf2, aCount);
+  int cmp = memcmp(aWbuf, wbuf2.get(), aCount);
   if (cmp != 0) {
     return true;
   }
@@ -323,7 +324,7 @@ FuncData* Functions[] = {
 
 const int NumFunctions = ArrayLength(Functions);
 
-} // anonymous namespace
+} // namespace
 
 /******************************** IO Poisoning ********************************/
 

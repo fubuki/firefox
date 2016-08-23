@@ -55,8 +55,10 @@
 #include "mozilla/Monitor.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/Services.h"
+#include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "nsAlgorithm.h"
 #include "nsPrintfCString.h"
 #include "nsIObserver.h"
@@ -113,16 +115,44 @@ using namespace mozilla::dom;
 namespace mozilla {
 namespace hal_impl {
 
+/**
+ * These are defined by libhardware, specifically, hardware/libhardware/include/hardware/lights.h
+ * in the gonk subsystem.
+ * If these change and are exposed to JS, make sure nsIHal.idl is updated as well.
+ */
+enum LightType {
+  eHalLightID_Backlight     = 0,
+  eHalLightID_Keyboard      = 1,
+  eHalLightID_Buttons       = 2,
+  eHalLightID_Battery       = 3,
+  eHalLightID_Notifications = 4,
+  eHalLightID_Attention     = 5,
+  eHalLightID_Bluetooth     = 6,
+  eHalLightID_Wifi          = 7,
+  eHalLightID_Count  // This should stay at the end
+};
+enum LightMode {
+  eHalLightMode_User   = 0,  // brightness is managed by user setting
+  eHalLightMode_Sensor = 1,  // brightness is managed by a light sensor
+  eHalLightMode_Count
+};
+enum FlashMode {
+  eHalLightFlash_None     = 0,
+  eHalLightFlash_Timed    = 1,  // timed flashing.  Use flashOnMS and flashOffMS for timing
+  eHalLightFlash_Hardware = 2,  // hardware assisted flashing
+  eHalLightFlash_Count
+};
+
 struct LightConfiguration {
-  hal::LightType light;
-  hal::LightMode mode;
-  hal::FlashMode flash;
+  LightType light;
+  LightMode mode;
+  FlashMode flash;
   uint32_t flashOnMS;
   uint32_t flashOffMS;
   uint32_t color;
 };
 
-static light_device_t* sLights[hal::eHalLightID_Count]; // will be initialized to nullptr
+static light_device_t* sLights[eHalLightID_Count]; // will be initialized to nullptr
 
 static light_device_t*
 GetDevice(hw_module_t* module, char const* name)
@@ -142,27 +172,27 @@ InitLights()
 {
   // assume that if backlight is nullptr, nothing has been set yet
   // if this is not true, the initialization will occur everytime a light is read or set!
-  if (!sLights[hal::eHalLightID_Backlight]) {
+  if (!sLights[eHalLightID_Backlight]) {
     int err;
     hw_module_t* module;
 
     err = hw_get_module(LIGHTS_HARDWARE_MODULE_ID, (hw_module_t const**)&module);
     if (err == 0) {
-      sLights[hal::eHalLightID_Backlight]
+      sLights[eHalLightID_Backlight]
              = GetDevice(module, LIGHT_ID_BACKLIGHT);
-      sLights[hal::eHalLightID_Keyboard]
+      sLights[eHalLightID_Keyboard]
              = GetDevice(module, LIGHT_ID_KEYBOARD);
-      sLights[hal::eHalLightID_Buttons]
+      sLights[eHalLightID_Buttons]
              = GetDevice(module, LIGHT_ID_BUTTONS);
-      sLights[hal::eHalLightID_Battery]
+      sLights[eHalLightID_Battery]
              = GetDevice(module, LIGHT_ID_BATTERY);
-      sLights[hal::eHalLightID_Notifications]
+      sLights[eHalLightID_Notifications]
              = GetDevice(module, LIGHT_ID_NOTIFICATIONS);
-      sLights[hal::eHalLightID_Attention]
+      sLights[eHalLightID_Attention]
              = GetDevice(module, LIGHT_ID_ATTENTION);
-      sLights[hal::eHalLightID_Bluetooth]
+      sLights[eHalLightID_Bluetooth]
              = GetDevice(module, LIGHT_ID_BLUETOOTH);
-      sLights[hal::eHalLightID_Wifi]
+      sLights[eHalLightID_Wifi]
              = GetDevice(module, LIGHT_ID_WIFI);
         }
     }
@@ -172,7 +202,7 @@ InitLights()
  * The state last set for the lights until liblights supports
  * getting the light state.
  */
-static light_state_t sStoredLightState[hal::eHalLightID_Count];
+static light_state_t sStoredLightState[eHalLightID_Count];
 
 /**
 * Set the value of a light to a particular color, with a specific flash pattern.
@@ -185,13 +215,13 @@ static light_state_t sStoredLightState[hal::eHalLightID_Count];
 * returns true if successful and false if failed.
 */
 static bool
-SetLight(hal::LightType light, const LightConfiguration& aConfig)
+SetLight(LightType light, const LightConfiguration& aConfig)
 {
   light_state_t state;
 
   InitLights();
 
-  if (light < 0 || light >= hal::eHalLightID_Count ||
+  if (light < 0 || light >= eHalLightID_Count ||
       sLights[light] == nullptr) {
     return false;
   }
@@ -213,11 +243,11 @@ SetLight(hal::LightType light, const LightConfiguration& aConfig)
 * returns true if successful and false if failed.
 */
 static bool
-GetLight(hal::LightType light, LightConfiguration* aConfig)
+GetLight(LightType light, LightConfiguration* aConfig)
 {
   light_state_t state;
 
-  if (light < 0 || light >= hal::eHalLightID_Count ||
+  if (light < 0 || light >= eHalLightID_Count ||
       sLights[light] == nullptr) {
     return false;
   }
@@ -227,10 +257,10 @@ GetLight(hal::LightType light, LightConfiguration* aConfig)
 
   aConfig->light = light;
   aConfig->color = state.color;
-  aConfig->flash = hal::FlashMode(state.flashMode);
+  aConfig->flash = FlashMode(state.flashMode);
   aConfig->flashOnMS = state.flashOnMS;
   aConfig->flashOffMS = state.flashOffMS;
-  aConfig->mode = hal::LightMode(state.brightnessMode);
+  aConfig->mode = LightMode(state.brightnessMode);
 
   return true;
 }
@@ -241,7 +271,7 @@ namespace {
  * This runnable runs for the lifetime of the program, once started.  It's
  * responsible for "playing" vibration patterns.
  */
-class VibratorRunnable MOZ_FINAL
+class VibratorRunnable final
   : public nsIRunnable
   , public nsIObserver
 {
@@ -268,6 +298,9 @@ public:
   void CancelVibrate();
 
   static bool ShuttingDown() { return sShuttingDown; }
+
+protected:
+  ~VibratorRunnable() {}
 
 private:
   Monitor mMonitor;
@@ -364,7 +397,7 @@ EnsureVibratorThreadInitialized()
   NS_NewThread(getter_AddRefs(thread), sVibratorRunnable);
 }
 
-} // anonymous namespace
+} // namespace
 
 void
 Vibrate(const nsTArray<uint32_t> &pattern, const hal::WindowIdentifier &)
@@ -409,13 +442,13 @@ public:
     } // else turn off battery indicator.
 
     LightConfiguration aConfig;
-    aConfig.light = hal::eHalLightID_Battery;
-    aConfig.mode = hal::eHalLightMode_User;
-    aConfig.flash = hal::eHalLightFlash_None;
+    aConfig.light = eHalLightID_Battery;
+    aConfig.mode = eHalLightMode_User;
+    aConfig.flash = eHalLightFlash_None;
     aConfig.flashOnMS = aConfig.flashOffMS = 0;
     aConfig.color = color;
 
-    SetLight(hal::eHalLightID_Battery, aConfig);
+    SetLight(eHalLightID_Battery, aConfig);
 
     hal::NotifyBatteryChange(info);
 
@@ -441,9 +474,9 @@ public:
   }
 };
 
-} // anonymous namespace
+} // namespace
 
-class BatteryObserver : public IUeventObserver
+class BatteryObserver final : public IUeventObserver
 {
 public:
   NS_INLINE_DECL_REFCOUNTING(BatteryObserver)
@@ -467,8 +500,11 @@ public:
     }
   }
 
+protected:
+  ~BatteryObserver() {}
+
 private:
-  nsRefPtr<BatteryUpdater> mUpdater;
+  RefPtr<BatteryUpdater> mUpdater;
 };
 
 // sBatteryObserver is owned by the IO thread. Only the IO thread may
@@ -575,6 +611,11 @@ void
 GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo)
 {
   int charge;
+  static bool previousCharging = false;
+  static double previousLevel = 0.0, remainingTime = 0.0;
+  static struct timespec lastLevelChange;
+  struct timespec now;
+  double dtime, dlevel;
 
   if (GetCurrentBatteryCharge(&charge)) {
     aBatteryInfo->level() = (double)charge / 100.0;
@@ -590,35 +631,84 @@ GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo)
     aBatteryInfo->charging() = true;
   }
 
-  if (!aBatteryInfo->charging() || (aBatteryInfo->level() < 1.0)) {
+  if (aBatteryInfo->charging() != previousCharging){
     aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
-  } else {
-    aBatteryInfo->remainingTime() = dom::battery::kDefaultRemainingTime;
+    memset(&lastLevelChange, 0, sizeof(struct timespec));
+    remainingTime = 0.0;
   }
+
+  if (aBatteryInfo->charging()) {
+    if (aBatteryInfo->level() == 1.0) {
+      aBatteryInfo->remainingTime() = dom::battery::kDefaultRemainingTime;
+    } else if (aBatteryInfo->level() != previousLevel){
+      if (lastLevelChange.tv_sec != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        dtime = now.tv_sec - lastLevelChange.tv_sec;
+        dlevel = aBatteryInfo->level() - previousLevel;
+
+        if (dlevel <= 0.0) {
+          aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
+        } else {
+          remainingTime = (double) round(dtime / dlevel * (1.0 - aBatteryInfo->level()));
+          aBatteryInfo->remainingTime() = remainingTime;
+        }
+
+        lastLevelChange = now;
+      } else { // lastLevelChange.tv_sec == 0
+        clock_gettime(CLOCK_MONOTONIC, &lastLevelChange);
+        aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
+      }
+
+    } else {
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      dtime = now.tv_sec - lastLevelChange.tv_sec;
+      if (dtime < remainingTime) {
+        aBatteryInfo->remainingTime() = round(remainingTime - dtime);
+      } else {
+        aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
+      }
+
+    }
+
+  } else {
+    if (aBatteryInfo->level() == 0.0) {
+      aBatteryInfo->remainingTime() = dom::battery::kDefaultRemainingTime;
+    } else if (aBatteryInfo->level() != previousLevel){
+      if (lastLevelChange.tv_sec != 0) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        dtime = now.tv_sec - lastLevelChange.tv_sec;
+        dlevel = previousLevel - aBatteryInfo->level();
+
+        if (dlevel <= 0.0) {
+          aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
+        } else {
+          remainingTime = (double) round(dtime / dlevel * aBatteryInfo->level());
+          aBatteryInfo->remainingTime() = remainingTime;
+        }
+
+        lastLevelChange = now;
+      } else { // lastLevelChange.tv_sec == 0
+        clock_gettime(CLOCK_MONOTONIC, &lastLevelChange);
+        aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
+      }
+
+    } else {
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      dtime = now.tv_sec - lastLevelChange.tv_sec;
+      if (dtime < remainingTime) {
+        aBatteryInfo->remainingTime() = round(remainingTime - dtime);
+      } else {
+        aBatteryInfo->remainingTime() = dom::battery::kUnknownRemainingTime;
+      }
+
+    }
+  }
+
+  previousCharging = aBatteryInfo->charging();
+  previousLevel = aBatteryInfo->level();
 }
 
 namespace {
-
-/**
- * RAII class to help us remember to close file descriptors.
- */
-
-bool WriteToFile(const char *filename, const char *toWrite)
-{
-  int fd = open(filename, O_WRONLY);
-  ScopedClose autoClose(fd);
-  if (fd < 0) {
-    HAL_LOG("Unable to open file %s.", filename);
-    return false;
-  }
-
-  if (write(fd, toWrite, strlen(toWrite)) < 0) {
-    HAL_LOG("Unable to write to file %s.", filename);
-    return false;
-  }
-
-  return true;
-}
 
 // We can write to screenEnabledFilename to enable/disable the screen, but when
 // we read, we always get "mem"!  So we have to keep track ourselves whether
@@ -632,11 +722,11 @@ bool sScreenEnabled = true;
 bool sCpuSleepAllowed = true;
 
 // Some CPU wake locks may be acquired internally in HAL. We use a counter to
-// keep track of these needs. Note we have to hold |sInternalLockCpuMonitor|
+// keep track of these needs. Note we have to hold |sInternalLockCpuMutex|
 // when reading or writing this variable to ensure thread-safe.
 int32_t sInternalLockCpuCount = 0;
 
-} // anonymous namespace
+} // namespace
 
 bool
 GetScreenEnabled()
@@ -655,16 +745,19 @@ bool
 GetKeyLightEnabled()
 {
   LightConfiguration config;
-  GetLight(hal::eHalLightID_Buttons, &config);
-  return (config.color != 0x00000000);
+  bool ok = GetLight(eHalLightID_Buttons, &config);
+  if (ok) {
+    return (config.color != 0x00000000);
+  }
+  return false;
 }
 
 void
 SetKeyLightEnabled(bool aEnabled)
 {
   LightConfiguration config;
-  config.mode = hal::eHalLightMode_User;
-  config.flash = hal::eHalLightFlash_None;
+  config.mode = eHalLightMode_User;
+  config.flash = eHalLightFlash_None;
   config.flashOnMS = config.flashOffMS = 0;
   config.color = 0x00000000;
 
@@ -679,20 +772,25 @@ SetKeyLightEnabled(bool aEnabled)
     config.color = color;
   }
 
-  SetLight(hal::eHalLightID_Buttons, config);
-  SetLight(hal::eHalLightID_Keyboard, config);
+  SetLight(eHalLightID_Buttons, config);
+  SetLight(eHalLightID_Keyboard, config);
 }
 
 double
 GetScreenBrightness()
 {
   LightConfiguration config;
-  hal::LightType light = hal::eHalLightID_Backlight;
+  LightType light = eHalLightID_Backlight;
 
-  GetLight(light, &config);
-  // backlight is brightness only, so using one of the RGB elements as value.
-  int brightness = config.color & 0xFF;
-  return brightness / 255.0;
+  bool ok = GetLight(light, &config);
+  if (ok) {
+    // backlight is brightness only, so using one of the RGB elements as value.
+    int brightness = config.color & 0xFF;
+    return brightness / 255.0;
+  }
+  // If GetLight fails, it's because the light doesn't exist.  So return
+  // a value corresponding to "off".
+  return 0;
 }
 
 void
@@ -711,18 +809,18 @@ SetScreenBrightness(double brightness)
   uint32_t color = (0xff<<24) + (val<<16) + (val<<8) + val;
 
   LightConfiguration config;
-  config.mode = hal::eHalLightMode_User;
-  config.flash = hal::eHalLightFlash_None;
+  config.mode = eHalLightMode_User;
+  config.flash = eHalLightFlash_None;
   config.flashOnMS = config.flashOffMS = 0;
   config.color = color;
-  SetLight(hal::eHalLightID_Backlight, config);
+  SetLight(eHalLightID_Backlight, config);
   if (GetKeyLightEnabled()) {
-    SetLight(hal::eHalLightID_Buttons, config);
-    SetLight(hal::eHalLightID_Keyboard, config);
+    SetLight(eHalLightID_Buttons, config);
+    SetLight(eHalLightID_Keyboard, config);
   }
 }
 
-static Monitor* sInternalLockCpuMonitor = nullptr;
+static StaticMutex sInternalLockCpuMutex;
 
 static void
 UpdateCpuSleepState()
@@ -730,21 +828,21 @@ UpdateCpuSleepState()
   const char *wakeLockFilename = "/sys/power/wake_lock";
   const char *wakeUnlockFilename = "/sys/power/wake_unlock";
 
-  sInternalLockCpuMonitor->AssertCurrentThreadOwns();
+  sInternalLockCpuMutex.AssertCurrentThreadOwns();
   bool allowed = sCpuSleepAllowed && !sInternalLockCpuCount;
-  WriteToFile(allowed ? wakeUnlockFilename : wakeLockFilename, "gecko");
+  WriteSysFile(allowed ? wakeUnlockFilename : wakeLockFilename, "gecko");
 }
 
 static void
 InternalLockCpu() {
-  MonitorAutoLock monitor(*sInternalLockCpuMonitor);
+  StaticMutexAutoLock lock(sInternalLockCpuMutex);
   ++sInternalLockCpuCount;
   UpdateCpuSleepState();
 }
 
 static void
 InternalUnlockCpu() {
-  MonitorAutoLock monitor(*sInternalLockCpuMonitor);
+  StaticMutexAutoLock lock(sInternalLockCpuMutex);
   --sInternalLockCpuCount;
   UpdateCpuSleepState();
 }
@@ -758,7 +856,7 @@ GetCpuSleepAllowed()
 void
 SetCpuSleepAllowed(bool aAllowed)
 {
-  MonitorAutoLock monitor(*sInternalLockCpuMonitor);
+  StaticMutexAutoLock lock(sInternalLockCpuMutex);
   sCpuSleepAllowed = aAllowed;
   UpdateCpuSleepState();
 }
@@ -908,11 +1006,12 @@ DisableScreenConfigurationNotifications()
 void
 GetCurrentScreenConfiguration(hal::ScreenConfiguration* aScreenConfiguration)
 {
-  *aScreenConfiguration = nsScreenGonk::GetConfiguration();
+  RefPtr<nsScreenGonk> screen = nsScreenManagerGonk::GetPrimaryScreen();
+  *aScreenConfiguration = screen->GetConfiguration();
 }
 
 bool
-LockScreenOrientation(const dom::ScreenOrientation& aOrientation)
+LockScreenOrientation(const dom::ScreenOrientationInternal& aOrientation)
 {
   return OrientationObserver::GetInstance()->LockScreenOrientation(aOrientation);
 }
@@ -1007,7 +1106,7 @@ WaitForAlarm(void* aData)
       // *on time* (the system won't sleep during the process in any way),
       // we need to acquire a CPU wake lock before firing the alarm event.
       InternalLockCpu();
-      nsRefPtr<AlarmFiredEvent> event =
+      RefPtr<AlarmFiredEvent> event =
         new AlarmFiredEvent(alarmData->mGeneration);
       NS_DispatchToMainThread(event);
     }
@@ -1028,7 +1127,7 @@ EnableAlarm()
     return false;
   }
 
-  nsAutoPtr<AlarmData> alarmData(new AlarmData(alarmFd));
+  UniquePtr<AlarmData> alarmData = MakeUnique<AlarmData>(alarmFd);
 
   struct sigaction actions;
   memset(&actions, 0, sizeof(actions));
@@ -1044,14 +1143,10 @@ EnableAlarm()
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-  // Initialize the monitor for internally locking CPU to ensure thread-safe
-  // before running the alarm-watcher thread.
-  sInternalLockCpuMonitor = new Monitor("sInternalLockCpuMonitor");
   int status = pthread_create(&sAlarmFireWatcherThread, &attr, WaitForAlarm,
                               alarmData.get());
   if (status) {
-    alarmData = nullptr;
-    delete sInternalLockCpuMonitor;
+    alarmData.reset();
     HAL_LOG("Failed to create alarm-watcher thread. Status: %d.", status);
     return false;
   }
@@ -1059,7 +1154,7 @@ EnableAlarm()
   pthread_attr_destroy(&attr);
 
   // The thread owns this now.  We only hold a pointer.
-  sAlarmData = alarmData.forget();
+  sAlarmData = alarmData.release();
   return true;
 }
 
@@ -1075,8 +1170,6 @@ DisableAlarm()
   // data pointed at by sAlarmData.
   DebugOnly<int> err = pthread_kill(sAlarmFireWatcherThread, SIGUSR1);
   MOZ_ASSERT(!err);
-
-  delete sInternalLockCpuMonitor;
 }
 
 bool
@@ -1121,16 +1214,16 @@ OomAdjOfOomScoreAdj(int aOomScoreAdj)
 }
 
 static void
-RoundOomScoreAdjUpWithBackroundLRU(int& aOomScoreAdj, uint32_t aBackgroundLRU)
+RoundOomScoreAdjUpWithLRU(int& aOomScoreAdj, uint32_t aLRU)
 {
   // We want to add minimum value to round OomScoreAdj up according to
-  // the steps by aBackgroundLRU.
+  // the steps by aLRU.
   aOomScoreAdj +=
-    ceil(((float)OOM_SCORE_ADJ_MAX / OOM_ADJUST_MAX) * aBackgroundLRU);
+    ceil(((float)OOM_SCORE_ADJ_MAX / OOM_ADJUST_MAX) * aLRU);
 }
 
 #define OOM_LOG(level, args...) __android_log_print(level, "OomLogger", ##args)
-class OomVictimLogger MOZ_FINAL
+class OomVictimLogger final
   : public nsIObserver
 {
 public:
@@ -1139,14 +1232,18 @@ public:
       mRegexes(nullptr)
   {
     // Enable timestamps in kernel's printk
-    WriteToFile("/sys/module/printk/parameters/time", "Y");
+    WriteSysFile("/sys/module/printk/parameters/time", "Y");
   }
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
+
+protected:
+  ~OomVictimLogger() {}
+
 private:
   double mLastLineChecked;
-  ScopedFreePtr<regex_t> mRegexes;
+  UniqueFreePtr<regex_t> mRegexes;
 };
 NS_IMPL_ISUPPORTS(OomVictimLogger, nsIObserver);
 
@@ -1180,9 +1277,13 @@ OomVictimLogger::Observe(
 
   // Compile our regex just in time
   if (!mRegexes) {
-    mRegexes = static_cast<regex_t*>(malloc(sizeof(regex_t) * regex_count));
+    UniqueFreePtr<regex_t> regexes(
+      static_cast<regex_t*>(malloc(sizeof(regex_t) * regex_count))
+    );
+    mRegexes.swap(regexes);
     for (size_t i = 0; i < regex_count; i++) {
-      int compilation_err = regcomp(&(mRegexes[i]), regexes_raw[i], REG_NOSUB);
+      int compilation_err =
+        regcomp(&(mRegexes.get()[i]), regexes_raw[i], REG_NOSUB);
       if (compilation_err) {
         OOM_LOG(ANDROID_LOG_ERROR, "Cannot compile regex \"%s\"\n", regexes_raw[i]);
         return NS_OK;
@@ -1196,22 +1297,22 @@ OomVictimLogger::Observe(
   // deprecated the old klog defs.
   // Our current bionic does not hit this
   // change yet so handle the future change.
-  // (ICS doesn't have KLOG_SIZE_BUFFER but 
+  // (ICS doesn't have KLOG_SIZE_BUFFER but
   // JB and onwards does.)
   #define KLOG_SIZE_BUFFER KLOG_WRITE
 #endif
   // Retreive kernel log
   int msg_buf_size = klogctl(KLOG_SIZE_BUFFER, NULL, 0);
-  ScopedFreePtr<char> msg_buf(static_cast<char *>(malloc(msg_buf_size + 1)));
-  int read_size = klogctl(KLOG_READ_ALL, msg_buf.rwget(), msg_buf_size);
+  UniqueFreePtr<char> msg_buf(static_cast<char *>(malloc(msg_buf_size + 1)));
+  int read_size = klogctl(KLOG_READ_ALL, msg_buf.get(), msg_buf_size);
 
   // Turn buffer into cstring
   read_size = read_size > msg_buf_size ? msg_buf_size : read_size;
-  msg_buf.rwget()[read_size] = '\0';
+  msg_buf.get()[read_size] = '\0';
 
   // Foreach line
   char* line_end;
-  char* line_begin = msg_buf.rwget();
+  char* line_begin = msg_buf.get();
   for (; (line_end = strchr(line_begin, '\n')); line_begin = line_end + 1) {
     // make line into cstring
     *line_end = '\0';
@@ -1244,7 +1345,7 @@ OomVictimLogger::Observe(
 
     // Log interesting lines
     for (size_t i = 0; i < regex_count; i++) {
-      int matching = !regexec(&(mRegexes[i]), line_begin, 0, NULL, 0);
+      int matching = !regexec(&(mRegexes.get()[i]), line_begin, 0, NULL, 0);
       if (matching) {
         // Log content of kernel message. We try to skip the ], but if for
         // some reason (most likely due to buffer overflow/wraparound), we
@@ -1323,7 +1424,8 @@ private:
   ProcessPriority mPriority;
   int32_t mOomScoreAdj;
   int32_t mKillUnderKB;
-  int mCGroupProcsFd;
+  int mCpuCGroupProcsFd;
+  int mMemCGroupProcsFd;
   nsCString mGroup;
 
   /**
@@ -1340,7 +1442,7 @@ private:
   /**
    * Get the full path of the cgroup.procs file associated with the group.
    */
-  nsCString CGroupProcsFilename()
+  nsCString CpuCGroupProcsFilename()
   {
     nsCString cgroupName = mGroup;
 
@@ -1356,9 +1458,30 @@ private:
            NS_LITERAL_CSTRING("cgroup.procs");
   }
 
-  int OpenCGroupProcs()
+  nsCString MemCGroupProcsFilename()
   {
-    return open(CGroupProcsFilename().get(), O_WRONLY);
+    nsCString cgroupName = mGroup;
+
+    /* If mGroup is empty, our cgroup.procs file is the root procs file,
+     * located at /sys/fs/cgroup/memory/cgroup.procs.  Otherwise our procs
+     * file is /sys/fs/cgroup/memory/NAME/cgroup.procs. */
+
+    if (!mGroup.IsEmpty()) {
+      cgroupName.AppendLiteral("/");
+    }
+
+    return NS_LITERAL_CSTRING("/sys/fs/cgroup/memory/") + cgroupName +
+           NS_LITERAL_CSTRING("cgroup.procs");
+  }
+
+  int OpenCpuCGroupProcs()
+  {
+    return open(CpuCGroupProcsFilename().get(), O_WRONLY);
+  }
+
+  int OpenMemCGroupProcs()
+  {
+    return open(MemCGroupProcsFilename().get(), O_WRONLY);
   }
 };
 
@@ -1373,10 +1496,13 @@ private:
  * exists.  Otherwise, return false.
  */
 static bool
-EnsureCGroupExists(const nsACString &aGroup)
+EnsureCpuCGroupExists(const nsACString &aGroup)
 {
   NS_NAMED_LITERAL_CSTRING(kDevCpuCtl, "/dev/cpuctl/");
   NS_NAMED_LITERAL_CSTRING(kSlash, "/");
+
+  nsAutoCString groupName(aGroup);
+  HAL_LOG("EnsureCpuCGroupExists for group '%s'", groupName.get());
 
   nsAutoCString prefPrefix("hal.processPriorityManager.gonk.cgroups.");
 
@@ -1408,19 +1534,20 @@ EnsureCGroupExists(const nsACString &aGroup)
 
     offset++;
   }
+  HAL_LOG("EnsureCpuCGroupExists created group '%s'", groupName.get());
 
   nsAutoCString pathPrefix(kDevCpuCtl + aGroup + kSlash);
   nsAutoCString cpuSharesPath(pathPrefix + NS_LITERAL_CSTRING("cpu.shares"));
-  if (cpuShares && !WriteToFile(cpuSharesPath.get(),
-                                nsPrintfCString("%d", cpuShares).get())) {
+  if (cpuShares && !WriteSysFile(cpuSharesPath.get(),
+                                 nsPrintfCString("%d", cpuShares).get())) {
     HAL_LOG("Could not set the cpu share for group %s", cpuSharesPath.get());
     return false;
   }
 
   nsAutoCString notifyOnMigratePath(pathPrefix
     + NS_LITERAL_CSTRING("cpu.notify_on_migrate"));
-  if (!WriteToFile(notifyOnMigratePath.get(),
-                   nsPrintfCString("%d", cpuNotifyOnMigrate).get())) {
+  if (!WriteSysFile(notifyOnMigratePath.get(),
+                    nsPrintfCString("%d", cpuNotifyOnMigrate).get())) {
     HAL_LOG("Could not set the cpu migration notification flag for group %s",
             notifyOnMigratePath.get());
     return false;
@@ -1429,11 +1556,61 @@ EnsureCGroupExists(const nsACString &aGroup)
   return true;
 }
 
+static bool
+EnsureMemCGroupExists(const nsACString &aGroup)
+{
+  NS_NAMED_LITERAL_CSTRING(kMemCtl, "/sys/fs/cgroup/memory/");
+  NS_NAMED_LITERAL_CSTRING(kSlash, "/");
+
+  nsAutoCString groupName(aGroup);
+  HAL_LOG("EnsureMemCGroupExists for group '%s'", groupName.get());
+
+  nsAutoCString prefPrefix("hal.processPriorityManager.gonk.cgroups.");
+
+  /* If cgroup is not empty, append the cgroup name and a dot to obtain the
+   * group specific preferences. */
+  if (!aGroup.IsEmpty()) {
+    prefPrefix += aGroup + NS_LITERAL_CSTRING(".");
+  }
+
+  nsAutoCString memSwappinessPref(prefPrefix + NS_LITERAL_CSTRING("memory_swappiness"));
+  int memSwappiness = Preferences::GetInt(memSwappinessPref.get());
+
+  // Create mCGroup and its parent directories, as necessary.
+  nsCString cgroupIter = aGroup + kSlash;
+
+  int32_t offset = 0;
+  while ((offset = cgroupIter.FindChar('/', offset)) != -1) {
+    nsAutoCString path = kMemCtl + Substring(cgroupIter, 0, offset);
+    int rv = mkdir(path.get(), 0744);
+
+    if (rv == -1 && errno != EEXIST) {
+      HAL_LOG("Could not create the %s control group.", path.get());
+      return false;
+    }
+
+    offset++;
+  }
+  HAL_LOG("EnsureMemCGroupExists created group '%s'", groupName.get());
+
+  nsAutoCString pathPrefix(kMemCtl + aGroup + kSlash);
+  nsAutoCString memSwappinessPath(pathPrefix + NS_LITERAL_CSTRING("memory.swappiness"));
+  if (!WriteSysFile(memSwappinessPath.get(),
+                    nsPrintfCString("%d", memSwappiness).get())) {
+    HAL_LOG("Could not set the memory.swappiness for group %s", memSwappinessPath.get());
+    return false;
+  }
+  HAL_LOG("Set memory.swappiness for group %s to %d", memSwappinessPath.get(), memSwappiness);
+
+  return true;
+}
+
 PriorityClass::PriorityClass(ProcessPriority aPriority)
   : mPriority(aPriority)
   , mOomScoreAdj(0)
   , mKillUnderKB(0)
-  , mCGroupProcsFd(-1)
+  , mCpuCGroupProcsFd(-1)
+  , mMemCGroupProcsFd(-1)
 {
   DebugOnly<nsresult> rv;
 
@@ -1447,14 +1624,22 @@ PriorityClass::PriorityClass(ProcessPriority aPriority)
   rv = Preferences::GetCString(PriorityPrefName("cgroup").get(), &mGroup);
   MOZ_ASSERT(NS_SUCCEEDED(rv), "Missing control group preference");
 
-  if (EnsureCGroupExists(mGroup)) {
-    mCGroupProcsFd = OpenCGroupProcs();
+  if (EnsureCpuCGroupExists(mGroup)) {
+    mCpuCGroupProcsFd = OpenCpuCGroupProcs();
+  }
+  if (EnsureMemCGroupExists(mGroup)) {
+    mMemCGroupProcsFd = OpenMemCGroupProcs();
   }
 }
 
 PriorityClass::~PriorityClass()
 {
-  close(mCGroupProcsFd);
+  if (mCpuCGroupProcsFd != -1) {
+    close(mCpuCGroupProcsFd);
+  }
+  if (mMemCGroupProcsFd != -1) {
+    close(mMemCGroupProcsFd);
+  }
 }
 
 PriorityClass::PriorityClass(const PriorityClass& aOther)
@@ -1463,7 +1648,8 @@ PriorityClass::PriorityClass(const PriorityClass& aOther)
   , mKillUnderKB(aOther.mKillUnderKB)
   , mGroup(aOther.mGroup)
 {
-  mCGroupProcsFd = OpenCGroupProcs();
+  mCpuCGroupProcsFd = OpenCpuCGroupProcs();
+  mMemCGroupProcsFd = OpenMemCGroupProcs();
 }
 
 PriorityClass& PriorityClass::operator=(const PriorityClass& aOther)
@@ -1472,20 +1658,26 @@ PriorityClass& PriorityClass::operator=(const PriorityClass& aOther)
   mOomScoreAdj = aOther.mOomScoreAdj;
   mKillUnderKB = aOther.mKillUnderKB;
   mGroup = aOther.mGroup;
-  mCGroupProcsFd = OpenCGroupProcs();
+  mCpuCGroupProcsFd = OpenCpuCGroupProcs();
+  mMemCGroupProcsFd = OpenMemCGroupProcs();
   return *this;
 }
 
 void PriorityClass::AddProcess(int aPid)
 {
-  if (mCGroupProcsFd < 0) {
-    return;
+  if (mCpuCGroupProcsFd >= 0) {
+    nsPrintfCString str("%d", aPid);
+
+    if (write(mCpuCGroupProcsFd, str.get(), strlen(str.get())) < 0) {
+      HAL_ERR("Couldn't add PID %d to the %s cpu control group", aPid, mGroup.get());
+    }
   }
+  if (mMemCGroupProcsFd >= 0) {
+    nsPrintfCString str("%d", aPid);
 
-  nsPrintfCString str("%d", aPid);
-
-  if (write(mCGroupProcsFd, str.get(), strlen(str.get())) < 0) {
-    HAL_ERR("Couldn't add PID %d to the %s control group", aPid, mGroup.get());
+    if (write(mMemCGroupProcsFd, str.get(), strlen(str.get())) < 0) {
+      HAL_ERR("Couldn't add PID %d to the %s memory control group", aPid, mGroup.get());
+    }
   }
 }
 
@@ -1596,9 +1788,9 @@ EnsureKernelLowMemKillerParamsSet()
   adjParams.Cut(adjParams.Length() - 1, 1);
   minfreeParams.Cut(minfreeParams.Length() - 1, 1);
   if (!adjParams.IsEmpty() && !minfreeParams.IsEmpty()) {
-    WriteToFile("/sys/module/lowmemorykiller/parameters/adj", adjParams.get());
-    WriteToFile("/sys/module/lowmemorykiller/parameters/minfree",
-                minfreeParams.get());
+    WriteSysFile("/sys/module/lowmemorykiller/parameters/adj", adjParams.get());
+    WriteSysFile("/sys/module/lowmemorykiller/parameters/minfree",
+                 minfreeParams.get());
   }
 
   // Set the low-memory-notification threshold.
@@ -1608,12 +1800,12 @@ EnsureKernelLowMemKillerParamsSet()
         &lowMemNotifyThresholdKB))) {
 
     // notify_trigger is in pages.
-    WriteToFile("/sys/module/lowmemorykiller/parameters/notify_trigger",
+    WriteSysFile("/sys/module/lowmemorykiller/parameters/notify_trigger",
       nsPrintfCString("%ld", lowMemNotifyThresholdKB * 1024 / page_size).get());
   }
 
   // Ensure OOM events appear in logcat
-  nsRefPtr<OomVictimLogger> oomLogger = new OomVictimLogger();
+  RefPtr<OomVictimLogger> oomLogger = new OomVictimLogger();
   nsCOMPtr<nsIObserverService> os = services::GetObserverService();
   if (os) {
     os->AddObserver(oomLogger, "ipc:content-shutdown", false);
@@ -1621,13 +1813,10 @@ EnsureKernelLowMemKillerParamsSet()
 }
 
 void
-SetProcessPriority(int aPid,
-                   ProcessPriority aPriority,
-                   ProcessCPUPriority aCPUPriority,
-                   uint32_t aBackgroundLRU)
+SetProcessPriority(int aPid, ProcessPriority aPriority, uint32_t aLRU)
 {
-  HAL_LOG("SetProcessPriority(pid=%d, priority=%d, cpuPriority=%d, LRU=%u)",
-          aPid, aPriority, aCPUPriority, aBackgroundLRU);
+  HAL_LOG("SetProcessPriority(pid=%d, priority=%d, LRU=%u)",
+          aPid, aPriority, aLRU);
 
   // If this is the first time SetProcessPriority was called, set the kernel's
   // OOM parameters according to our prefs.
@@ -1642,15 +1831,15 @@ SetProcessPriority(int aPid,
 
   int oomScoreAdj = pc->OomScoreAdj();
 
-  RoundOomScoreAdjUpWithBackroundLRU(oomScoreAdj, aBackgroundLRU);
+  RoundOomScoreAdjUpWithLRU(oomScoreAdj, aLRU);
 
   // We try the newer interface first, and fall back to the older interface
   // on failure.
-  if (!WriteToFile(nsPrintfCString("/proc/%d/oom_score_adj", aPid).get(),
-                   nsPrintfCString("%d", oomScoreAdj).get()))
+  if (!WriteSysFile(nsPrintfCString("/proc/%d/oom_score_adj", aPid).get(),
+                    nsPrintfCString("%d", oomScoreAdj).get()))
   {
-    WriteToFile(nsPrintfCString("/proc/%d/oom_adj", aPid).get(),
-                nsPrintfCString("%d", OomAdjOfOomScoreAdj(oomScoreAdj)).get());
+    WriteSysFile(nsPrintfCString("/proc/%d/oom_adj", aPid).get(),
+                 nsPrintfCString("%d", OomAdjOfOomScoreAdj(oomScoreAdj)).get());
   }
 
   HAL_LOG("Assigning pid %d to cgroup %s", aPid, pc->CGroup().get());
@@ -1747,7 +1936,7 @@ EnsureThreadPriorityPrefs(ThreadPriorityPrefs* prefs)
 }
 
 static void
-SetThreadPriority(pid_t aTid, hal::ThreadPriority aThreadPriority)
+DoSetThreadPriority(pid_t aTid, hal::ThreadPriority aThreadPriority)
 {
   // See bug 999115, we can only read preferences on the main thread otherwise
   // we create a race condition in HAL
@@ -1798,7 +1987,7 @@ public:
   NS_IMETHOD Run()
   {
     NS_ASSERTION(NS_IsMainThread(), "Can only set thread priorities on main thread");
-    hal_impl::SetThreadPriority(mThreadId, mThreadPriority);
+    hal_impl::DoSetThreadPriority(mThreadId, mThreadPriority);
     return NS_OK;
   }
 
@@ -1807,16 +1996,23 @@ private:
   hal::ThreadPriority mThreadPriority;
 };
 
-} // anonymous namespace
+} // namespace
 
 void
 SetCurrentThreadPriority(ThreadPriority aThreadPriority)
 {
+  pid_t threadId = gettid();
+  hal_impl::SetThreadPriority(threadId, aThreadPriority);
+}
+
+void
+SetThreadPriority(PlatformThreadId aThreadId,
+                         ThreadPriority aThreadPriority)
+{
   switch (aThreadPriority) {
     case THREAD_PRIORITY_COMPOSITOR: {
-      pid_t threadId = gettid();
       nsCOMPtr<nsIRunnable> runnable =
-        new SetThreadPriorityRunnable(threadId, aThreadPriority);
+        new SetThreadPriorityRunnable(aThreadId, aThreadPriority);
       NS_DispatchToMainThread(runnable);
       break;
     }

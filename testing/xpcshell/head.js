@@ -21,12 +21,13 @@ var _profileInitialized = false;
 // modules.
 _register_modules_protocol_handler();
 
-let _Promise = Components.utils.import("resource://gre/modules/Promise.jsm", {}).Promise;
+var _Promise = Components.utils.import("resource://gre/modules/Promise.jsm", {}).Promise;
+var _PromiseTestUtils = Components.utils.import("resource://testing-common/PromiseTestUtils.jsm", {}).PromiseTestUtils;
 
 // Support a common assertion library, Assert.jsm.
-let AssertCls = Components.utils.import("resource://testing-common/Assert.jsm", null).Assert;
+var AssertCls = Components.utils.import("resource://testing-common/Assert.jsm", null).Assert;
 // Pass a custom report function for xpcshell-test style reporting.
-let Assert = new AssertCls(function(err, message, stack) {
+var Assert = new AssertCls(function(err, message, stack) {
   if (err) {
     do_report_result(false, err.message, err.stack);
   } else {
@@ -35,34 +36,35 @@ let Assert = new AssertCls(function(err, message, stack) {
 });
 
 
-let _add_params = function (params) {
+var _add_params = function (params) {
   if (typeof _XPCSHELL_PROCESS != "undefined") {
     params.xpcshell_process = _XPCSHELL_PROCESS;
   }
 };
 
-let _dumpLog = function (raw_msg) {
-  dump("\n" + raw_msg + "\n");
+var _dumpLog = function (raw_msg) {
+  dump("\n" + JSON.stringify(raw_msg) + "\n");
 }
 
-let _LoggerClass = Components.utils.import("resource://testing-common/StructuredLog.jsm", null).StructuredLogger;
-let _testLogger = new _LoggerClass("xpcshell/head.js", _dumpLog, [_add_params]);
+var _LoggerClass = Components.utils.import("resource://testing-common/StructuredLog.jsm", null).StructuredLogger;
+var _testLogger = new _LoggerClass("xpcshell/head.js", _dumpLog, [_add_params]);
 
 // Disable automatic network detection, so tests work correctly when
 // not connected to a network.
-let (ios = Components.classes["@mozilla.org/network/io-service;1"]
-           .getService(Components.interfaces.nsIIOService2)) {
+{
+  let ios = Components.classes["@mozilla.org/network/io-service;1"]
+                      .getService(Components.interfaces.nsIIOService2);
   ios.manageOfflineStatus = false;
   ios.offline = false;
 }
 
 // Determine if we're running on parent or child
-let runningInParent = true;
+var runningInParent = true;
 try {
   runningInParent = Components.classes["@mozilla.org/xre/runtime;1"].
                     getService(Components.interfaces.nsIXULRuntime).processType
                     == Components.interfaces.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
-} 
+}
 catch (e) { }
 
 // Only if building of places is enabled.
@@ -70,10 +72,9 @@ if (runningInParent &&
     "mozIAsyncHistory" in Components.interfaces) {
   // Ensure places history is enabled for xpcshell-tests as some non-FF
   // apps disable it.
-  let (prefs = Components.classes["@mozilla.org/preferences-service;1"]
-               .getService(Components.interfaces.nsIPrefBranch)) {
-    prefs.setBoolPref("places.history.enabled", true);
-  };
+  let prefs = Components.classes["@mozilla.org/preferences-service;1"]
+              .getService(Components.interfaces.nsIPrefBranch);
+  prefs.setBoolPref("places.history.enabled", true);
 }
 
 try {
@@ -101,12 +102,11 @@ catch (e) { }
 try {
   if (runningInParent &&
       "@mozilla.org/toolkit/crash-reporter;1" in Components.classes) {
-    let (crashReporter =
+    let crashReporter =
           Components.classes["@mozilla.org/toolkit/crash-reporter;1"]
-          .getService(Components.interfaces.nsICrashReporter)) {
-      crashReporter.UpdateCrashEventsDir();
-      crashReporter.minidumpPath = do_get_minidumpdir();
-    }
+          .getService(Components.interfaces.nsICrashReporter);
+    crashReporter.UpdateCrashEventsDir();
+    crashReporter.minidumpPath = do_get_minidumpdir();
   }
 }
 catch (e) { }
@@ -128,7 +128,8 @@ try {
       return this;
     },
     observe : function (msg) {
-      do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
+      if (typeof do_print === "function")
+        do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
     }
   };
   Components.classes["@mozilla.org/consoleservice;1"]
@@ -213,7 +214,6 @@ function _do_main() {
 
 function _do_quit() {
   _testLogger.info("exiting test");
-  _Promise.Debugging.flushUncaughtErrors();
   _quit = true;
 }
 
@@ -234,7 +234,9 @@ var _fakeIdleService = {
       Components.manager.QueryInterface(Components.interfaces.nsIComponentRegistrar);
   },
   contractID: "@mozilla.org/widget/idleservice;1",
-  get CID() this.registrar.contractIDToCID(this.contractID),
+  get CID() {
+    return this.registrar.contractIDToCID(this.contractID);
+  },
 
   activate: function FIS_activate()
   {
@@ -286,7 +288,9 @@ var _fakeIdleService = {
   },
 
   // nsIIdleService
-  get idleTime() 0,
+  get idleTime() {
+    return 0;
+  },
   addIdleObserver: function () {},
   removeIdleObserver: function () {},
 
@@ -329,7 +333,7 @@ function _register_protocol_handlers() {
 }
 
 function _register_modules_protocol_handler() {
-  if (!this._TESTING_MODULES_DIR) {
+  if (!_TESTING_MODULES_DIR) {
     throw new Error("Please define a path where the testing modules can be " +
                     "found in a variable called '_TESTING_MODULES_DIR' before " +
                     "head.js is included.");
@@ -379,10 +383,26 @@ function _setupDebuggerServer(breakpointFiles, callback) {
     prefs.setBoolPref("devtools.debugger.log.verbose", true);
   }
 
-  let {DebuggerServer} = Components.utils.import('resource://gre/modules/devtools/dbg-server.jsm', {});
+  let require;
+  try {
+    ({ require } = Components.utils.import("resource://devtools/shared/Loader.jsm", {}));
+  } catch (e) {
+    throw new Error("resource://devtools appears to be inaccessible from the " +
+                    "xpcshell environment.\n" +
+                    "This can usually be resolved by adding:\n" +
+                    "  firefox-appdir = browser\n" +
+                    "to the xpcshell.ini manifest.\n" +
+                    "It is possible for this to alter test behevior by " +
+                    "triggering additional browser code to run, so check " +
+                    "test behavior after making this change.\n" +
+                    "See also https://bugzil.la/1215378.")
+  }
+  let { DebuggerServer } = require("devtools/server/main");
+  let { OriginalLocation } = require("devtools/server/actors/common");
   DebuggerServer.init();
   DebuggerServer.addBrowserActors();
   DebuggerServer.addActors("resource://testing-common/dbg-actors.js");
+  DebuggerServer.allowChromeProcess = true;
 
   // An observer notification that tells us when we can "resume" script
   // execution.
@@ -398,10 +418,10 @@ function _setupDebuggerServer(breakpointFiles, callback) {
         try {
           // Add a breakpoint for the first line in our test files.
           let threadActor = subject.wrappedJSObject;
-          let location = { line: 1 };
           for (let file of breakpointFiles) {
-            let sourceActor = threadActor.sources.source({originalUrl: file});
-            sourceActor.setBreakpoint(location);
+            // Pass an empty `source` object to workaround `source` function assertion
+            let sourceActor = threadActor.sources.source({originalUrl: file, source: {}});
+            sourceActor._getOrCreateBreakpointActor(new OriginalLocation(sourceActor, 1));
           }
         } catch (ex) {
           do_print("Failed to initialize breakpoints: " + ex + "\n" + ex.stack);
@@ -437,9 +457,15 @@ function _initDebugging(port) {
   do_print("*******************************************************************");
   do_print("")
 
+  let AuthenticatorType = DebuggerServer.Authenticators.get("PROMPT");
+  let authenticator = new AuthenticatorType.Server();
+  authenticator.allowConnection = () => {
+    return DebuggerServer.AuthenticationResult.ALLOW;
+  };
+
   let listener = DebuggerServer.createListener();
   listener.portOrPath = port;
-  listener.allowConnection = () => true;
+  listener.authenticator = authenticator;
   listener.open();
 
   // spin an event loop until the debugger connects.
@@ -461,7 +487,9 @@ function _execute_test() {
     try {
       _initDebugging(_JSDEBUGGER_PORT);
     } catch (ex) {
-      do_print("Failed to initialize debugging: " + ex + "\n" + ex.stack);
+      // Fail the test run immediately if debugging is requested but fails, so
+      // that the failure state is more obvious.
+      do_throw(`Failed to initialize debugging: ${ex}`, ex.stack);
     }
   }
 
@@ -471,16 +499,8 @@ function _execute_test() {
   // Call do_get_idle() to restore the factory and get the service.
   _fakeIdleService.activate();
 
-  _Promise.Debugging.clearUncaughtErrorObservers();
-  _Promise.Debugging.addUncaughtErrorObserver(function observer({message, date, fileName, stack, lineNumber}) {
-    let text = " A promise chain failed to handle a rejection: " +
-        message + " - rejection date: " + date;
-    _testLogger.error(text,
-                      {
-                        stack: _format_stack(stack),
-                        source_file: fileName
-                      });
-  });
+  _PromiseTestUtils.init();
+  _PromiseTestUtils.Assert = Assert;
 
   // _HEAD_FILES is dynamically defined by <runxpcshelltests.py>.
   _load_files(_HEAD_FILES);
@@ -493,11 +513,25 @@ function _execute_test() {
     this[func] = Assert[func].bind(Assert);
   }
 
+  if (_gTestHasOnly) {
+    _gTests = _gTests.filter(([props,]) => {
+      return ("_only" in props) && props._only;
+    });
+  }
+
   try {
     do_test_pending("MAIN run_test");
-    run_test();
+    // Check if run_test() is defined. If defined, run it.
+    // Else, call run_next_test() directly to invoke tests
+    // added by add_test() and add_task().
+    if (typeof run_test === "function") {
+      run_test();
+    } else {
+      run_next_test();
+    }
     do_test_finished("MAIN run_test");
     _do_main();
+    _PromiseTestUtils.assertNoUncaughtRejections();
   } catch (e) {
     _passed = false;
     // do_check failures are already logged and set _quit to true and throw
@@ -572,8 +606,26 @@ function _execute_test() {
   // Restore idle service to avoid leaks.
   _fakeIdleService.deactivate();
 
-  if (!_passed)
-    return;
+  if (_profileInitialized) {
+    // Since we have a profile, we will notify profile shutdown topics at
+    // the end of the current test, to ensure correct cleanup on shutdown.
+    let obs = Components.classes["@mozilla.org/observer-service;1"]
+                        .getService(Components.interfaces.nsIObserverService);
+    obs.notifyObservers(null, "profile-change-net-teardown", null);
+    obs.notifyObservers(null, "profile-change-teardown", null);
+    obs.notifyObservers(null, "profile-before-change", null);
+
+    _profileInitialized = false;
+  }
+
+  try {
+    _PromiseTestUtils.ensureDOMPromiseRejectionsProcessed();
+    _PromiseTestUtils.assertNoUncaughtRejections();
+    _PromiseTestUtils.assertNoMoreExpectedRejections();
+  } finally {
+    // It's important to terminate the module to avoid crashes on shutdown.
+    _PromiseTestUtils.uninit();
+  }
 }
 
 /**
@@ -648,8 +700,8 @@ function do_execute_soon(callback, aName) {
           let stack = e.stack ? _format_stack(e.stack) : null;
           _testLogger.testStatus(_TEST_NAME,
                                  funcName,
-                                 'ERROR',
-                                 'OK',
+                                 'FAIL',
+                                 'PASS',
                                  _exception_message(e),
                                  stack);
           _do_quit();
@@ -774,7 +826,7 @@ function todo_check_neq(left, right, stack) {
 }
 
 function do_report_result(passed, text, stack, todo) {
-  while (stack.filename.contains("head.js") && stack.caller) {
+  while (stack.filename.includes("head.js") && stack.caller) {
     stack = stack.caller;
   }
 
@@ -842,7 +894,7 @@ function todo_check_eq(left, right, stack) {
 }
 
 function do_check_true(condition, stack) {
-  Assert.ok(condition);
+  Assert.ok(condition, stack);
 }
 
 function todo_check_true(condition, stack) {
@@ -1095,24 +1147,13 @@ function do_get_minidumpdir() {
  * Registers a directory with the profile service,
  * and return the directory as an nsILocalFile.
  *
+ * @param notifyProfileAfterChange Whether to notify for "profile-after-change".
  * @return nsILocalFile of the profile directory.
  */
-function do_get_profile() {
+function do_get_profile(notifyProfileAfterChange = false) {
   if (!runningInParent) {
     _testLogger.info("Ignoring profile creation from child process.");
     return null;
-  }
-
-  if (!_profileInitialized) {
-    // Since we have a profile, we will notify profile shutdown topics at
-    // the end of the current test, to ensure correct cleanup on shutdown.
-    do_register_cleanup(function() {
-      let obsSvc = Components.classes["@mozilla.org/observer-service;1"].
-                   getService(Components.interfaces.nsIObserverService);
-      obsSvc.notifyObservers(null, "profile-change-net-teardown", null);
-      obsSvc.notifyObservers(null, "profile-change-teardown", null);
-      obsSvc.notifyObservers(null, "profile-before-change", null);
-    });
   }
 
   let env = Components.classes["@mozilla.org/process/environment;1"]
@@ -1160,6 +1201,9 @@ function do_get_profile() {
   if (!_profileInitialized) {
     obsSvc.notifyObservers(null, "profile-do-change", "xpcshell-do-get-profile");
     _profileInitialized = true;
+    if (notifyProfileAfterChange) {
+      obsSvc.notifyObservers(null, "profile-after-change", "xpcshell-do-get-profile");
+    }
   }
 
   // The methods of 'provider' will retain this scope so null out everything
@@ -1196,15 +1240,15 @@ function do_load_child_test_harness()
 
   let command =
         "const _HEAD_JS_PATH=" + uneval(_HEAD_JS_PATH) + "; "
-      + "const _HTTPD_JS_PATH=" + uneval(_HTTPD_JS_PATH) + "; "
       + "const _HEAD_FILES=" + uneval(_HEAD_FILES) + "; "
+      + "const _MOZINFO_JS_PATH=" + uneval(_MOZINFO_JS_PATH) + "; "
       + "const _TAIL_FILES=" + uneval(_TAIL_FILES) + "; "
       + "const _TEST_NAME=" + uneval(_TEST_NAME) + "; "
       // We'll need more magic to get the debugger working in the child
       + "const _JSDEBUGGER_PORT=0; "
       + "const _XPCSHELL_PROCESS='child';";
 
-  if (this._TESTING_MODULES_DIR) {
+  if (_TESTING_MODULES_DIR) {
     command += " const _TESTING_MODULES_DIR=" + uneval(_TESTING_MODULES_DIR) + ";";
   }
 
@@ -1216,54 +1260,74 @@ function do_load_child_test_harness()
  * Runs an entire xpcshell unit test in a child process (rather than in chrome,
  * which is the default).
  *
- * This function returns immediately, before the test has completed.  
+ * This function returns immediately, before the test has completed.
  *
  * @param testFile
  *        The name of the script to run.  Path format same as load().
  * @param optionalCallback.
  *        Optional function to be called (in parent) when test on child is
  *        complete.  If provided, the function must call do_test_finished();
+ * @return Promise Resolved when the test in the child is complete.
  */
-function run_test_in_child(testFile, optionalCallback) 
+function run_test_in_child(testFile, optionalCallback)
 {
-  var callback = (typeof optionalCallback == 'undefined') ? 
-                    do_test_finished : optionalCallback;
+  return new Promise((resolve) => {
+    var callback = () => {
+      resolve();
+      if (typeof optionalCallback == 'undefined') {
+        do_test_finished();
+      } else {
+        optionalCallback();
+      }
+    };
 
-  do_load_child_test_harness();
+    do_load_child_test_harness();
 
-  var testPath = do_get_file(testFile).path.replace(/\\/g, "/");
-  do_test_pending("run in child");
-  sendCommand("_testLogger.info('CHILD-TEST-STARTED'); "
-              + "const _TEST_FILE=['" + testPath + "']; "
-              + "_execute_test(); "
-              + "_testLogger.info('CHILD-TEST-COMPLETED');",
-              callback);
+    var testPath = do_get_file(testFile).path.replace(/\\/g, "/");
+    do_test_pending("run in child");
+    sendCommand("_testLogger.info('CHILD-TEST-STARTED'); "
+                + "const _TEST_FILE=['" + testPath + "']; "
+                + "_execute_test(); "
+                + "_testLogger.info('CHILD-TEST-COMPLETED');",
+                callback);
+  });
 }
 
 /**
  * Execute a given function as soon as a particular cross-process message is received.
  * Must be paired with do_send_remote_message or equivalent ProcessMessageManager calls.
+ *
+ * @param optionalCallback
+ *        Optional callback that is invoked when the message is received.  If provided,
+ *        the function must call do_test_finished().
+ * @return Promise Promise that is resolved when the message is received.
  */
-function do_await_remote_message(name, callback)
+function do_await_remote_message(name, optionalCallback)
 {
-  var listener = {
-    receiveMessage: function(message) {
-      if (message.name == name) {
-        mm.removeMessageListener(name, listener);
-        callback();
-        do_test_finished();
+  return new Promise((resolve) => {
+    var listener = {
+      receiveMessage: function(message) {
+        if (message.name == name) {
+          mm.removeMessageListener(name, listener);
+          resolve();
+          if (optionalCallback) {
+            optionalCallback();
+          } else {
+            do_test_finished();
+          }
+        }
       }
-    }
-  };
+    };
 
-  var mm;
-  if (runningInParent) {
-    mm = Cc["@mozilla.org/parentprocessmessagemanager;1"].getService(Ci.nsIMessageBroadcaster);
-  } else {
-    mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
-  }
-  do_test_pending();
-  mm.addMessageListener(name, listener);
+    var mm;
+    if (runningInParent) {
+      mm = Cc["@mozilla.org/parentprocessmessagemanager;1"].getService(Ci.nsIMessageBroadcaster);
+    } else {
+      mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsISyncMessageSender);
+    }
+    do_test_pending();
+    mm.addMessageListener(name, listener);
+  });
 }
 
 /**
@@ -1284,7 +1348,61 @@ function do_send_remote_message(name) {
 }
 
 /**
+ * Helper function to add the _only property to add_task/add_test function when
+ * running it as add_task.only(...).
+ *
+ * @param addFunc
+ *        The parent function to call, e.g. add_task or add_test.
+ * @param funcOrProperties
+ *        A function to be run or an object represents test properties.
+ * @param func
+ *        A function to be run only if the funcOrProperies is not a function.
+ */
+function _add_only(addFunc, funcOrProperties, func) {
+  _gTestHasOnly = true;
+  if (typeof funcOrProperties == "function") {
+    func = funcOrProperties;
+    funcOrProperties = {};
+  }
+
+  if (typeof funcOrProperties == "object") {
+    funcOrProperties._only = true;
+  }
+  return addFunc(funcOrProperties, func);
+}
+
+/**
+ * Helper function to skip the test using e.g. add_task.skip(...)
+ *
+ * @param addFunc
+ *        The parent function to call, e.g. add_task or add_test.
+ * @param funcOrProperties
+ *        A function to be run or an object represents test properties.
+ * @param func
+ *        A function to be run only if the funcOrProperies is not a function.
+ */
+function _add_skip(addFunc, funcOrProperties, func) {
+  if (typeof funcOrProperties == "function") {
+    func = funcOrProperties;
+    funcOrProperties = {};
+  }
+
+  if (typeof funcOrProperties == "object") {
+    funcOrProperties.skip_if = () => true;
+  }
+  return addFunc(funcOrProperties, func);
+}
+
+/**
  * Add a test function to the list of tests that are to be run asynchronously.
+ *
+ * @param funcOrProperties
+ *        A function to be run or an object represents test properties.
+ *        Supported properties:
+ *          skip_if : An arrow function which has an expression to be
+ *                    evaluated whether the test is skipped or not.
+ * @param func
+ *        A function to be run only if the funcOrProperies is not a function.
  *
  * Each test function must call run_next_test() when it's done. Test files
  * should call run_next_test() in their run_test function to execute all
@@ -1292,14 +1410,33 @@ function do_send_remote_message(name) {
  *
  * @return the test function that was passed in.
  */
-let _gTests = [];
-function add_test(func) {
-  _gTests.push([false, func]);
+var _gTests = [];
+function add_test(funcOrProperties, func) {
+  if (typeof funcOrProperties == "function") {
+    _gTests.push([{ _isTask: false }, funcOrProperties]);
+  } else if (typeof funcOrProperties == "object") {
+    funcOrProperties._isTask = false;
+    _gTests.push([funcOrProperties, func]);
+  } else {
+    do_throw("add_test() should take a function or an object and a function");
+  }
   return func;
 }
+add_test.only = _add_only.bind(undefined, add_test);
+add_test.skip = _add_skip.bind(undefined, add_test);
 
 /**
  * Add a test function which is a Task function.
+ *
+ * @param funcOrProperties
+ *        A generator function to be run or an object represents test
+ *        properties.
+ *        Supported properties:
+ *          skip_if : An arrow function which has an expression to be
+ *                    evaluated whether the test is skipped or not.
+ * @param func
+ *        A generator function to be run only if the funcOrProperies is not a
+ *        function.
  *
  * Task functions are functions fed into Task.jsm's Task.spawn(). They are
  * generators that emit promises.
@@ -1315,7 +1452,7 @@ function add_test(func) {
  *
  * Example usage:
  *
- * add_task(function test() {
+ * add_task(function* test() {
  *   let result = yield Promise.resolve(true);
  *
  *   do_check_true(result);
@@ -1324,7 +1461,7 @@ function add_test(func) {
  *   do_check_eq(secondary, "expected value");
  * });
  *
- * add_task(function test_early_return() {
+ * add_task(function* test_early_return() {
  *   let result = yield somethingThatReturnsAPromise();
  *
  *   if (!result) {
@@ -1334,20 +1471,39 @@ function add_test(func) {
  *
  *   do_check_eq(result, "foo");
  * });
+ *
+ * add_task({
+ *   skip_if: () => !("@mozilla.org/telephony/volume-service;1" in Components.classes),
+ * }, function* test_volume_service() {
+ *   let volumeService = Cc["@mozilla.org/telephony/volume-service;1"]
+ *     .getService(Ci.nsIVolumeService);
+ *   ...
+ * });
  */
-function add_task(func) {
-  _gTests.push([true, func]);
+function add_task(funcOrProperties, func) {
+  if (typeof funcOrProperties == "function") {
+    _gTests.push([{ _isTask: true }, funcOrProperties]);
+  } else if (typeof funcOrProperties == "object") {
+    funcOrProperties._isTask = true;
+    _gTests.push([funcOrProperties, func]);
+  } else {
+    do_throw("add_task() should take a function or an object and a function");
+  }
 }
-let _Task = Components.utils.import("resource://gre/modules/Task.jsm", {}).Task;
+add_task.only = _add_only.bind(undefined, add_task);
+add_task.skip = _add_skip.bind(undefined, add_task);
+
+var _Task = Components.utils.import("resource://gre/modules/Task.jsm", {}).Task;
 _Task.Debugging.maintainStack = true;
 
 
 /**
  * Runs the next test function from the list of async tests.
  */
-let _gRunningTest = null;
-let _gTestIndex = 0; // The index of the currently running test.
-let _gTaskRunning = false;
+var _gRunningTest = null;
+var _gTestIndex = 0; // The index of the currently running test.
+var _gTaskRunning = false;
+var _gTestHasOnly = false;
 function run_next_test()
 {
   if (_gTaskRunning) {
@@ -1355,23 +1511,44 @@ function run_next_test()
                     "run_next_test() should not be called from inside add_task() " +
                     "under any circumstances!");
   }
- 
+
   function _run_next_test()
   {
     if (_gTestIndex < _gTests.length) {
-      // Flush uncaught errors as early and often as possible.
-      _Promise.Debugging.flushUncaughtErrors();
-      let _isTask;
-      [_isTask, _gRunningTest] = _gTests[_gTestIndex++];
+      // Check for uncaught rejections as early and often as possible.
+      _PromiseTestUtils.assertNoUncaughtRejections();
+      let _properties;
+      [_properties, _gRunningTest,] = _gTests[_gTestIndex++];
+      if (typeof(_properties.skip_if) == "function" && _properties.skip_if()) {
+        let _condition = _properties.skip_if.toSource().replace(/\(\)\s*=>\s*/, "");
+        let _message = _gRunningTest.name
+          + " skipped because the following conditions were"
+          + " met: (" + _condition + ")";
+        _testLogger.testStatus(_TEST_NAME,
+                               _gRunningTest.name,
+                               "SKIP",
+                               "SKIP",
+                               _message);
+        do_execute_soon(run_next_test);
+        return;
+      }
       _testLogger.info(_TEST_NAME + " | Starting " + _gRunningTest.name);
       do_test_pending(_gRunningTest.name);
 
-      if (_isTask) {
+      if (_properties._isTask) {
         _gTaskRunning = true;
-        _Task.spawn(_gRunningTest).then(
-          () => { _gTaskRunning = false; run_next_test(); },
-          (ex) => { _gTaskRunning = false; do_report_unexpected_exception(ex); }
-        );
+        _Task.spawn(_gRunningTest).then(() => {
+          _gTaskRunning = false;
+          run_next_test();
+        }, ex => {
+          _gTaskRunning = false;
+          try {
+            do_report_unexpected_exception(ex);
+          } catch (ex) {
+            // The above throws NS_ERROR_ABORT and we don't want this to show up
+            // as an unhandled rejection later.
+          }
+        });
       } else {
         // Exceptions do not kill asynchronous tests, so they'll time out.
         try {
@@ -1413,6 +1590,47 @@ try {
       .getService(Components.interfaces.nsIPrefBranch);
 
     prefs.setCharPref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
+    prefs.setCharPref("extensions.systemAddon.update.url", "http://%(server)s/dummy-system-addons.xml");
     prefs.setCharPref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
+    prefs.setCharPref("toolkit.telemetry.server", "https://%(server)s/telemetry-dummy");
+    prefs.setCharPref("browser.search.geoip.url", "https://%(server)s/geoip-dummy");
   }
 } catch (e) { }
+
+// Make tests run consistently on DevEdition (which has a lightweight theme
+// selected by default).
+try {
+  if (runningInParent) {
+    let prefs = Components.classes["@mozilla.org/preferences-service;1"]
+      .getService(Components.interfaces.nsIPrefBranch);
+
+    prefs.deleteBranch("lightweightThemes.selectedThemeID");
+    prefs.deleteBranch("browser.devedition.theme.enabled");
+  }
+} catch (e) { }
+
+function _load_mozinfo() {
+  let mozinfoFile = Components.classes["@mozilla.org/file/local;1"]
+    .createInstance(Components.interfaces.nsIFile);
+  mozinfoFile.initWithPath(_MOZINFO_JS_PATH);
+  let stream = Components.classes["@mozilla.org/network/file-input-stream;1"]
+    .createInstance(Components.interfaces.nsIFileInputStream);
+  stream.init(mozinfoFile, -1, 0, 0);
+  let json = Components.classes["@mozilla.org/dom/json;1"]
+    .createInstance(Components.interfaces.nsIJSON);
+  let mozinfo = json.decodeFromStream(stream, stream.available());
+  stream.close();
+  return mozinfo;
+}
+
+Object.defineProperty(this, "mozinfo", {
+  configurable: true,
+  get() {
+    let _mozinfo = _load_mozinfo();
+    Object.defineProperty(this, "mozinfo", {
+      configurable: false,
+      value: _mozinfo
+    });
+    return _mozinfo;
+  }
+});

@@ -4,6 +4,45 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+with Files('ActiveLayerTracker.*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('Display*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('FrameLayerBuilder.*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('LayerState.*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('MaskLayerImageCache.*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('PaintTracker.*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('nsCSSRendering.*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('nsDisplay*'):
+    BUG_COMPONENT = ('Core', 'Layout: View Rendering')
+
+with Files('Restyle*'):
+    BUG_COMPONENT = ('Core', 'CSS Parsing and Computation')
+
+with Files('nsStyle*'):
+    BUG_COMPONENT = ('Core', 'CSS Parsing and Computation')
+
+with Files('nsChangeHint.h'):
+    BUG_COMPONENT = ('Core', 'CSS Parsing and Computation')
+
+with Files('nsBidi*'):
+    BUG_COMPONENT = ('Core', 'Layout: Text')
+
+with Files('AccessibleCaret*'):
+    BUG_COMPONENT = ('Core', 'Selection')
+
 XPIDL_SOURCES += [
     'nsIStyleSheetService.idl',
 ]
@@ -19,10 +58,12 @@ EXPORTS += [
     'ActiveLayerTracker.h',
     'CaretAssociationHint.h',
     'DisplayItemClip.h',
+    'DisplayItemScrollClip.h',
     'DisplayListClipState.h',
     'FrameLayerBuilder.h',
     'FramePropertyTable.h',
     'LayerState.h',
+    'LayoutLogging.h',
     'nsArenaMemoryStats.h',
     'nsBidi.h',
     'nsBidiPresUtils.h',
@@ -40,11 +81,12 @@ EXPORTS += [
     'nsIFrameTraversal.h',
     'nsILayoutDebugger.h',
     'nsILayoutHistoryState.h',
-    'nsIPercentHeightObserver.h',
+    'nsIPercentBSizeObserver.h',
     'nsIPresShell.h',
     'nsIReflowCallback.h',
     'nsLayoutUtils.h',
     'nsPresArena.h',
+    'nsPresArenaObjectList.h',
     'nsPresContext.h',
     'nsPresState.h',
     'nsRefreshDriver.h',
@@ -57,19 +99,33 @@ EXPORTS += [
 ]
 
 EXPORTS.mozilla += [
+    'ArenaObjectID.h',
+    'ArenaRefPtr.h',
+    'ArenaRefPtrInlines.h',
     'GeometryUtils.h',
     'PaintTracker.h',
     'RestyleLogging.h',
+    'RestyleManager.h',
+    'RestyleManagerHandle.h',
+    'RestyleManagerHandleInlines.h',
+    'ServoRestyleManager.h',
+    'StaticPresData.h',
 ]
 
 UNIFIED_SOURCES += [
+    'AccessibleCaret.cpp',
+    'AccessibleCaretEventHub.cpp',
+    'AccessibleCaretManager.cpp',
     'ActiveLayerTracker.cpp',
     'DisplayItemClip.cpp',
+    'DisplayItemScrollClip.cpp',
     'DisplayListClipState.cpp',
     'FrameLayerBuilder.cpp',
     'FramePropertyTable.cpp',
     'GeometryUtils.cpp',
+    'LayoutLogging.cpp',
     'MaskLayerImageCache.cpp',
+    'MobileViewportManager.cpp',
     'nsBidi.cpp',
     'nsBidiPresUtils.cpp',
     'nsCaret.cpp',
@@ -96,9 +152,12 @@ UNIFIED_SOURCES += [
     'PositionedEventTargeting.cpp',
     'RestyleManager.cpp',
     'RestyleTracker.cpp',
-    'SelectionCarets.cpp',
+    'ScrollbarStyles.cpp',
+    'ServoRestyleManager.cpp',
     'StackArena.cpp',
-    'TouchCaret.cpp',
+    'StaticPresData.cpp',
+    'TouchManager.cpp',
+    'ZoomConstraintsClient.cpp',
 ]
 
 # nsPresArena.cpp needs to be built separately because it uses plarena.h.
@@ -108,9 +167,8 @@ SOURCES += [
     'nsRefreshDriver.cpp',
 ]
 
-FAIL_ON_WARNINGS = True
-
-MSVC_ENABLE_PGO = True
+if CONFIG['ENABLE_TESTS']:
+    DIRS += ['gtest']
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -132,10 +190,21 @@ LOCAL_INCLUDES += [
     '/view',
 ]
 
+if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
+    LOCAL_INCLUDES += [
+        '/widget/android',
+    ]
+
 FINAL_LIBRARY = 'xul'
 
+BROWSER_CHROME_MANIFESTS += ['tests/browser.ini']
+MARIONETTE_LAYOUT_MANIFESTS += ['tests/marionette/manifest.ini']
 MOCHITEST_MANIFESTS += ['tests/mochitest.ini']
 MOCHITEST_CHROME_MANIFESTS += ['tests/chrome/chrome.ini']
-BROWSER_CHROME_MANIFESTS += ['tests/browser.ini']
 
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+
+if CONFIG['_MSC_VER']:
+    # This is intended as a temporary hack to support building with VS2015.
+    # 'type cast': conversion from 'unsigned int' to 'void *' of greater size
+    CXXFLAGS += ['-wd4312']

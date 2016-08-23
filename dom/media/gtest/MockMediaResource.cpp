@@ -10,9 +10,10 @@
 namespace mozilla
 {
 
-MockMediaResource::MockMediaResource(const char* aFileName)
-  : mFileName(aFileName)
-  , mContentType(NS_LITERAL_CSTRING("video/mp4"))
+MockMediaResource::MockMediaResource(const char* aFileName, const nsACString& aContentType)
+  : mFileHandle(nullptr)
+  , mFileName(aFileName)
+  , mContentType(aContentType)
 {
 }
 
@@ -60,7 +61,11 @@ MockMediaResource::ReadAt(int64_t aOffset, char* aBuffer, uint32_t aCount,
 int64_t
 MockMediaResource::GetLength()
 {
-  return fseek(mFileHandle, 0, SEEK_END);
+  if (mFileHandle == nullptr) {
+    return -1;
+  }
+  fseek(mFileHandle, 0, SEEK_END);
+  return ftell(mFileHandle);
 }
 
 void
@@ -72,7 +77,7 @@ MockMediaResource::MockClearBufferedRanges()
 void
 MockMediaResource::MockAddBufferedRange(int64_t aStart, int64_t aEnd)
 {
-  mRanges.AppendElement(MediaByteRange(aStart, aEnd));
+  mRanges += MediaByteRange(aStart, aEnd);
 }
 
 int64_t
@@ -102,10 +107,10 @@ MockMediaResource::GetCachedDataEnd(int64_t aOffset)
 }
 
 nsresult
-MockMediaResource::GetCachedRanges(nsTArray<MediaByteRange>& aRanges)
+MockMediaResource::GetCachedRanges(MediaByteRangeSet& aRanges)
 {
-  aRanges.Clear();
-  aRanges.AppendElements(mRanges);
+  aRanges = mRanges;
   return NS_OK;
 }
-}
+
+} // namespace mozilla

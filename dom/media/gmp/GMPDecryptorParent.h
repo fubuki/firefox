@@ -10,53 +10,56 @@
 #include "mozilla/RefPtr.h"
 #include "gmp-decryption.h"
 #include "GMPDecryptorProxy.h"
-namespace mp4_demuxer {
-class CryptoSample;
-}
 
 namespace mozilla {
+
+class CryptoSample;
+
 namespace gmp {
 
-class GMPParent;
+class GMPContentParent;
 
-class GMPDecryptorParent MOZ_FINAL : public GMPDecryptorProxy
-                                   , public PGMPDecryptorParent
+class GMPDecryptorParent final : public GMPDecryptorProxy
+                               , public PGMPDecryptorParent
 {
 public:
   NS_INLINE_DECL_REFCOUNTING(GMPDecryptorParent)
 
-  explicit GMPDecryptorParent(GMPParent *aPlugin);
+  explicit GMPDecryptorParent(GMPContentParent *aPlugin);
 
   // GMPDecryptorProxy
-  virtual nsresult Init(GMPDecryptorProxyCallback* aCallback) MOZ_OVERRIDE;
 
-  virtual void CreateSession(uint32_t aCreateSessionToken,
-                             uint32_t aPromiseId,
-                             const nsCString& aInitDataType,
-                             const nsTArray<uint8_t>& aInitData,
-                             GMPSessionType aSessionType) MOZ_OVERRIDE;
+  uint32_t GetPluginId() const override { return mPluginId; }
 
-  virtual void LoadSession(uint32_t aPromiseId,
-                           const nsCString& aSessionId) MOZ_OVERRIDE;
+  nsresult Init(GMPDecryptorProxyCallback* aCallback) override;
 
-  virtual void UpdateSession(uint32_t aPromiseId,
-                             const nsCString& aSessionId,
-                             const nsTArray<uint8_t>& aResponse) MOZ_OVERRIDE;
+  void CreateSession(uint32_t aCreateSessionToken,
+                     uint32_t aPromiseId,
+                     const nsCString& aInitDataType,
+                     const nsTArray<uint8_t>& aInitData,
+                     GMPSessionType aSessionType) override;
 
-  virtual void CloseSession(uint32_t aPromiseId,
-                            const nsCString& aSessionId) MOZ_OVERRIDE;
+  void LoadSession(uint32_t aPromiseId,
+                   const nsCString& aSessionId) override;
 
-  virtual void RemoveSession(uint32_t aPromiseId,
-                             const nsCString& aSessionId) MOZ_OVERRIDE;
+  void UpdateSession(uint32_t aPromiseId,
+                     const nsCString& aSessionId,
+                     const nsTArray<uint8_t>& aResponse) override;
 
-  virtual void SetServerCertificate(uint32_t aPromiseId,
-                                    const nsTArray<uint8_t>& aServerCert) MOZ_OVERRIDE;
+  void CloseSession(uint32_t aPromiseId,
+                    const nsCString& aSessionId) override;
 
-  virtual void Decrypt(uint32_t aId,
-                       const mp4_demuxer::CryptoSample& aCrypto,
-                       const nsTArray<uint8_t>& aBuffer) MOZ_OVERRIDE;
+  void RemoveSession(uint32_t aPromiseId,
+                     const nsCString& aSessionId) override;
 
-  virtual void Close() MOZ_OVERRIDE;
+  void SetServerCertificate(uint32_t aPromiseId,
+                            const nsTArray<uint8_t>& aServerCert) override;
+
+  void Decrypt(uint32_t aId,
+               const CryptoSample& aCrypto,
+               const nsTArray<uint8_t>& aBuffer) override;
+
+  void Close() override;
 
   void Shutdown();
 
@@ -65,48 +68,52 @@ private:
 
   // PGMPDecryptorParent
 
-  virtual bool RecvSetSessionId(const uint32_t& aCreateSessionToken,
-                                const nsCString& aSessionId) MOZ_OVERRIDE;
+  bool RecvSetSessionId(const uint32_t& aCreateSessionToken,
+                        const nsCString& aSessionId) override;
 
-  virtual bool RecvResolveLoadSessionPromise(const uint32_t& aPromiseId,
-                                             const bool& aSuccess) MOZ_OVERRIDE;
+  bool RecvResolveLoadSessionPromise(const uint32_t& aPromiseId,
+                                     const bool& aSuccess) override;
 
-  virtual bool RecvResolvePromise(const uint32_t& aPromiseId) MOZ_OVERRIDE;
+  bool RecvResolvePromise(const uint32_t& aPromiseId) override;
 
-  virtual bool RecvRejectPromise(const uint32_t& aPromiseId,
-                                 const GMPDOMException& aException,
-                                 const nsCString& aMessage) MOZ_OVERRIDE;
+  bool RecvRejectPromise(const uint32_t& aPromiseId,
+                         const GMPDOMException& aException,
+                         const nsCString& aMessage) override;
 
-  virtual bool RecvSessionMessage(const nsCString& aSessionId,
-                                  const GMPSessionMessageType& aMessageType,
-                                  const nsTArray<uint8_t>& aMessage) MOZ_OVERRIDE;
+  bool RecvSessionMessage(const nsCString& aSessionId,
+                          const GMPSessionMessageType& aMessageType,
+                          nsTArray<uint8_t>&& aMessage) override;
 
-  virtual bool RecvExpirationChange(const nsCString& aSessionId,
-                                    const double& aExpiryTime) MOZ_OVERRIDE;
+  bool RecvExpirationChange(const nsCString& aSessionId,
+                            const double& aExpiryTime) override;
 
-  virtual bool RecvSessionClosed(const nsCString& aSessionId) MOZ_OVERRIDE;
+  bool RecvSessionClosed(const nsCString& aSessionId) override;
 
-  virtual bool RecvSessionError(const nsCString& aSessionId,
-                                const GMPDOMException& aException,
-                                const uint32_t& aSystemCode,
-                                const nsCString& aMessage) MOZ_OVERRIDE;
+  bool RecvSessionError(const nsCString& aSessionId,
+                        const GMPDOMException& aException,
+                        const uint32_t& aSystemCode,
+                        const nsCString& aMessage) override;
 
-  virtual bool RecvKeyStatusChanged(const nsCString& aSessionId,
-                                    const nsTArray<uint8_t>& aKeyId,
-                                    const GMPMediaKeyStatus& aStatus) MOZ_OVERRIDE;
+  bool RecvKeyStatusChanged(const nsCString& aSessionId,
+                            InfallibleTArray<uint8_t>&& aKeyId,
+                            const GMPMediaKeyStatus& aStatus) override;
 
-  virtual bool RecvDecrypted(const uint32_t& aId,
-                             const GMPErr& aErr,
-                             const nsTArray<uint8_t>& aBuffer) MOZ_OVERRIDE;
+  bool RecvDecrypted(const uint32_t& aId,
+                     const GMPErr& aErr,
+                     InfallibleTArray<uint8_t>&& aBuffer) override;
 
-  virtual bool RecvSetCaps(const uint64_t& aCaps) MOZ_OVERRIDE;
+  bool RecvSetCaps(const uint64_t& aCaps) override;
 
-  virtual void ActorDestroy(ActorDestroyReason aWhy) MOZ_OVERRIDE;
-  virtual bool Recv__delete__() MOZ_OVERRIDE;
+  bool RecvShutdown() override;
+
+  void ActorDestroy(ActorDestroyReason aWhy) override;
+  bool Recv__delete__() override;
 
   bool mIsOpen;
   bool mShuttingDown;
-  nsRefPtr<GMPParent> mPlugin;
+  bool mActorDestroyed;
+  RefPtr<GMPContentParent> mPlugin;
+  uint32_t mPluginId;
   GMPDecryptorProxyCallback* mCallback;
 #ifdef DEBUG
   nsIThread* const mGMPThread;
